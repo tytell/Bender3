@@ -8,7 +8,7 @@ import os
 import nidaqmx.constants as daq
 from nidaqmx import Task
 from nidaqmx.stream_writers import AnalogSingleChannelWriter, DigitalSingleChannelWriter
-from nidaqmx.stream_readers import AnalogMultiChannelReader
+from nidaqmx.stream_readers import AnalogMultiChannelReader, CounterReader
 from nidaqmx.errors import DaqError
 
 import xml.etree.ElementTree as ElementTree
@@ -142,12 +142,19 @@ class Bender:
     def set_motor_channel(self, motor_control_chan):
         self.motor_control_chan = motor_control_chan
 
+    def set_encoder_channel(self, encoder_chan, 
+                            counts_per_rev=10000):
+        self.encoder_chan = encoder_chan
+        self.encoder_counts_per_rev = counts_per_rev
+
     def run(self, device_name):
         inchannels = ['/'.join((device_name, c1)) for c1 in self.inchannels]
         activation_chan = '/'.join((device_name, self.activation_chan))
         motor_control_chan = '/'.join((device_name, self.motor_control_chan))
+        encoder_chan = '/'.join((device_name, self.encoder_chan))
 
-        with Task() as analog_in, Task() as analog_out, Task() as digital_out:
+        with Task() as analog_in, Task() as analog_out, \
+                Task() as digital_out, Task() as angle_in:
             # set up the input channels
             for c1, name1 in zip(inchannels, self.inchannel_names):
                 analog_in.ai_channels.add_ai_voltage_chan(c1, name1)
@@ -155,6 +162,14 @@ class Bender:
             # set up the input sample frequency
             # just records as many samples as are in the output
             analog_in.timing.cfg_samp_clk_timing(self.samplefreq,
+                                                sample_mode=daq.AcquisitionType.FINITE,
+                                                samps_per_chan=len(self.t))
+
+            # set up the encoder channel
+            angle_in.ci_channels.add_ci_ang_encoder_chan(encoder_chan, 'encoder',
+                                    pulses_per_rev=self.encoder_counts_per_rev)
+            angle_in.timing.cfg_samp_clk_timing(self.samplefreq,
+                                                source="ai/SampleClock",
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.t))
 
@@ -175,11 +190,18 @@ class Bender:
             digital_out.do_channels.add_do_chan(motor_control_chan, 'motor')
             # use the analog output clock for digital output timing
             digital_out.timing.cfg_samp_clk_timing(self.outputfreq, 
-                                                source = "ao/SampleClock")
+                                                source = "ao/SampleClock",
+                                                sample_mode=daq.AcquisitionType.FINITE,
+                                                samps_per_chan=len(self.tout))
+            digital_out.triggers.start_trigger.cfg_dig_edge_start_trig("ai/StartTrigger",
+                                                    trigger_edge=daq.Edge.RISING)
 
             # set up to read the input
             reader = AnalogMultiChannelReader(analog_in.in_stream)
             self.aidata = np.zeros((len(self.inchannels), len(self.t)), dtype=np.float64)
+            
+            angle_reader = CounterReader(angle_in.in_stream)
+            self.angledata = np.zeros((len(self.t),), dtype=np.float64)
 
             # write the output
             analog_writer = AnalogSingleChannelWriter(analog_out.out_stream, 
@@ -188,13 +210,15 @@ class Bender:
 
             digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
                                                         auto_start=False)
-            digital_writer.write_many_sample_port_uint32(self.dig)
-            
+            nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
+            # print(f"{nwritten=}")
+
             # start everthing
             # make sure to start the output first, because it'll wait until the 
             # input starts
             digital_out.start()
             analog_out.start()
+            angle_in.start()
             analog_in.start()
             
             # wait until we're done, record the time
@@ -203,6 +227,7 @@ class Bender:
             
             # and read the data
             reader.read_many_sample(self.aidata)
+            angle_reader.read_many_sample_double(self.angledata)
     
         return(self.aidata)
             
