@@ -19,6 +19,8 @@ import h5py
 
 class Bender:
     def __init__(self):
+        self.S1actcmd = None
+        self.S2actcmd = None
         pass
 
     def set_bending_signal(self, t, angle, anglevel, tnorm=None):
@@ -138,11 +140,14 @@ class Bender:
         self.tout = tout
         self.dig = dig
 
-        S1actcmdhi = interpolate.interp1d(self.t, self.S1actcmd, kind='linear', assume_sorted=True, bounds_error=False,
-                                    fill_value=0.0)(tout)
-        S2actcmdhi = interpolate.interp1d(self.t, self.S2actcmd, kind='linear', assume_sorted=True, bounds_error=False,
-                                    fill_value=0.0)(tout)
-        self.actcmdhi = np.vstack((S1actcmdhi, S2actcmdhi))
+        if self.S1actcmd is None:
+            self.actcmdhi = np.zeros((2, len(tout)))
+        else:
+            S1actcmdhi = interpolate.interp1d(self.t, self.S1actcmd, kind='linear', assume_sorted=True, bounds_error=False,
+                                        fill_value=0.0)(tout)
+            S2actcmdhi = interpolate.interp1d(self.t, self.S2actcmd, kind='linear', assume_sorted=True, bounds_error=False,
+                                        fill_value=0.0)(tout)
+            self.actcmdhi = np.vstack((S1actcmdhi, S2actcmdhi))
 
         return tout, dig, motorstep, motordirection
 
