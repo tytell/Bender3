@@ -1,31 +1,41 @@
 import numpy as np
 from scipy import interpolate
 from datetime import datetime
+import time
+from copy import copy
 
 import re
 import os
 
 import nidaqmx.constants as daq
 from nidaqmx import Task
-from nidaqmx.stream_writers import AnalogSingleChannelWriter, DigitalSingleChannelWriter
+from nidaqmx.stream_writers import AnalogMultiChannelWriter, DigitalSingleChannelWriter
 from nidaqmx.stream_readers import AnalogMultiChannelReader, CounterReader
 from nidaqmx.errors import DaqError
 
 import xml.etree.ElementTree as ElementTree
 
+import h5py
+
 class Bender:
     def __init__(self):
         pass
 
-    def set_bending_signal(self, t, angle, anglevel):
+    def set_bending_signal(self, t, angle, anglevel, tnorm=None):
         self.samplefreq = 1.0 / (t[1] - t[0])
 
         self.t = t
         self.angle = angle
         self.anglevel = anglevel
+
+        if tnorm is None:
+            self.tnorm = copy(t)
+        else:
+            self.tnorm = tnorm
     
-    def set_activation(self, actcmd):
-        self.actcmd = actcmd
+    def set_activation(self, S1actcmd, S2actcmd):
+        self.S1actcmd = S1actcmd
+        self.S2actcmd = S2actcmd
 
     def increment_file_name(self, filename):
         m = re.search('(\d+)\.h5', filename)
@@ -79,6 +89,7 @@ class Bender:
                                 stepsperrev=6400.0):
 
         self.outputfreq = outsampfreq
+        self.scale = scale
 
         tout = np.arange(self.t[0], self.t[-1], 1.0/outsampfreq)
 
@@ -127,8 +138,11 @@ class Bender:
         self.tout = tout
         self.dig = dig
 
-        self.actcmdhi = interpolate.interp1d(self.t, self.actcmd, kind='linear', assume_sorted=True, bounds_error=False,
+        S1actcmdhi = interpolate.interp1d(self.t, self.S1actcmd, kind='linear', assume_sorted=True, bounds_error=False,
                                     fill_value=0.0)(tout)
+        S2actcmdhi = interpolate.interp1d(self.t, self.S2actcmd, kind='linear', assume_sorted=True, bounds_error=False,
+                                    fill_value=0.0)(tout)
+        self.actcmdhi = np.vstack((S1actcmdhi, S2actcmdhi))
 
         return tout, dig, motorstep, motordirection
 
@@ -136,8 +150,9 @@ class Bender:
         self.inchannels = inchannels
         self.inchannel_names = inchannel_names
 
-    def set_activation_channel(self, activation_chan):
-        self.activation_chan = activation_chan
+    def set_activation_channels(self, S1activation_chan, S2activation_chan):
+        self.S1activation_chan = S1activation_chan
+        self.S2activation_chan = S2activation_chan
 
     def set_motor_channel(self, motor_control_chan):
         self.motor_control_chan = motor_control_chan
@@ -149,7 +164,8 @@ class Bender:
 
     def run(self, device_name):
         inchannels = ['/'.join((device_name, c1)) for c1 in self.inchannels]
-        activation_chan = '/'.join((device_name, self.activation_chan))
+        S1activation_chan = '/'.join((device_name, self.S1activation_chan))
+        S2activation_chan = '/'.join((device_name, self.S2activation_chan))
         motor_control_chan = '/'.join((device_name, self.motor_control_chan))
         encoder_chan = '/'.join((device_name, self.encoder_chan))
 
@@ -173,8 +189,9 @@ class Bender:
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.t))
 
-            # set up the analog output channel
-            analog_out.ao_channels.add_ao_voltage_chan(activation_chan, 'activation')
+            # set up the analog output channels
+            analog_out.ao_channels.add_ao_voltage_chan(S1activation_chan, 'S1act')
+            analog_out.ao_channels.add_ao_voltage_chan(S2activation_chan, 'S2act')
             # it will run much faster than the input channels, because the digital output is linked
             # to it, and it needs to run fast so that the pulses 
             # are output fast enough for smooth motion
@@ -204,10 +221,10 @@ class Bender:
             self.angledata = np.zeros((len(self.t),), dtype=np.float64)
 
             # write the output
-            analog_writer = AnalogSingleChannelWriter(analog_out.out_stream, 
+            analog_writer = AnalogMultiChannelWriter(analog_out.out_stream, 
                                                     auto_start=False)
             analog_writer.write_many_sample(self.actcmdhi)
-
+            
             digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
                                                         auto_start=False)
             nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
@@ -223,11 +240,66 @@ class Bender:
             
             # wait until we're done, record the time
             analog_in.wait_until_done(self.t[-1]+10)
-            endTime = datetime.now()
+            self.endTime = datetime.now()
             
             # and read the data
             reader.read_many_sample(self.aidata)
             angle_reader.read_many_sample_double(self.angledata)
     
         return(self.aidata)
-            
+    
+    def save(self):
+        with h5py.File(self.filename, 'w-') as f:
+            f.attrs['EndTime'] = time.strftime('%Y-%m-%d %H:%M:%S %Z', self.endTime)
+
+            gin = f.create_group('RawInput')
+            gin.attrs['SampleFrequency'] = self.samplefreq
+
+            gcal = f.create_group('Calibrated')
+
+            # save the output data
+            gout = f.create_group('Output')
+            gout.attrs['SampleFrequency'] = self.outputfreq
+
+            # save the parameters for generating the stimulus
+            gout = f.create_group('NominalStimulus')
+            gout.create_dataset('t', data=self.t)
+            if self.angle is not None:
+                ds = gout.create_dataset('Position', data=self.angle)
+                ds.attrs['Units'] = 'deg'
+                ds = gout.create_dataset('Velocity', data=self.anglevel)
+                ds.attrs['Units'] = 'deg/sec'
+                gout.create_dataset('tnorm', data=self.tnorm)
+
+            gout.attrs['ScaleFactor'] = self.scale
+
+            # save the stimulus info, but not the activation parameters, because those are different between the
+            # whole body rig and the ergometer setup
+            try:
+                stim = params.child('Stimulus', 'Parameters')
+                if params['Stimulus', 'Type'] == 'Sine':
+                    gout.attrs['Amplitude'] = stim['Amplitude']
+                    gout.attrs['Frequency'] = stim['Frequency']
+                    gout.attrs['Cycles'] = stim['Cycles']
+                    gout.attrs['WaitPre'] = params['Stimulus', 'Wait before']
+                    gout.attrs['WaitPost'] = params['Stimulus', 'Wait after']
+                elif params['Stimulus', 'Type'] == 'Frequency Sweep':
+                    gout.attrs['Amplitude'] = stim['Amplitude']
+                    gout.attrs['StartFrequency'] = stim['Start frequency']
+                    gout.attrs['EndFrequency'] = stim['End frequency']
+                    gout.attrs['FrequencyChange'] = stim['Frequency change']
+                    gout.attrs['FrequencyExponent'] = stim['Frequency exponent']
+                    gout.attrs['Duration'] = stim['Duration']
+                    gout.attrs['WaitPre'] = params['Stimulus', 'Wait before']
+                    gout.attrs['WaitPost'] = params['Stimulus', 'Wait after']
+                elif params['Stimulus', 'Type'] == 'Ramp':
+                    gout.attrs['Amplitude'] = stim['Amplitude']
+                    gout.attrs['Rate'] = stim['Rate']
+                    gout.attrs['HoldDur'] = stim['Hold duration']
+                elif params['Stimulus', 'Type'] == 'None':
+                    gout.attrs['Duration'] = stim['Duration']
+            except Exception:
+                logging.warning('Problem saving stimulus parameters')
+                self.errors.append('Problem saving stimulus parameters')
+
+
