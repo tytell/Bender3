@@ -21,7 +21,6 @@ class Bender:
     def __init__(self):
         self.S1actcmd = None
         self.S2actcmd = None
-        pass
 
     def set_bending_signal(self, t, angle, anglevel, tnorm=None):
         self.samplefreq = 1.0 / (t[1] - t[0])
