@@ -85,7 +85,6 @@ class Bender:
         return self.forcetorque
 
     def make_motor_stepper_pulses(self, outsampfreq,
-                                signconvention='Left is positive',
                                 scale=6.0,
                                 stepsperrev=6400.0):
 
@@ -98,16 +97,6 @@ class Bender:
                                     fill_value=0.0)(tout)
         velhi = interpolate.interp1d(self.t, self.anglevel, kind='linear', assume_sorted=True, bounds_error=False,
                                     fill_value=0.0)(tout)
-
-        if signconvention == 'Left is negative' or \
-                signconvention == 'Right is positive':
-            poshi = -poshi
-            velhi = -velhi
-        elif signconvention == 'Left is positive' or \
-                signconvention == 'Right is negative':
-            pass
-        else:
-            raise ValueError('Unrecognized motor sign convention {}'.format(signconvention))
 
         poshi *= scale
         velhi *= scale
@@ -252,58 +241,3 @@ class Bender:
     
         return(self.aidata)
     
-    def save(self):
-        with h5py.File(self.filename, 'w-') as f:
-            f.attrs['EndTime'] = time.strftime('%Y-%m-%d %H:%M:%S %Z', self.endTime)
-
-            gin = f.create_group('RawInput')
-            gin.attrs['SampleFrequency'] = self.samplefreq
-
-            gcal = f.create_group('Calibrated')
-
-            # save the output data
-            gout = f.create_group('Output')
-            gout.attrs['SampleFrequency'] = self.outputfreq
-
-            # save the parameters for generating the stimulus
-            gout = f.create_group('NominalStimulus')
-            gout.create_dataset('t', data=self.t)
-            if self.angle is not None:
-                ds = gout.create_dataset('Position', data=self.angle)
-                ds.attrs['Units'] = 'deg'
-                ds = gout.create_dataset('Velocity', data=self.anglevel)
-                ds.attrs['Units'] = 'deg/sec'
-                gout.create_dataset('tnorm', data=self.tnorm)
-
-            gout.attrs['ScaleFactor'] = self.scale
-
-            # save the stimulus info, but not the activation parameters, because those are different between the
-            # whole body rig and the ergometer setup
-            try:
-                stim = params.child('Stimulus', 'Parameters')
-                if params['Stimulus', 'Type'] == 'Sine':
-                    gout.attrs['Amplitude'] = stim['Amplitude']
-                    gout.attrs['Frequency'] = stim['Frequency']
-                    gout.attrs['Cycles'] = stim['Cycles']
-                    gout.attrs['WaitPre'] = params['Stimulus', 'Wait before']
-                    gout.attrs['WaitPost'] = params['Stimulus', 'Wait after']
-                elif params['Stimulus', 'Type'] == 'Frequency Sweep':
-                    gout.attrs['Amplitude'] = stim['Amplitude']
-                    gout.attrs['StartFrequency'] = stim['Start frequency']
-                    gout.attrs['EndFrequency'] = stim['End frequency']
-                    gout.attrs['FrequencyChange'] = stim['Frequency change']
-                    gout.attrs['FrequencyExponent'] = stim['Frequency exponent']
-                    gout.attrs['Duration'] = stim['Duration']
-                    gout.attrs['WaitPre'] = params['Stimulus', 'Wait before']
-                    gout.attrs['WaitPost'] = params['Stimulus', 'Wait after']
-                elif params['Stimulus', 'Type'] == 'Ramp':
-                    gout.attrs['Amplitude'] = stim['Amplitude']
-                    gout.attrs['Rate'] = stim['Rate']
-                    gout.attrs['HoldDur'] = stim['Hold duration']
-                elif params['Stimulus', 'Type'] == 'None':
-                    gout.attrs['Duration'] = stim['Duration']
-            except Exception:
-                logging.warning('Problem saving stimulus parameters')
-                self.errors.append('Problem saving stimulus parameters')
-
-
