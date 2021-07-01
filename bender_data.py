@@ -167,8 +167,13 @@ class BenderData:
             fig.add_vrect(x0 = onoff[0], x1=onoff[1], opacity=0.7, line_width=1,
                             row="all", col="all")
 
-        fig.update_yaxes(title_text = "angle (deg)", secondary_y=True)
-        fig.update_yaxes(title_text = "torque (Nm)", secondary_y=False)
+        angrng = np.max(np.abs(self.angle))
+        torquerng = np.max(np.abs(self.xtorque))
+
+        fig.update_yaxes(title_text = "angle (deg)", secondary_y=True,
+                range=[-angrng, angrng], showgrid=False)
+        fig.update_yaxes(title_text = "torque (Nm)", secondary_y=False,
+                range=[-torquerng, torquerng])
 
         if len(self.Lonoff > 0):
             rng = [self.Lonoff[0,0]-0.5, self.Ronoff[-1,1]+0.5]
@@ -183,7 +188,7 @@ class BenderData:
 
         return(fig)
 
-    def plot_active_loop(self, fig=None, row=1, title=None, 
+    def plot_passive_and_active_loop(self, fig=None, row=1, title=None, 
                         passive_name="passive", active_name="active"):
         if fig is None:
             fig = make_subplots(rows=1, cols=2, shared_xaxes=True, shared_yaxes=True)
@@ -211,3 +216,29 @@ class BenderData:
 
         return(fig)
                       
+    def plot_active_loop(self, fig=None, index=1, rows=1, cols=1, title=None, 
+                        passive_name="passive", active_name="active"):
+        if fig is None:
+            fig = make_subplots(rows=rows, cols=cols, shared_xaxes=True, shared_yaxes=True)
+
+        r = int(np.floor(index / cols))
+        c = int(index - (r*cols))
+
+        print(f"{r=}, {c=}")
+
+        tactive = [self.Lonoff[1,0], (self.ncycles-0.25) / self.freq]
+
+        is_active = (self.t >= tactive[0]) & (self.t < tactive[1])
+
+        active_name = self.labeller(active_name)
+        
+        fig.add_trace(go.Scatter(x = self.angle[is_active], y = self.xtorque[is_active],
+                                name=active_name, showlegend=(active_name is not None)),
+                      row = r+1, col = c+1)
+        fig.add_hline(y = self.iso_torque[0,0])
+        fig.add_hline(y = self.iso_torque[0,1])
+
+        title = self.labeller(title)
+        fig.update_layout(title=title)
+
+        return(fig)
