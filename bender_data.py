@@ -35,8 +35,8 @@ class BenderData:
             self.curvature = h5file['/NominalStimulus'].attrs['Curvature']
             self.amplitude = h5file['/NominalStimulus'].attrs['Amplitude']
 
-            self.Lonoff = []
-            self.Ronoff = []
+            self.Lonoff = np.empty((0,0))
+            self.Ronoff = np.empty((0,0))
             self.is_active = h5file['/NominalStimulus'].attrs['ActivationOn']      
             self.activation_duty = 0
             self.activation_phase = np.nan
@@ -58,6 +58,11 @@ class BenderData:
             self.get_isometric_torques()
 
     def generate_activation(self):
+        if not self.is_active:
+            self.Lonoff = np.empty((0,0))
+            self.Ronoff = np.empty((0,0))
+            return
+            
         self.Lonoff = []
         self.Ronoff = []
 
