@@ -7,12 +7,17 @@ from copy import copy
 import re
 import os
 
-import nidaqmx.constants as daq
-from nidaqmx import Task
-from nidaqmx.stream_writers import AnalogMultiChannelWriter, DigitalSingleChannelWriter
-from nidaqmx.stream_readers import AnalogMultiChannelReader, CounterReader
-from nidaqmx.errors import DaqError
+import logging
 
+try:
+    import nidaqmx.constants as daq
+    from nidaqmx import Task
+    from nidaqmx.stream_writers import AnalogMultiChannelWriter, DigitalSingleChannelWriter
+    from nidaqmx.stream_readers import AnalogMultiChannelReader, CounterReader
+    from nidaqmx.errors import DaqError
+except ImportError:
+    logging.warning('No DAQmx available')
+    
 import xml.etree.ElementTree as ElementTree
 
 import h5py
