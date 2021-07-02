@@ -226,7 +226,8 @@ class BenderData:
         return(fig)
                       
     def plot_active_loop(self, fig=None, index=1, rows=1, cols=1, title=None, 
-                        passive_name="passive", active_name="active"):
+                        passive_name="passive", active_name="active",
+                        show_pre_post=True):
         if fig is None:
             fig = make_subplots(rows=rows, cols=cols, shared_xaxes=True, shared_yaxes=True)
 
@@ -244,8 +245,9 @@ class BenderData:
         fig.add_trace(go.Scatter(x = self.angle[is_active], y = self.xtorque[is_active],
                                 name=active_name, showlegend=(active_name is not None)),
                       row = r+1, col = c+1)
-        fig.add_hline(y = self.iso_torque[0,0])
-        fig.add_hline(y = self.iso_torque[0,1])
+        if show_pre_post:
+            fig.add_hline(y = self.iso_torque[0,0])
+            fig.add_hline(y = self.iso_torque[0,1])
 
         title = self.labeller(title)
         fig.update_layout(title=title)
