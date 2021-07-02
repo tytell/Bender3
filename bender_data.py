@@ -62,6 +62,7 @@ class BenderData:
         if not self.is_active:
             self.Lonoff = np.empty((0,0))
             self.Ronoff = np.empty((0,0))
+            return
             
         self.Lonoff = []
         self.Ronoff = []
