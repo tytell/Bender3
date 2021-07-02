@@ -29,14 +29,15 @@ class BenderData:
             self.t = np.array(h5file['/NominalStimulus/t'])
             self.tnorm = np.array(h5file['/NominalStimulus/tnorm'])
             self.angle = np.array(h5file['/Calibrated/Encoder'])
+            self.angle_cmd = np.array(h5file['/NominalStimulus/Position'])
 
             self.freq = h5file['/NominalStimulus'].attrs['Frequency']
             self.ncycles = h5file['/NominalStimulus'].attrs['Cycles']
             self.curvature = h5file['/NominalStimulus'].attrs['Curvature']
             self.amplitude = h5file['/NominalStimulus'].attrs['Amplitude']
 
-            self.Lonoff = []
-            self.Ronoff = []
+            self.Lonoff = np.empty((0,0))
+            self.Ronoff = np.empty((0,0))
             self.is_active = h5file['/NominalStimulus'].attrs['ActivationOn']      
             self.activation_duty = 0
             self.activation_phase = np.nan
@@ -58,6 +59,10 @@ class BenderData:
             self.get_isometric_torques()
 
     def generate_activation(self):
+        if not self.is_active:
+            self.Lonoff = np.empty((0,0))
+            self.Ronoff = np.empty((0,0))
+            
         self.Lonoff = []
         self.Ronoff = []
 
@@ -154,6 +159,9 @@ class BenderData:
 
         fig.add_trace(
             go.Scatter(x = self.t, y = self.angle, mode="lines", name="angle"),
+            secondary_y=True)
+        fig.add_trace(
+            go.Scatter(x = self.t, y = self.angle_cmd, mode="lines", name="angle_cmd"),
             secondary_y=True)
         fig.add_trace(
             go.Scatter(x = self.t, y = self.xtorque, mode="lines", name="stim"),
