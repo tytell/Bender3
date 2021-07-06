@@ -31,10 +31,24 @@ class BenderData:
             self.angle = np.array(h5file['/Calibrated/Encoder'])
             self.angle_cmd = np.array(h5file['/NominalStimulus/Position'])
 
-            self.freq = h5file['/NominalStimulus'].attrs['Frequency']
-            self.ncycles = h5file['/NominalStimulus'].attrs['Cycles']
-            self.curvature = h5file['/NominalStimulus'].attrs['Curvature']
-            self.amplitude = h5file['/NominalStimulus'].attrs['Amplitude']
+            if 'Frequencies' in h5file['/NominalStimulus'].attrs:
+                self.frequencies = h5file['/NominalStimulus'].attrs['Frequencies']
+                self.curvatures = h5file['/NominalStimulus'].attrs['Curvatures']
+                self.amplitudes = h5file['/NominalStimulus'].attrs['Amplitudes']
+            else:
+                self.frequencies = [h5file['/NominalStimulus'].attrs['Frequencies']]
+                self.curvatures = [h5file['/NominalStimulus'].attrs['Curvature']]
+                self.amplitudes = [h5file['/NominalStimulus'].attrs['Amplitude']]
+
+            if 'Cycles' in h5file['/NominalStimulus'].attrs:
+                self.ncycles = h5file['/NominalStimulus'].attrs['Cycles']
+                self.movedur = self.ncycles / self.frequencies[0]
+                self.freqbycycle = [self.frequencies[0]] * self.ncycles
+            else:
+                self.freqbycycle = h5file['/NominalStimulus'].attrs['FrequencyByCycle']
+                movedur = np.sum(1.0 / self.freqbycycle)
+                self.ncycles = len(self.freqbycycle)
+                self.movedur = movedur
 
             self.Lonoff = np.empty((0,0))
             self.Ronoff = np.empty((0,0))
@@ -44,13 +58,23 @@ class BenderData:
             self.start_cycle = None      
             if self.is_active:
                 self.activation_duty = h5file['/NominalStimulus'].attrs['ActivationDuty']
-                self.activation_phase = h5file['/NominalStimulus'].attrs['ActivationStartPhase']
-                self.start_cycle = h5file['/NominalStimulus'].attrs['ActivationStartCycle']
+                if 'ActivationStartPhase' in h5file['/NominalStimulus'].attrs:
+                    self.activation_phase = h5file['/NominalStimulus'].attrs['ActivationStartPhase']
+                else:
+                    self.activation_phase = h5file['/NominalStimulus'].attrs['ActivationPhase']
+
+                if 'ActivationStartCycle' in h5file['/NominalStimulus'].attrs:
+                    self.start_cycle = h5file['/NominalStimulus'].attrs['ActivationStartCycle']
+                    self.active_cycles = np.full((self.ncycles,), True)
+                    self.active_cycles[:self.start_cycle] = False
+                else:
+                    self.start_cycle = None
+                    self.active_cycles = h5file['/NominalStimulus'].attrs['IsActiveByCycle']
 
                 if 'Lonoff' in h5file['/NominalStimulus']:
                     self.Lonoff = np.array(h5file['/NominalStimulus/Lonoff'])
                     self.Ronoff = np.array(h5file['/NominalStimulus/Ronoff'])
-                else:
+                elif self.start_cycle is not None:
                     self.generate_activation()
 
             self.bodytorque = self.xtorque
@@ -117,10 +141,18 @@ class BenderData:
         fn = os.path.basename(self.filename)
 
         labels = defaultdict(str, [('fn', fn),
-                  ('c', '{:.1f}'.format(self.curvature)),
-                  ('f', '{:.2f}'.format(self.freq)),
                   ('ph', '{:.2f}'.format(self.activation_phase)),
                   ('dc', '{:.2f}'.format(self.activation_duty))])
+
+        if len(self.curvatures) == 1:
+            labels['c'] = '{:.1f}'.format(self.curvatures[0])
+        else:
+            labels['c'] = '{:.1f}-{:.1f}'.format(min(self.curvatures), max(self.curvatures))
+
+        if len(self.frequencies) == 1:
+            labels['f'] = '{:.2f}'.format(self.frequencies[0])
+        else:
+            labels['f'] = '{:.1f}-{:.1f}'.format(min(self.frequencies), max(self.frequencies))
 
         m = re.search('(\d+)\.h5', fn)
         if m is not None:
@@ -142,9 +174,12 @@ class BenderData:
         
         df = pd.DataFrame({'filename': fn,
                            'trial': trial,
-                           'curvature': self.curvature,
-                           'freq': self.freq,
-                           'amplitude': self.amplitude,
+                           'mincurvature': min(self.curvatures),
+                           'maxcurvature': max(self.curvatures),
+                           'minfreq': min(self.frequencies),
+                           'maxfreq': max(self.frequencies),
+                           'minamplitude': min(self.amplitudes),
+                           'maxamplitude': max(self.amplitudes),
                            'is_active': self.is_active,
                            'act_phase': self.activation_phase,
                            'act_duty': self.activation_duty,
@@ -187,7 +222,7 @@ class BenderData:
         if len(self.Lonoff > 0):
             rng = [self.Lonoff[0,0]-0.5, self.Ronoff[-1,1]+0.5]
         else:
-            rng = [-0.5, self.ncycles/self.freq + 0.5]
+            rng = [-0.5, self.movedur + 0.5]
 
         fig.update_xaxes(title_text = "time (s)",
                         range = rng)
@@ -197,16 +232,35 @@ class BenderData:
 
         return(fig)
 
+    def get_is_active_passive(self):
+        periods = 1.0 / self.freqbycycle
+        tcycle = np.cumsum(periods)
+        tcycle = np.insert(tcycle, 0,0)
+        
+        is_active = np.full_like(self.t, False, dtype='bool')
+        is_passive = np.full_like(self.t, False, dtype='bool')
+        for tc1,ac1,p1 in zip(tcycle, self.active_cycles, periods):
+            iscyc = (self.t >= tc1) & (self.t < tc1+p1)
+            if ac1:
+                is_active[iscyc] = True
+                is_passive[iscyc] = False
+            else:
+                is_active[iscyc] = False
+                is_passive[iscyc] = True
+        return is_active, is_passive
+
     def plot_passive_and_active_loop(self, fig=None, row=1, title=None, 
                         passive_name="passive", active_name="active"):
         if fig is None:
             fig = make_subplots(rows=1, cols=2, shared_xaxes=True, shared_yaxes=True)
 
-        tpassive = [0.25/self.freq, self.Lonoff[1,0]]
-        tactive = [self.Lonoff[1,0], (self.ncycles-0.25) / self.freq]
+        is_active, is_passive = self.get_is_active_passive()
 
-        is_passive = (self.t >= tpassive[0]) & (self.t < tpassive[1])
-        is_active = (self.t >= tactive[0]) & (self.t < tactive[1])
+        # tpassive = [0.25/self.freq, self.Lonoff[1,0]]
+        # tactive = [self.Lonoff[1,0], (self.ncycles-0.25) / self.freq]
+
+        # is_passive = (self.t >= tpassive[0]) & (self.t < tpassive[1])
+        # is_active = (self.t >= tactive[0]) & (self.t < tactive[1])
 
         passive_name = self.labeller(passive_name)
         active_name = self.labeller(active_name)
@@ -236,10 +290,8 @@ class BenderData:
 
         print(f"{r=}, {c=}")
 
-        tactive = [self.Lonoff[1,0], (self.ncycles-0.25) / self.freq]
-
-        is_active = (self.t >= tactive[0]) & (self.t < tactive[1])
-
+        is_active, _ = self.get_is_active_passive()
+        
         active_name = self.labeller(active_name)
         
         fig.add_trace(go.Scatter(x = self.angle[is_active], y = self.xtorque[is_active],
@@ -253,3 +305,4 @@ class BenderData:
         fig.update_layout(title=title)
 
         return(fig)
+
