@@ -1,6 +1,7 @@
 library('hdf5r')
 library('dplyr')
 library('purrr')
+# library('signal')
 # library('pracma')
 
 get_stim_cycles <- function(data, filename) {
@@ -45,52 +46,90 @@ build_is_stim <- function(data) {
   return(data)
 }
 
-load_bender_data <- function(filename, cycle_offset=0.1) {
+load_bender_data <- function(filename, cycle_offset=0, filterorder=7, filtercutoff=50.0) {
   tryCatch(
     {
       h5file <- H5File$new(filename, mode='r')
       
       # these have lots of rows
-      data <- tibble(angle.deg = h5file[['/RawInput/Encoder']][],
-                        torque.Nm = h5file[['/Calibrated/xTorque']][],
-                        stim.V = h5file[['/RawInput/Left stim']][],
-                        t.s = h5file[['/NominalStimulus/t']][],
-                        t.norm = h5file[['/NominalStimulus/tnorm']][],
-                        cycle = floor(t.norm-cycle_offset))
-
-      # all of these things are single values that will get repeated for each row
-      data <-
-        cbind(data,
-              tibble(filename = basename(filename),
-                     fullpathname = file.path(normalizePath(dirname(filename)), filename),
-                     stimulus_type = h5attr(h5file[['/ParameterTree/Stimulus']], 'Type'),
-                     amplitude.deg = h5attr(h5file[['/NominalStimulus']], 'Amplitude'),
-                     dclamp.m = h5attr(h5file[['/ParameterTree/Geometry']], 'Distance between clamps'),
-                     width.m = h5attr(h5file[['/ParameterTree/Geometry/Cross-section']], 'width'),
-                     height.m = h5attr(h5file[['/ParameterTree/Geometry/Cross-section']], 'height'),
-                     sample_frequency.Hz = h5attr(h5file[['/RawInput']], 'SampleFrequency')))
-
-      if (slice(data,1)$stimulus_type == "Sine") {
-        data <- cbind(data,
-                      tibble(frequency.Hz = h5attr(h5file[['/NominalStimulus']], 'Frequency'),
-                             ncycles = h5attr(h5file[['/NominalStimulus']], 'Cycles'),
-                             stim_phase = h5attr(h5file[['/ParameterTree/Stimulus/Parameters/Activation']], 'Phase'),
-                             stim_start_cycle = h5attr(h5file[['/ParameterTree/Stimulus/Parameters/Activation']], 'Start cycle'),
-                             stim_duty = h5attr(h5file[['/ParameterTree/Stimulus/Parameters/Activation']], 'Duty')))
-        
-        data <- mutate(data, duration.sec = ncycles / frequency.Hz)
-      }
-      else if (slice(data,1)$stimulus_type == "Frequency Sweep") {
-        data <- cbind(data,
-                      tibble(start_frequency.Hz = h5attr(h5file[['/NominalStimulus']], 'StartFrequency'),
-                             end_frequency.Hz = h5attr(h5file[['/NominalStimulus']], 'EndFrequency'),
-                             duration.sec = h5attr(h5file[['/NominalStimulus']], 'Duration'),
-                      ))
+      data <- tibble(torque.Nm = h5file[['/Calibrated/xTorque']][],
+                     t.s = h5file[['/NominalStimulus/t']][],
+                     t.norm = h5file[['/NominalStimulus/tnorm']][],
+                     cycle = floor(t.norm-cycle_offset))
+      
+      if ('Encoder' %in% names(h5file[['/RawInput']])) {
+        data$angle.deg <- h5file[['/RawInput/Encoder']][]
+      } else if ('Encoder' %in% names(h5file[['/Calibrated']])) {
+        data$angle.deg <- h5file[['/Calibrated/Encoder']][]
       }
       
-      data <- mutate(data, curve.invm = angle.deg * pi/180 / first(dclamp.m),
-                     torque.Nm.orig = torque.Nm,
-                     torque.Nm = torque.Nm.orig - mean(torque.Nm))
+      if ('Left stim' %in% names(h5file[['/RawInput']])) {
+        data$stim.V = h5file[['/RawInput/Left stim']][]
+      } else if ('activation_monitor' %in% names(h5file[['/RawInput']])) {
+        data$stim.V = h5file[['/RawInput/activation_monitor']][]
+      }
+      
+      if ('ParameterTree' %in% names(h5file)) {
+        # data from Bender2
+        data <-
+          data %>%
+          bind_cols(
+            tibble(filename = basename(filename),
+                   fullpathname = file.path(normalizePath(dirname(filename)), filename),
+                   stimulus_type = h5attr(h5file[['/ParameterTree/Stimulus']], 'Type'),
+                   amplitude.deg = h5attr(h5file[['/NominalStimulus']], 'Amplitude'),
+                   dclamp.m = h5attr(h5file[['/ParameterTree/Geometry']], 'Distance between clamps'),
+                   width.m = h5attr(h5file[['/ParameterTree/Geometry/Cross-section']], 'width'),
+                   height.m = h5attr(h5file[['/ParameterTree/Geometry/Cross-section']], 'height'),
+                   sample_frequency.Hz = h5attr(h5file[['/RawInput']], 'SampleFrequency')))
+        
+        if (slice(data,1)$stimulus_type == "Sine") {
+          data <- cbind(data,
+                        tibble(frequency.Hz = h5attr(h5file[['/NominalStimulus']], 'Frequency'),
+                               ncycles = h5attr(h5file[['/NominalStimulus']], 'Cycles'),
+                               stim_phase = h5attr(h5file[['/ParameterTree/Stimulus/Parameters/Activation']], 'Phase'),
+                               stim_start_cycle = h5attr(h5file[['/ParameterTree/Stimulus/Parameters/Activation']], 'Start cycle'),
+                               stim_duty = h5attr(h5file[['/ParameterTree/Stimulus/Parameters/Activation']], 'Duty')))
+          
+          data <- mutate(data, duration.sec = ncycles / frequency.Hz)
+        }
+        else if (slice(data,1)$stimulus_type == "Frequency Sweep") {
+          data <- cbind(data,
+                        tibble(start_frequency.Hz = h5attr(h5file[['/NominalStimulus']], 'StartFrequency'),
+                               end_frequency.Hz = h5attr(h5file[['/NominalStimulus']], 'EndFrequency'),
+                               duration.sec = h5attr(h5file[['/NominalStimulus']], 'Duration'),
+                        ))
+        }
+        
+        data <- mutate(data, curve.invm = angle.deg * pi/180 / first(dclamp.m),
+                       torque.Nm.orig = torque.Nm,
+                       torque.Nm = torque.Nm.orig - mean(torque.Nm))
+      } else {
+        data <-
+          data %>%
+          bind_cols(
+            tibble(filename = basename(filename),
+                   fullpathname = file.path(normalizePath(dirname(filename)), filename),
+                   stimulus_type = h5attr(h5file[['/NominalStimulus']], 'Type'),
+                   dclamp.m = h5attr(h5file, 'ClampDistance_mm') / 1000,
+                   width.m = h5attr(h5file, 'FishCrossSectionWidth_mm')/1000,
+                   height.m = h5attr(h5file, 'FishCrossSectionHeight_mm')/1000,
+                   sample_frequency.Hz = h5attr(h5file[['/RawInput']], 'SampleFrequency')))
+        
+        if ("Amplitude" %in% h5attr_names(h5file[['/NominalStimulus']])) {
+          data$amplitude.deg = h5attr(h5file[['/NominalStimulus']], 'Amplitude')
+        }
+        data <- mutate(data, 
+                       curve.invm = angle.deg * pi/180 / first(dclamp.m),
+                       halfcycle = floor(t.norm*2)/2)
+        
+        sampfreq <- first(pull(data, sample_frequency.Hz))
+        
+        bf <- signal::butter(filterorder, filtercutoff / sampfreq, type = 'low')
+        data <- mutate(data,
+                       torque.Nm.orig = torque.Nm,
+                       torque.Nm = signal::filtfilt(bf, torque.Nm))
+      }
     },
     finally = {
       h5file$close_all()
@@ -100,6 +139,60 @@ load_bender_data <- function(filename, cycle_offset=0.1) {
   return(data)
 }
 
+load_cycle_data <- function(filename, tsdata) {
+  tryCatch(
+    {
+      h5file <- H5File$new(filename, mode='r')
+
+      cycledata1 <- tibble(amplitude.deg = h5attr(h5file[['/NominalStimulus']], 'AmplitudeByCycle'),
+                          frequency.Hz = h5attr(h5file[['/NominalStimulus']], 'FrequencyByCycle'),
+                          is_active = h5attr(h5file[['/NominalStimulus']], 'IsActiveByCycle'),
+                          activation_duty = h5attr(h5file[['/NominalStimulus']], 'ActualActivationDuty')) %>%
+        mutate(is_active = factor(if_else(is_active, 'active', 'passive'), levels=c('passive', 'active')))
+      
+      cycledata1$activation_phase <- h5attr(h5file[['/NominalStimulus']], 'ActivationPhase')
+      cycledata1 <-
+        mutate(cycledata1, 
+               halfcycle = seq(0, length.out = nrow(cycledata1)),
+               side = factor('left', levels=c('left', 'right')))
+      
+      cycledata2 <- mutate(cycledata1,
+                           halfcycle = halfcycle+0.5,
+                           side = factor('right', levels=c('left', 'right')))
+  
+      cycledata <- bind_rows(cycledata1, cycledata2)
+      
+      tcycle <-
+        tsdata %>%
+        filter(t.s >= 0) %>%
+        group_by(halfcycle) %>%
+        summarize(t_cycle.s = min(t.s))
+      
+      cycledata <- left_join(cycledata, tcycle, by="halfcycle")
+
+      cycledata <-
+        cycledata %>%
+        mutate(t_act_on.s = t_cycle.s + (0.25 + activation_phase)/frequency.Hz,
+               t_act_off.s = t_act_on.s + activation_duty/frequency.Hz,
+               t_act_on.norm = halfcycle + 0.25 + activation_phase,
+               t_act_off.norm = t_act_on.norm + activation_duty,
+               activation_phase = case_when(side == 'right'  ~  activation_phase+0.5,
+                                            side == 'left'   ~  activation_phase))
+      
+      # Set the activation times to NA if there wasn't any activation in this cycle
+      cycledata <-
+        cycledata %>%
+        mutate(across(c(t_act_on.s, t_act_off.s, activation_phase), 
+                      ~ if_else(is_active == 'active', .x, NA_real_))) %>%
+        arrange(halfcycle)
+    },
+    finally = {
+      h5file$close_all()
+    }
+  )
+  
+  return(cycledata)
+}
 
 get_avg_stiffness <- function(curve, torque) {
   s <- svd(cbind(curve, torque))
@@ -140,7 +233,7 @@ get_low_curve_stiffness <- function(curve, torque, sign=1,
   }
 }
 
-get_cycle_data <- function(rawdata,
+calculate_cycle_data <- function(rawdata,
                            low_angvel = 10,
                            low_curve = 0.2) {
   cycledata <- rawdata %>%
