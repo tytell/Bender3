@@ -1,0 +1,184 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(here)
+library(patchwork)
+library(ggbeeswarm)
+library(plotly)
+
+source('bender_data.R')
+```
+
+```{r}
+datadir <- '/Users/etytel01/Documents/2021/Scup/data/rawdata/2021-07-15'
+```
+
+```{r}
+filename <- 'scup14_008.h5'
+```
+
+```{r}
+data <- load_bender_data(file.path(datadir, filename), filtercutoff = 20.0)
+```
+
+```{r}
+cycledata <- load_cycle_data(file.path(datadir, filename), data)
+```
+
+```{r}
+cycledata
+```
+
+```{r}
+p1 <-
+  ggplot(data, aes(x = t.s, y = torque.Nm.orig)) +
+  geom_path() +
+  geom_path(aes(y = torque.Nm), color="red")
+  geom_rect(data = cycledata, aes(xmin = t_act_on.s, xmax = t_act_off.s, fill = side,
+                                  ymin = min(data$torque.Nm), ymax = max(data$torque.Nm)),
+            alpha = 0.5, inherit.aes = FALSE)
+
+ggplotly(p1)
+```
+
+```{r}
+p1 <- ggplot(data, aes(x = t.s)) +
+  geom_path(aes(y = curve.invm.orig), color="black") +
+  geom_path(aes(y = curve.invm), color="red")
+
+p2 <- ggplot(data, aes(x = t.s, y = curverate.invms)) +
+  geom_path()
+
+ggplotly(p2)
+```
+
+
+```{r}
+data <-
+  left_join(data, cycledata, by='halfcycle') %>%
+  group_by(halfcycle) %>%
+  mutate(is_stim = (t.s >= t_act_on.s) & (t.s < t_act_off.s),
+         is_stim = factor(case_when(is.na(is_stim) ~ 'passive',
+                                    is_stim ~ 'on',
+                                    !is_stim ~ 'off')))
+```
+
+```{r}
+data %>%
+  filter(t.norm > 0.5) %>%
+  ggplot(aes(x = curve.invm, y = torque.Nm.ctr, color=is_stim)) +
+  geom_path(aes(group=1)) +
+  facet_grid(frequency.Hz ~ fct_cross(is_active, factor(curvature.invm)))
+```
+
+```{r}
+data %>%
+  filter(t.norm > 0.5) %>%
+  ggplot(aes(x = curverate.invms, y = torque.Nm.ctr, color=is_stim)) +
+  geom_path(aes(group=1), size=2) +
+  facet_grid(frequency.Hz ~ fct_cross(is_active, factor(curvature.invm)))
+```
+
+
+```{r}
+data <- data  %>%
+  mutate(midcycle = floor((t.norm-0.25)*2)/2 + 0.25)
+```
+
+```{r}
+cycdata2 <- calculate_cycle_data(data)
+cycledata <- left_join(cycledata, cycdata2, by = "halfcycle")
+```
+
+```{r}
+ggplot(cycledata, aes(x = curvature.invm, y = EI1, color=is_active, shape=side)) +
+  geom_boxplot() +
+  facet_grid(. ~ frequency.Hz)
+```
+
+```{r}
+ggplot(cycledata, aes(x = factor(curvature.invm), y = etaI1, color=is_active, shape=side)) +
+  geom_boxplot() +
+  facet_grid(. ~ frequency.Hz)
+```
+```{r}
+filename <- 'scup14_026.h5'
+```
+
+```{r}
+data <- load_bender_data(file.path(datadir, filename), filtercutoff = 20.0)
+```
+
+```{r}
+cycledata <- load_cycle_data(file.path(datadir, filename), data)
+```
+
+```{r}
+cycledata
+```
+
+# Frequency sweep
+
+```{r}
+filename <- 'scup14_043.h5'
+```
+
+```{r}
+data <- load_bender_data(file.path(datadir, filename), filtercutoff = 20.0)
+```
+
+```{r}
+cycledata <- load_cycle_data(file.path(datadir, filename), data)
+```
+
+```{r}
+p1 <-
+  ggplot(data, aes(x = t.s, y = angle.deg)) +
+  geom_path() +
+  geom_point(data = cycledata, aes(x = t_cycle.s, y = amplitude.deg), color='red',
+            inherit.aes = FALSE)
+
+p2 <- ggplot(data, aes(x = t.s, y = frequency.Hz)) +
+  geom_path() +
+  geom_point(data = cycledata, aes(x = t_cycle.s, y = frequency.Hz), color='red',
+            inherit.aes = FALSE, alpha=0.5)
+
+p1 / p2
+```
+```{r}
+head(cycledata) %>%
+  select(halfcycle, t_cycle.s, frequency.Hz)
+```
+
+```{r}
+cycdata2 <- calculate_cycle_data(data)
+cycledata <- left_join(cycledata, cycdata2, by = "halfcycle")
+```
+
+```{r}
+cycledata
+```
+```{r}
+p1 <- ggplot(data, aes(x = t.s, y = curve.invm)) + geom_path()
+p2 <- ggplot(cycledata, aes(x = t_cycle.s, y = EI1, color=side)) + geom_point()
+p3 <- ggplot(cycledata, aes(x = curvature.invm, y = EI1, color=side)) + geom_point()
+p4 <- ggplot(cycledata, aes(x = frequency.Hz, y = EI1, color=side)) + geom_point()
+
+p1 / p2 / (p3 | p4) + plot_layout(guides = 'collect')
+```
+
+# Multiple trials
+
+```{r}
+trialdata <- read_csv('/Users/etytel01/Documents/2021/Scup/data/rawdata/2021-07-15/scup14_trials.csv')
+```
+
+```{r}
+trialdata <- trialdata %>%
+  mutate(filename = map_chr(Trial, ~ sprintf("scup14_%03d.h5", .x)))
+```
+

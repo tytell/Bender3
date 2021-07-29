@@ -6,3 +6,6 @@
 /Twitch.zip
 /__pycache__
 *.h5
+.Rproj.user
+.Rhistory
+*.nb.html
