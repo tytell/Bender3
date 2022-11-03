@@ -72,11 +72,11 @@ class Ergometer:
         self.filename = filename
         return filename
 
-    def run(self, device_name, lengthinchan, forceinchan, stimvoltin, stimcurrentin,
-                    lengthoutchan, stimchan):
-        inchannels = ['/'.join((device_name, c1)) for c1 in [lengthinchan, forceinchan, stimvoltin, stimcurrentin]]
+    def run(self, device_name, lengthinchan, forceinchan, stimvoltinchan, stimampinchan,
+                    lengthoutchan, stimvoltoutchan):
+        inchannels = ['/'.join((device_name, c1)) for c1 in [lengthinchan, forceinchan, stimvoltinchan, stimampinchan]]
         inchannelnames = ['length', 'force', 'stimvolts', 'stimamps']
-        outchannels = ['/'.join((device_name, c1)) for c1 in [lengthoutchan, stimchan]]
+        outchannels = ['/'.join((device_name, c1)) for c1 in [lengthoutchan, stimvoltoutchan]]
         outhchannelnames = ['length', 'stimulus']
 
         with Task() as analog_in, Task() as analog_out:
