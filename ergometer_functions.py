@@ -49,9 +49,9 @@ class Ergometer:
     
     def set_activation(self, actcmd):
         if self.stimtype == 'voltage':
-            self.actcmd = actcmd / self.stimvoltscale
+            self.actcmd = actcmd #/ self.stimvoltscale
         elif self.stimtype == 'current':
-            self.actcmd = actcmd / self.stimampscale
+            self.actcmd = actcmd #/ self.stimampscale
 
     def increment_file_name(self, filename):
         m = re.search('(\d+)\.h5', filename)
