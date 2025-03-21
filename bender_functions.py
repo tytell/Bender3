@@ -26,6 +26,8 @@ class Bender:
     def __init__(self):
         self.S1actcmd = None
         self.S2actcmd = None
+        self.S1activation_chan = None
+        self.S2activation_chan = None
 
     def set_bending_signal(self, t, angle, anglevel, tnorm=None):
         self.samplefreq = 1.0 / (t[1] - t[0])
@@ -44,7 +46,7 @@ class Bender:
         self.S2actcmd = S2actcmd
 
     def increment_file_name(self, filename):
-        m = re.search('(\d+)\.h5', filename)
+        m = re.search(r'(\d+)\.h5', filename)
         if m is None:
             basename, ext = os.path.splitext(filename)
             num = 0
@@ -162,8 +164,10 @@ class Bender:
 
     def run(self, device_name):
         inchannels = ['/'.join((device_name, c1)) for c1 in self.inchannels]
-        S1activation_chan = '/'.join((device_name, self.S1activation_chan))
-        S2activation_chan = '/'.join((device_name, self.S2activation_chan))
+
+        if self.S1activation_chan is not None:
+            S1activation_chan = '/'.join((device_name, self.S1activation_chan))
+            S2activation_chan = '/'.join((device_name, self.S2activation_chan))
         motor_control_chan = '/'.join((device_name, self.motor_control_chan))
         encoder_chan = '/'.join((device_name, self.encoder_chan))
 
@@ -187,25 +191,26 @@ class Bender:
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.t))
 
-            # set up the analog output channels
-            analog_out.ao_channels.add_ao_voltage_chan(S1activation_chan, 'S1act')
-            analog_out.ao_channels.add_ao_voltage_chan(S2activation_chan, 'S2act')
-            # it will run much faster than the input channels, because the digital output is linked
-            # to it, and it needs to run fast so that the pulses 
-            # are output fast enough for smooth motion
-            analog_out.timing.cfg_samp_clk_timing(self.outputfreq,
-                                                sample_mode=daq.AcquisitionType.FINITE,
-                                                samps_per_chan=len(self.tout))    
+            if self.S1activation_chan is not None:
+                # set up the analog output channels
+                analog_out.ao_channels.add_ao_voltage_chan(S1activation_chan, 'S1act')
+                analog_out.ao_channels.add_ao_voltage_chan(S2activation_chan, 'S2act')
+                # it will run much faster than the input channels, because the digital output is linked
+                # to it, and it needs to run fast so that the pulses 
+                # are output fast enough for smooth motion
+                analog_out.timing.cfg_samp_clk_timing(self.outputfreq,
+                                                    sample_mode=daq.AcquisitionType.FINITE,
+                                                    samps_per_chan=len(self.tout))    
 
-            # set it to start when the analog input starts
-            analog_out.triggers.start_trigger.cfg_dig_edge_start_trig("ai/StartTrigger",
-                                                    trigger_edge=daq.Edge.RISING)
+                # set it to start when the analog input starts
+                analog_out.triggers.start_trigger.cfg_dig_edge_start_trig("ai/StartTrigger",
+                                                        trigger_edge=daq.Edge.RISING)
 
             # set up the digital output channel
             digital_out.do_channels.add_do_chan(motor_control_chan, 'motor')
             # use the analog output clock for digital output timing
             digital_out.timing.cfg_samp_clk_timing(self.outputfreq, 
-                                                source = "ao/SampleClock",
+                                                # source = "ao/SampleClock",
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.tout))
             digital_out.triggers.start_trigger.cfg_dig_edge_start_trig("ai/StartTrigger",
@@ -219,20 +224,22 @@ class Bender:
             self.angledata = np.zeros((len(self.t),), dtype=np.float64)
 
             # write the output
-            analog_writer = AnalogMultiChannelWriter(analog_out.out_stream, 
-                                                    auto_start=False)
-            analog_writer.write_many_sample(self.actcmdhi)
+            if self.S1activation_chan is not None:
+                analog_writer = AnalogMultiChannelWriter(analog_out.out_stream, 
+                                                        auto_start=False)
+                analog_writer.write_many_sample(self.actcmdhi)
             
             digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
                                                         auto_start=False)
             nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
-            # print(f"{nwritten=}")
+            print(f"{nwritten=}")
 
             # start everthing
             # make sure to start the output first, because it'll wait until the 
             # input starts
             digital_out.start()
-            analog_out.start()
+            if self.S1activation_chan is not None:
+                analog_out.start()
             angle_in.start()
             analog_in.start()
             
