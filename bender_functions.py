@@ -50,7 +50,7 @@ class Bender:
         m = re.search('(d+).h5', filename)
         if m is None:
             basename, ext = os.path.splitext(filename)
-            num = 0
+            num = 1
         else:
             basename = filename[:m.start(1)]
             num = int(m.group(1))
