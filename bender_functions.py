@@ -1,4 +1,7 @@
+import nidaqmx
 import numpy as np
+import plotly
+import plotly.graph_objects as go
 from scipy import interpolate
 from datetime import datetime
 import time
@@ -44,7 +47,7 @@ class Bender:
         self.S2actcmd = S2actcmd
 
     def increment_file_name(self, filename):
-        m = re.search('(\d+)\.h5', filename)
+        m = re.search('(d+).h5', filename)
         if m is None:
             basename, ext = os.path.splitext(filename)
             num = 0
