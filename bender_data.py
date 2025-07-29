@@ -36,7 +36,7 @@ class BenderData:
                 self.curvatures = h5file['/NominalStimulus'].attrs['Curvatures']
                 self.amplitudes = h5file['/NominalStimulus'].attrs['Amplitudes']
             else:
-                self.frequencies = [h5file['/NominalStimulus'].attrs['Frequencies']]
+                self.frequencies = [h5file['/NominalStimulus'].attrs['Frequency']]
                 self.curvatures = [h5file['/NominalStimulus'].attrs['Curvature']]
                 self.amplitudes = [h5file['/NominalStimulus'].attrs['Amplitude']]
 
@@ -154,7 +154,7 @@ class BenderData:
         else:
             labels['f'] = '{:.1f}-{:.1f}'.format(min(self.frequencies), max(self.frequencies))
 
-        m = re.search('(\d+)\.h5', fn)
+        m = re.search(r'(\d+)\.h5', fn)
         if m is not None:
             labels['num'] = m.group(1)
 
@@ -163,7 +163,7 @@ class BenderData:
     def get_data(self):
         fn = os.path.basename(self.filename)
 
-        m = re.search('(\d+)\.h5', fn)
+        m = re.search(r'(\d+)\.h5', fn)
         if m is not None:
             trial = m.group(1)
             trial = int(trial)
