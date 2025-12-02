@@ -163,6 +163,55 @@ class Bender:
         self.encoder_chan = encoder_chan
         self.encoder_counts_per_rev = counts_per_rev
 
+    def calculate_moi_clamp(self, H, W, D, rho, offset_x, offset_z):
+        # Calculates MOI for a single rectangular prism about a global axis 
+        # parallel to H (Y-axis), using the Parallel Axis Theorem (I = I_cm + M*d^2)
+        mass = rho * H * W * D
+        I_cm_local = (1/12) * mass * (D**2 + W**2) 
+        # Distance 'd' from component CM to the GLOBAL axis (d^2 = offset_x^2 + offset_z^2)
+        distance_sq = offset_x**2 + offset_z**2
+        I_total = I_cm_local + mass * distance_sq
+        return I_total, mass
+    
+    def calculate_moi_specimen(self, rho_eff, obj_depth_length, 
+                                front_h_semi, back_h_semi, 
+                                front_w_semi, back_w_semi, 
+                                num_samples, axis_offset_x, axis_offset_z):
+            #Crude numerical calculation (voxelization) for the tapered specimen (H=Y, W=X, D=Z).
+            #Uses summation I = Sum(m*r^2)
+
+            # x_coords represents the Width axis (left/right, X)
+            # z_coords represents the Depth axis (front/back, Z)
+        x_coords = np.linspace(-max(front_w_semi, back_w_semi), max(front_w_semi, back_w_semi), num_samples)
+        z_coords = np.linspace(0, obj_depth_length, num_samples) 
+        
+        # Calculate step sizes for voxel volume (dV = dx * dz * H_current)
+        dx_step = (x_coords[-1] - x_coords[0]) / (num_samples - 1)
+        dz_step = (z_coords[-1] - z_coords[0]) / (num_samples - 1)
+        
+        total_moi = 0.0
+        mass_sum = 0.0
+        
+        for xi in x_coords:
+            for zi in z_coords:
+                f = zi / obj_depth_length 
+                current_Rx = front_w_semi * (1 - f) + back_w_semi * f # Current half-width (X)
+                current_Ry = front_h_semi * (1 - f) + back_h_semi * f # Current half-height (Y)
+                
+                current_H = current_Ry * 2 
+
+                is_inside = (xi**2 / current_Rx**2) <= 1
+                
+                if is_inside:
+                    mass_per_voxel = rho_eff * dx_step * dz_step * current_H
+
+                    # Distance squared (r^2) to the global rotation axis (in the XZ plane)
+                    distance_sq = (xi - axis_offset_x)**2 + (zi - axis_offset_z)**2
+                    
+                    total_moi += mass_per_voxel * distance_sq
+                    mass_sum += mass_per_voxel
+        return total_moi, mass_sum
+    
     def run(self, device_name):
         inchannels = ['/'.join((device_name, c1)) for c1 in self.inchannels]
         S1activation_chan = '/'.join((device_name, self.S1activation_chan))
@@ -246,6 +295,7 @@ class Bender:
             # and read the data
             reader.read_many_sample(self.aidata)
             angle_reader.read_many_sample_double(self.angledata)
-    
         return(self.aidata)
+
     
+
