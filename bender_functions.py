@@ -298,4 +298,153 @@ class Bender:
         return(self.aidata)
 
     
+## TRYING SOMETHING OUT HERE...
 
+
+
+
+# --- New Execution Logic Starts Here (Put this at the VERY bottom of bender_functions.py) ---
+
+def run_experiment_configuration(test_type, **kwargs):
+    """Sets up the specific parameters for a given test type using kwargs."""
+    bender_instance = Bender()
+    device_name = "Dev1"
+    
+    # ... (Keep all channel and calibration setup code here) ...
+    bender_instance.set_input_channels(inchannels=['ai0', ...], inchannel_names=['Fx', ...])
+    bender_instance.set_activation_channels('ao0', 'ao1')
+    bender_instance.calibration = np.identity(6) 
+
+    # General parameters
+    duration = kwargs.get('duration', 2.0)
+    sample_rate = kwargs.get('sample_rate', 100.0) 
+    t = np.linspace(0, duration, int(duration * sample_rate)) 
+    bender_instance.t = t # Set the time base for the Bender instance
+
+    if test_type == 'static':
+        # ... (Looping logic for static tests as in the previous answer) ...
+        # NOTE: The looping logic needs to create a new bender instance inside the loop
+        pass # Placeholder - keep the loop structure from the previous answer
+
+    elif test_type == 'frequency':
+        print(f"Configuring frequency sweep...")
+        # Extract specific parameters from kwargs
+        startfreq = kwargs['startfreq']
+        endfreq = kwargs['endfreq']
+        amplitude = kwargs['amplitude']
+        exponent = kwargs['exponent']
+        waitbefore = kwargs.get('waitbefore', 0.0) # You may need this parameter
+
+        # Generate signals using the new helper method
+        angle, anglevel, tnorm, freq = bender_instance._generate_frequency_sweep_signals(
+            startfreq, endfreq, amplitude, exponent, duration, waitbefore
+        )
+
+    elif test_type == 'custom_cycle':
+        print(f"Configuring custom cycle dynamic test...")
+        # This will require loading or defining the cycle parameters (freq_by_cycle, etc.)
+        # These lists need to be passed via command line or loaded from a config file.
+        # For this example, we assume they are passed as lists via the command line args
+        period_by_cycle = kwargs['periods']
+        freq_by_cycle = kwargs['frequencies']
+        amp_by_cycle = kwargs['amplitudes']
+
+        angle, anglevel, tnorm, freq = bender_instance._generate_custom_cycle_signals(
+            period_by_cycle, freq_by_cycle, amp_by_cycle
+        )
+        
+    else:
+        raise ValueError(f"Unknown test type: {test_type}")
+
+    # Set the generated signals for the Bender instance to use in .run()
+    # (If using the static loop, this part needs to be inside that loop)
+    bender_instance.set_bending_signal(t, angle, anglevel)
+    bender_instance.make_motor_stepper_pulses(outsampfreq=500)
+    
+    filename = bender_instance.increment_file_name(f'experiment_data_{test_type}_000.h5')
+    print(f"Data will be saved to: {filename}")
+    
+    # bender_instance.run(device_name="Dev1", operation_type=test_type)
+    print("Run command is currently commented out for testing signal generation.")
+
+
+#
+  def _generate_frequency_sweep_signals(self, startfreq, endfreq, amplitude, amplitude_frequency_exponent, duration, waitbefore):
+        """Generates the log sweep angle and anglevel signals based on input params."""
+        t = self.t # Use the time base already set by set_bending_signal
+        samplefreq = self.samplefreq
+
+        lnk = 1.0/duration * (np.log(endfreq) - np.log(startfreq))
+
+        freq = startfreq * np.exp(t * lnk)
+
+        tnorm = 2*np.pi*startfreq * (np.exp(t * lnk) - 1) / lnk
+
+        tnorm[t < 0] = -1
+        tnorm[t > duration] = np.ceil(np.max(tnorm))
+
+        A0 = startfreq ** amplitude_frequency_exponent
+
+        angle = amplitude / A0 * np.power(freq, amplitude_frequency_exponent) * np.sin(tnorm)
+        anglevel = amplitude / A0 * np.exp(amplitude_frequency_exponent * t * lnk) * lnk * \
+            (amplitude_frequency_exponent * np.sin(tnorm) + 2*np.pi/lnk * freq * np.cos(tnorm))
+
+        freq[t < 0] = np.nan
+        freq[t > duration] = np.nan
+
+        angle[t < 0] = 0
+        angle[t > duration] = 0
+
+        anglevel[t < 0] = 0
+        anglevel[t > duration] = 0
+
+        isramp = (t >= duration) & (t < duration+0.5)
+        # Ensure k calculation handles array indexing correctly
+        k_index = np.argmax(t >= (waitbefore + duration))
+        
+        pend = angle[k_index]
+        velend = (0 - pend) / 0.5
+
+        ramp = pend + (t[isramp] - t[k_index])*velend
+
+        np.place(anglevel, isramp, velend)
+        np.place(angle, isramp, ramp)
+
+        return angle, anglevel, tnorm, freq
+
+    def _generate_custom_cycle_signals(self, period_by_cycle, freq_by_cycle, amp_by_cycle):
+        """Generates signals for dynamic tests with a custom sequence of frequencies and amplitudes."""
+        t = self.t
+        freq = np.zeros_like(t)
+        amp = np.zeros_like(t)
+        tnorm = np.zeros_like(t)
+
+        cyclestart = np.cumsum(period_by_cycle)
+        cyclestart = np.insert(cyclestart, 0, 0)
+
+        for c, (cycstart1, f1, a1) in enumerate(zip(cyclestart, freq_by_cycle, amp_by_cycle)):
+            cycend1 = cycstart1 + 1/f1
+
+            iscyc = (t >= cycstart1) & (t < cycend1)
+            freq[iscyc] = f1
+            amp[iscyc] = a1
+
+            np.place(tnorm, iscyc, (t[iscyc] - cycstart1) * f1 + c)
+        
+        # Calculate angle and anglevel from tnorm, freq, and amp here 
+        # (Assuming you have this logic missing from your snippet, you need an actual motion calculation)
+        # Placeholder calculation for demonstration:
+        angle = amp * np.sin(2 * np.pi * tnorm) 
+        anglevel = np.zeros_like(t) # This needs correct differentiation
+
+        return angle, anglevel, tnorm, freq
+
+# The main execution block starts here, at the bottom of the file
+if __name__ == "__main__":
+    # The argparse logic and the try/except block to run the program
+    import argparse
+    # ... (rest of the argparse code from the previous answer) ...
+    try:
+        run_experiment_configuration(args.test_type, **params)
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
