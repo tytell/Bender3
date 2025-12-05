@@ -6,10 +6,9 @@ from scipy import interpolate
 from datetime import datetime
 import time
 from copy import copy
-
 import re
 import os
-
+print(f"DEBUG: Loading bender_functions.py from: {os.path.abspath(__file__)}")
 import logging
 
 try:
@@ -29,6 +28,166 @@ class Bender:
     def __init__(self):
         self.S1actcmd = None
         self.S2actcmd = None
+#Sets up the specific parameters for a given test type using data stored in self and general parameters passed via kwargs.
+
+    def run_experiment_configuration(self, device_name = "Dev1", test_type = "dynamic", **kwargs):
+
+        # Replace ... with actual channel names as needed (Operate on self)
+        self.set_input_channels(inchannels=['ai0'], inchannel_names=['Fx'])
+        self.set_activation_channels('ao0', 'ao1')
+        # self.calibration is assumed to be loaded in the notebook using bender.loadCalibration(...)
+
+        # General parameters (duration/sample_rate passed from notebook)
+        duration = kwargs.get('duration', 2.0)
+        sample_rate = kwargs.get('sample_rate', 100.0) 
+        t = np.linspace(0, duration, int(duration * sample_rate)) 
+        # self.t will be set in set_bending_signal later, but needed here temporarily
+        
+        # Define angle/anglevel/tnorm variables for scope consistency
+        angle, anglevel, tnorm = None, None, None
+
+
+        if test_type == 'dynamic':
+            print(f"Configuring dynamic custom cycle test...")
+            # Data needed is already stored in 'self' attributes (no kwargs needed for these)
+            period_by_cycle = self.period_by_cycle
+            freq_by_cycle = self.freq_by_cycle
+            amp_by_cycle = self.amp_by_cycle
+            allamps = self.allamps
+            allfreqs = self.allfreqs
+            duty_by_cycle = self.duty_by_cycle   
+            phase_by_cycle = self.phase_by_cycle 
+        
+            # Generate signals using the method on 'self', passing required inputs from self.attributes
+            angle, anglevel, tnorm, _ = self.generate_custom_cycle_signals(
+                period_by_cycle, freq_by_cycle, amp_by_cycle)
+        else:
+            raise ValueError(f"Unknown test type: {test_type}")
+        
+        # Set the generated signals for the Bender instance ('self') to use in .run()
+        self.set_bending_signal(t, angle, anglevel, tnorm) # Pass tnorm here as well
+
+        # 4. Define and Call the STIMULATION Logic 
+
+        # Access stim parameters stored in 'self' (set by generate_cycle_parameters)
+        # Define other non-calculated params via kwargs from the notebook
+        stimulation_params = {
+            'is_activation': kwargs.get('is_activation', True), 
+            'activation_pulse_rate': kwargs.get('activation_pulse_rate', 1000.0),
+            'prestim_time': kwargs.get('prestim_time', -1.0),
+            'poststim_time': kwargs.get('poststim_time', 0.1),
+            'prepoststim_dur': kwargs.get('prepoststim_dur', 0.5),
+            'prepoststim_sep': kwargs.get('prepoststim_sep', 0.0),
+            'movedur': duration, # Use the main duration parameter
+            # Get calculated arrays from self attributes
+            'actburstdur': self.actburstdur,        
+            'actburstduty': self.actburstduty, # This is now the full duty array     
+            'freq_by_cycle': self.freq_by_cycle,    
+            'phase_by_cycle': self.phase_by_cycle, # <--- Pass the new array
+            }
+
+        # Call the private helper method defined on 'self'
+        S1actcmd, S2actcmd = self._generate_stimulation_waveforms(**stimulation_params)
+        
+        # Set the generated activation signals in 'self'
+        self.set_activation(S1actcmd, S2actcmd)
+
+        # --- Use self everywhere now ---
+        output_sampling_frequency = 500
+        self.make_motor_stepper_pulses(outsampfreq=output_sampling_frequency)
+        
+        filename = self.increment_file_name(f'experiment_data_{test_type}_000.h5')
+        print(f"Data will be saved to: {filename}")
+        
+        # Run the experiment using 'self'
+        self.run(device_name=device_name, operation_type=test_type)
+    def generate_cycle_parameters(self, curves, frequencies, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, activation_duties, activation_phases, activation_pulse_rate):
+    # Calculates the full sequence of frequencies, amplitudes, and periods by cycle, based on initial lists of curves/frequencies and test parameters.
+
+
+        # Create all combinations of frequencies and curvatures
+        allfreqs = []
+        allcurves = []
+        all_phases = []
+        all_duties = []
+
+        for c1 in curves:
+            for f1 in frequencies:
+                for d1 in activation_duties:  # <--- Loop through duties
+                    for p1 in activation_phases: # <--- Loop through phases
+                        allfreqs.append(f1)
+                        allcurves.append(c1)
+                        all_duties.append(d1) # <--- Append duty
+                        all_phases.append(p1) # <--- Append phase
+
+        allfreqs = np.array(allfreqs)
+        allcurves = np.array(allcurves)
+        all_duties = np.array(all_duties) # <--- Convert to numpy array
+        all_phases = np.array(all_phases) # <--- Convert to numpy array
+        
+        # Randomize the order of the frequency/amplitude combinations (only if Randomize = TRUE above)
+        if randomize:
+            order = np.arange(0, len(allfreqs))
+            np.random.shuffle(order)
+            allfreqs = allfreqs[order]
+            allcurves = allcurves[order]
+            all_duties = all_duties[order] # <--- Randomize duties
+            all_phases = all_phases[order] # <--- Randomize phases
+
+        # Calculate amplitudes, strains, and strain rates for all curvature/frequency combinations
+        allamps = np.rad2deg(allcurves * (dclamp/1000))
+
+        # allstrains = xsec_width/2/1000 * allcurves # Not needed if not stored/returned
+        # allstrainrates = 2*np.pi * allstrains * allfreqs # Not needed if not stored/returned
+        # amp_step_vel = 2*np.pi*max(allfreqs * allamps) # Not needed if not stored/returned
+
+        # Create frequency, amplitude, and period arrays by cycle
+        freq_by_cycle = np.array([])
+        amp_by_cycle = np.array([])
+        duty_by_cycle = np.array([]) # <--- New array
+        phase_by_cycle = np.array([]) # <--- New array
+        
+        for f1, a1, d1, p1 in zip(allfreqs, allamps, all_duties, all_phases):
+            freq_by_cycle = np.concatenate((freq_by_cycle, [f1] * cycles_per_step))
+            amp_by_cycle = np.concatenate((amp_by_cycle, [a1] * cycles_per_step))
+            duty_by_cycle = np.concatenate((duty_by_cycle, [d1] * cycles_per_step)) # <--- Concatenate duty
+            phase_by_cycle = np.concatenate((phase_by_cycle, [p1] * cycles_per_step)) # <--- Concatenate phase
+
+        # Add end cycles
+        freq_by_cycle = np.concatenate((freq_by_cycle, [allfreqs[-1]] * n_end_cycles))
+        amp_by_cycle = np.concatenate((amp_by_cycle, [allamps[-1]] * n_end_cycles))
+        duty_by_cycle = np.concatenate((duty_by_cycle, [all_duties[-1]] * n_end_cycles)) # <--- Add end duties
+        phase_by_cycle = np.concatenate((phase_by_cycle, [all_phases[-1]] * n_end_cycles)) # <--- Add end phases
+
+        period_by_cycle = 1.0 / freq_by_cycle
+
+        if np.any(np.array(stim_cycles_in_step) >= cycles_per_step):
+            raise IndexError("stim_cycles_in_step have to be less than cycles_in_step")
+
+        c = np.arange(0, cycles_per_step)
+        is_act_cycle = np.isin(c, stim_cycles_in_step)
+        is_act_cycle = np.tile(is_act_cycle, len(allfreqs))
+        is_act_cycle = np.concatenate((is_act_cycle, [False] * n_end_cycles))
+
+
+        # Calculate activation burst duration
+        # Note: actburstduty is now redundant as we use duty_by_cycle directly
+        actburstdur = duty_by_cycle / freq_by_cycle 
+        actburstdur = np.floor(actburstdur * activation_pulse_rate * 2) / (activation_pulse_rate * 2)
+        actburstdur[is_act_cycle == False] = 0
+
+        # --- Store all results as INSTANCE ATTRIBUTES (self.) ---
+        self.period_by_cycle = period_by_cycle
+        self.freq_by_cycle = freq_by_cycle
+        self.amp_by_cycle = amp_by_cycle
+        self.duty_by_cycle = duty_by_cycle # <--- Store new attribute
+        self.phase_by_cycle = phase_by_cycle # <--- Store new attribute
+        self.allfreqs = allfreqs
+        self.allamps = allamps
+        self.actburstdur = actburstdur
+        self.actburstduty = duty_by_cycle # Store the final duty array
+
+        # No return statement is needed if you store everything in 'self'
 
     def set_bending_signal(self, t, angle, anglevel, tnorm=None):
         self.samplefreq = 1.0 / (t[1] - t[0])
@@ -92,7 +251,7 @@ class Bender:
 
         return self.forcetorque
 
-    def make_motor_stepper_pulses(self, outsampfreq,
+    def make_motor_stepper_pulses(self, outsampfreq = 1000,
                                 scale=6.0,
                                 stepsperrev=6400.0):
 
@@ -303,73 +462,20 @@ class Bender:
 
 
 
-# --- New Execution Logic Starts Here (Put this at the VERY bottom of bender_functions.py) ---
 
-def run_experiment_configuration(test_type, **kwargs):
-    """Sets up the specific parameters for a given test type using kwargs."""
-    bender_instance = Bender()
-    device_name = "Dev1"
-    
-    # ... (Keep all channel and calibration setup code here) ...
-    bender_instance.set_input_channels(inchannels=['ai0', ...], inchannel_names=['Fx', ...])
-    bender_instance.set_activation_channels('ao0', 'ao1')
-    bender_instance.calibration = np.identity(6) 
 
-    # General parameters
-    duration = kwargs.get('duration', 2.0)
-    sample_rate = kwargs.get('sample_rate', 100.0) 
-    t = np.linspace(0, duration, int(duration * sample_rate)) 
-    bender_instance.t = t # Set the time base for the Bender instance
 
-    if test_type == 'static':
-        # ... (Looping logic for static tests as in the previous answer) ...
-        # NOTE: The looping logic needs to create a new bender instance inside the loop
-        pass # Placeholder - keep the loop structure from the previous answer
+# --- New Execution Logic Starts Here---
 
-    elif test_type == 'frequency':
-        print(f"Configuring frequency sweep...")
-        # Extract specific parameters from kwargs
-        startfreq = kwargs['startfreq']
-        endfreq = kwargs['endfreq']
-        amplitude = kwargs['amplitude']
-        exponent = kwargs['exponent']
-        waitbefore = kwargs.get('waitbefore', 0.0) # You may need this parameter
 
-        # Generate signals using the new helper method
-        angle, anglevel, tnorm, freq = bender_instance._generate_frequency_sweep_signals(
-            startfreq, endfreq, amplitude, exponent, duration, waitbefore
-        )
 
-    elif test_type == 'custom_cycle':
-        print(f"Configuring custom cycle dynamic test...")
-        # This will require loading or defining the cycle parameters (freq_by_cycle, etc.)
-        # These lists need to be passed via command line or loaded from a config file.
-        # For this example, we assume they are passed as lists via the command line args
-        period_by_cycle = kwargs['periods']
-        freq_by_cycle = kwargs['frequencies']
-        amp_by_cycle = kwargs['amplitudes']
 
-        angle, anglevel, tnorm, freq = bender_instance._generate_custom_cycle_signals(
-            period_by_cycle, freq_by_cycle, amp_by_cycle
-        )
-        
-    else:
-        raise ValueError(f"Unknown test type: {test_type}")
 
-    # Set the generated signals for the Bender instance to use in .run()
-    # (If using the static loop, this part needs to be inside that loop)
-    bender_instance.set_bending_signal(t, angle, anglevel)
-    bender_instance.make_motor_stepper_pulses(outsampfreq=500)
-    
-    filename = bender_instance.increment_file_name(f'experiment_data_{test_type}_000.h5')
-    print(f"Data will be saved to: {filename}")
-    
-    # bender_instance.run(device_name="Dev1", operation_type=test_type)
-    print("Run command is currently commented out for testing signal generation.")
+
 
 
 #
-  def _generate_frequency_sweep_signals(self, startfreq, endfreq, amplitude, amplitude_frequency_exponent, duration, waitbefore):
+    def generate_frequency_sweep_signals(self, startfreq, endfreq, amplitude, amplitude_frequency_exponent, duration, waitbefore):
         """Generates the log sweep angle and anglevel signals based on input params."""
         t = self.t # Use the time base already set by set_bending_signal
         samplefreq = self.samplefreq
@@ -412,9 +518,38 @@ def run_experiment_configuration(test_type, **kwargs):
 
         return angle, anglevel, tnorm, freq
 
-    def _generate_custom_cycle_signals(self, period_by_cycle, freq_by_cycle, amp_by_cycle):
-        """Generates signals for dynamic tests with a custom sequence of frequencies and amplitudes."""
-        t = self.t
+    # Assuming this method exists inside a class definition
+    def generate_custom_cycle_signals(self, period_by_cycle, freq_by_cycle, amp_by_cycle):
+        """
+        Generates signals for dynamic tests with a custom sequence of frequencies and amplitudes.
+        
+        Includes amplitude ramps during step changes and start/end ramps.
+        
+        Args:
+            period_by_cycle (list/array): Duration of each cycle in seconds.
+            freq_by_cycle (list/array): Frequency for each cycle (Hz).
+            amp_by_cycle (list/array): Amplitude for each cycle.
+
+        Returns:
+            tuple: (angle, anglevel, tnorm, freq) NumPy arrays.
+        """
+        
+        # Access parameters from self (ensure they are set by the __init__ or another method)
+        waitbefore = self.waitbefore
+        waitafter = self.waitafter
+        rampdur = self.rampdur
+        amp_step_vel = self.amp_step_vel
+        samplefreq = self.samplefreq # <--- Use the value from the instance
+        allamps = self.allamps # Used for start/end ramps
+        allfreqs = self.allfreqs # Used for start/end ramps
+
+        movedur = np.sum(period_by_cycle)
+        totaldur = waitbefore + movedur + waitafter
+        
+        t = np.arange(0, totaldur, 1.0 / samplefreq)
+        t -= waitbefore # Shift time so the movement starts at t=0
+
+        # Generate the base signals
         freq = np.zeros_like(t)
         amp = np.zeros_like(t)
         tnorm = np.zeros_like(t)
@@ -424,27 +559,110 @@ def run_experiment_configuration(test_type, **kwargs):
 
         for c, (cycstart1, f1, a1) in enumerate(zip(cyclestart, freq_by_cycle, amp_by_cycle)):
             cycend1 = cycstart1 + 1/f1
-
             iscyc = (t >= cycstart1) & (t < cycend1)
             freq[iscyc] = f1
             amp[iscyc] = a1
+            # Use boolean assignment instead of np.place
+            tnorm[iscyc] = (t[iscyc] - cycstart1) * f1 + c
 
-            np.place(tnorm, iscyc, (t[iscyc] - cycstart1) * f1 + c)
+        # Add linear ramps between cycles 
+        for c, (cycstart1, a1, a2) in enumerate(zip(cyclestart[1:], amp_by_cycle[:-1], amp_by_cycle[1:])):
+            amp_step_dur2 = (a2 - a1) / amp_step_vel / 2
+            isstep = (t >= cycstart1 - amp_step_dur2) & (t < cycstart1 + amp_step_dur2)
+            
+            if np.any(isstep):
+                amp_ramp = np.linspace(a1, a2, np.sum(isstep))
+                amp[isstep] = amp_ramp # Use boolean assignment
+
+        angle = amp * np.sin(2 * np.pi * tnorm)
+
+        # Ensure signal is zero during wait periods
+        angle[t < 0] = 0
+        angle[t > movedur] = 0
+
+        # Ramp to the start and end amplitudes (Original logic using boolean assignment)
+        rampvel1 = allamps[0] / rampdur
+        tendramp1 = 0.25 / allfreqs[0]
+        tstartramp1 = tendramp1 - rampdur
+        rampvel2 = allamps[-1] / rampdur
+        tstartramp2 = movedur - 0.25 / allfreqs[-1]
+        tendramp2 = tstartramp2 + rampdur
+
+        if tstartramp1 > 0:
+            pass # actual movement is slower than the ramp, so we won't bother adding the ramp
+        else:
+            # Use boolean assignment
+            mask1 = (t >= tstartramp1) & (t < tendramp1)
+            mask2 = (t >= tstartramp2) & (t < tendramp2)
+            angle[mask1] = (t[mask1] - tstartramp1) * rampvel1
+            angle[mask2] = (t[mask2] - tstartramp2 - rampdur) * rampvel2
+
+        # Calculate angular velocity
+        anglevel = np.zeros_like(angle)
+        # Avoid calculating velocity for the very first and last point
+        anglevel[1:-1] = (angle[2:] - angle[:-2]) * (samplefreq / 2.0)
         
-        # Calculate angle and anglevel from tnorm, freq, and amp here 
-        # (Assuming you have this logic missing from your snippet, you need an actual motion calculation)
-        # Placeholder calculation for demonstration:
-        angle = amp * np.sin(2 * np.pi * tnorm) 
-        anglevel = np.zeros_like(t) # This needs correct differentiation
-
+        # Return all generated signals
         return angle, anglevel, tnorm, freq
 
-# The main execution block starts here, at the bottom of the file
-if __name__ == "__main__":
-    # The argparse logic and the try/except block to run the program
-    import argparse
-    # ... (rest of the argparse code from the previous answer) ...
-    try:
-        run_experiment_configuration(args.test_type, **params)
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
+            
+    def _generate_stimulation_waveforms(self, is_activation, phase_by_cycle, activation_pulse_rate, prestim_time, poststim_time, prepoststim_dur, prepoststim_sep, actburstdur, actburstduty, freq_by_cycle, movedur):
+        # ... (imports, accessing self.t, self.tnorm, initialization of arrays S1actcmd, etc.) ...
+        t = self.t 
+        tnorm = self.tnorm
+        S1actcmd = np.zeros_like(t)
+        S2actcmd = np.zeros_like(t)
+        Lonoff = []
+        Ronoff = []
+
+        if is_activation:
+            pulsedur = 0.01         
+            burst = (np.mod(t * activation_pulse_rate, 1) <= 0.5).astype(float)
+            burst *= 5.0
+            prepostburst = (np.mod(t * activation_pulse_rate, 1) <= 0.5).astype(float)
+            prepostburst *= 5.0
+
+            bendphase = tnorm - 0.25
+
+        for c, (dur1, duty1, f1) in enumerate(zip(actburstdur, actburstduty, freq_by_cycle)):
+            if dur1 == 0:
+                continue
+            
+            # We add the safety check recommended previously
+            target_time = c + activation_phase
+            if not np.any(bendphase >= target_time):
+                continue # Skip cycles that fall outside the time array bounds
+
+            k = np.argmax(bendphase >= target_time)
+            tstart = t[k]
+            tend = tstart + dur1
+
+            if np.any(bendphase >= target_time):
+                Lonoff.append([tstart, tend])
+            if np.any(bendphase >= c + 0.5 + activation_phase):
+                Ronoff.append(np.array([tstart, tend]) + 0.5 / f1)
+
+            # FIX 1: Replace np.place with boolean assignment for S1actcmd
+            mask1 = (bendphase >= c + activation_phase) & (bendphase < c + activation_phase + duty1)
+            S1actcmd[mask1] = burst[mask1] # Assign only where the mask is True
+
+            # FIX 2: Replace np.place with boolean assignment for S2actcmd
+            mask2 = (bendphase >= c + 0.5 + activation_phase) & (bendphase < c + 0.5 + activation_phase + duty1)
+            S2actcmd[mask2] = burst[mask2] # Assign only where the mask is True
+
+
+        # --- Pre/Post stimulation logic ---
+        tstart = prestim_time
+        tend = tstart + prepoststim_dur
+        Lonoff.append([tstart, tend])
+        
+        # FIX 3: Replace np.place with boolean assignment for pre/post stim
+        mask3 = (t >= tstart) & (t < tend)
+        S1actcmd[mask3] = prepostburst[mask3] # Assign only where the mask is True
+        # ... (rest of the pre/post logic) ...
+
+        # Store these in the instance if you need to access them later for analysis
+        self.Lonoff = np.array(Lonoff)
+        self.Ronoff = np.array(Ronoff)
+
+        return S1actcmd, S2actcmd
