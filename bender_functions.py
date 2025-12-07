@@ -30,7 +30,7 @@ class Bender:
         self.S2actcmd = None
 #Sets up the specific parameters for a given test type using data stored in self and general parameters passed via kwargs.
 
-    def run_experiment_configuration(self, device_name = "Dev1", test_type = "dynamic", **kwargs):
+    def run_experiment(self, device_name = "Dev1", test_type = "dynamic"):
 
         # Replace ... with actual channel names as needed (Operate on self)
         self.set_input_channels(inchannels=['ai0'], inchannel_names=['Fx'])
@@ -38,70 +38,78 @@ class Bender:
         # self.calibration is assumed to be loaded in the notebook using bender.loadCalibration(...)
 
         # General parameters (duration/sample_rate passed from notebook)
-        duration = kwargs.get('duration', 2.0)
-        sample_rate = kwargs.get('sample_rate', 100.0) 
-        t = np.linspace(0, duration, int(duration * sample_rate)) 
-        # self.t will be set in set_bending_signal later, but needed here temporarily
-        
+        sample_rate = self.samplefreq
+
         # Define angle/anglevel/tnorm variables for scope consistency
         angle, anglevel, tnorm = None, None, None
+        duration = None #Initialize, but will be set below
 
+         # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
+        if test_type == 'dynamic':            
+            # Add safety check before using the attribute
+            if self.period_by_cycle is None:
+                raise AttributeError("Dynamic test requires 'period_by_cycle' to be set via organize_cycles first.")
+            # Calculate duration. Needed for stimulation timing
+            duration = np.sum(self.period_by_cycle)
 
-        if test_type == 'dynamic':
-            print(f"Configuring dynamic custom cycle test...")
-            # Data needed is already stored in 'self' attributes (no kwargs needed for these)
-            period_by_cycle = self.period_by_cycle
-            freq_by_cycle = self.freq_by_cycle
-            amp_by_cycle = self.amp_by_cycle
-            allamps = self.allamps
-            allfreqs = self.allfreqs
-            duty_by_cycle = self.duty_by_cycle   
-            phase_by_cycle = self.phase_by_cycle 
-        
             # Generate signals using the method on 'self', passing required inputs from self.attributes
-            angle, anglevel, tnorm, _ = self.generate_custom_cycle_signals(
-                period_by_cycle, freq_by_cycle, amp_by_cycle)
+            angle, anglevel, tnorm, _ = self.make_dynamic_cycles(
+                self.period_by_cycle, 
+                self.freq_by_cycle, 
+                self.amp_by_cycle)
+            
+            # CHECK INDENT AND STRUCTURE HERE
+        elif test_type == 'sweep':
+            # Check a SWEEP attribute instead
+            if self.duration is None:
+                raise AttributeError("Sweep test requires 'self.duration' to be set in the notebook first.")
+            duration = self.duration + self.waitbefore + self.waitafter
+
+            angle, anglevel, tnorm, _ = self.make_frequency_sweep(
+                self.startfreq, 
+                self.endfreq, 
+                self.amplitude, 
+                self.amplitude_frequency_exponent, 
+                self.waitbefore)
         else:
             raise ValueError(f"Unknown test type: {test_type}")
-        
-        # Set the generated signals for the Bender instance ('self') to use in .run()
-        self.set_bending_signal(t, angle, anglevel, tnorm) # Pass tnorm here as well
+    
+        # NOW ACTUALLY MAKE THE SIGNAL FOR THE MOTOR (BASED ON PREVIOUS DYNAMIC, SWEEP, ETC)
+        # Set the generated signals for     the Bender instance ('self') to use in .run()
+        self.set_bending_signal(self.t, angle, anglevel, tnorm) # Pass tnorm here as well
 
-        # 4. Define and Call the STIMULATION Logic 
 
-        # Access stim parameters stored in 'self' (set by generate_cycle_parameters)
-        # Define other non-calculated params via kwargs from the notebook
+        # NOW LET'S ADD ELECTRICAL STIMULI!
+        # Access stim parameters stored in 'self' (set by organize_cycles)
         stimulation_params = {
-            'is_activation': kwargs.get('is_activation', True), 
-            'activation_pulse_rate': kwargs.get('activation_pulse_rate', 1000.0),
-            'prestim_time': kwargs.get('prestim_time', -1.0),
-            'poststim_time': kwargs.get('poststim_time', 0.1),
-            'prepoststim_dur': kwargs.get('prepoststim_dur', 0.5),
-            'prepoststim_sep': kwargs.get('prepoststim_sep', 0.0),
-            'movedur': duration, # Use the main duration parameter
-            # Get calculated arrays from self attributes
+            'is_activation': self.is_activation, # Must be set in notebook
+            'activation_pulse_rate': self.activation_pulse_rate, # Must be set in notebook
+            'prestim_time': self.prestim_time, # Must be set in notebook
+            'poststim_time': self.poststim_time, # Must be set in notebook
+            'prepoststim_dur': self.prepoststim_dur, # Must be set in notebook
+            'prepoststim_sep': self.prepoststim_sep, # Must be set in notebook
+            'movedur': duration, 
             'actburstdur': self.actburstdur,        
-            'actburstduty': self.actburstduty, # This is now the full duty array     
+            'duty_by_cycle': self.duty_by_cycle,     
             'freq_by_cycle': self.freq_by_cycle,    
-            'phase_by_cycle': self.phase_by_cycle, # <--- Pass the new array
+            'phase_by_cycle': self.phase_by_cycle, 
             }
 
-        # Call the private helper method defined on 'self'
-        S1actcmd, S2actcmd = self._generate_stimulation_waveforms(**stimulation_params)
-        
+        # FINISH Generate electrical stimuli
+        S1actcmd, S2actcmd = self._make_stimuli(**stimulation_params)
+            
         # Set the generated activation signals in 'self'
         self.set_activation(S1actcmd, S2actcmd)
-
-        # --- Use self everywhere now ---
-        output_sampling_frequency = 500
-        self.make_motor_stepper_pulses(outsampfreq=output_sampling_frequency)
-        
+        self.make_motor_stepper_pulses(outputfreq=self.outputfreq)
         filename = self.increment_file_name(f'experiment_data_{test_type}_000.h5')
         print(f"Data will be saved to: {filename}")
-        
+            
         # Run the experiment using 'self'
         self.run(device_name=device_name, operation_type=test_type)
-    def generate_cycle_parameters(self, curves, frequencies, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, activation_duties, activation_phases, activation_pulse_rate):
+
+
+
+    def organize_cycles(self, curves, frequencies, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, activation_duties, activation_phases, activation_pulse_rate):
     # Calculates the full sequence of frequencies, amplitudes, and periods by cycle, based on initial lists of curves/frequencies and test parameters.
 
 
@@ -171,7 +179,6 @@ class Bender:
 
 
         # Calculate activation burst duration
-        # Note: actburstduty is now redundant as we use duty_by_cycle directly
         actburstdur = duty_by_cycle / freq_by_cycle 
         actburstdur = np.floor(actburstdur * activation_pulse_rate * 2) / (activation_pulse_rate * 2)
         actburstdur[is_act_cycle == False] = 0
@@ -185,7 +192,7 @@ class Bender:
         self.allfreqs = allfreqs
         self.allamps = allamps
         self.actburstdur = actburstdur
-        self.actburstduty = duty_by_cycle # Store the final duty array
+        self.duty_by_cycle = duty_by_cycle # Store the final duty array
 
         # No return statement is needed if you store everything in 'self'
 
@@ -251,14 +258,14 @@ class Bender:
 
         return self.forcetorque
 
-    def make_motor_stepper_pulses(self, outsampfreq = 1000,
+    def make_motor_stepper_pulses(self, outputfreq = 1000,
                                 scale=6.0,
                                 stepsperrev=6400.0):
 
-        self.outputfreq = outsampfreq
+        self.outputfreq = outputfreq
         self.scale = scale
 
-        tout = np.arange(self.t[0], self.t[-1], 1.0/outsampfreq)
+        tout = np.arange(self.t[0], self.t[-1], 1.0/outputfreq)
 
         poshi = interpolate.interp1d(self.t, self.angle, kind='linear', assume_sorted=True, bounds_error=False,
                                     fill_value=0.0)(tout)
@@ -268,11 +275,11 @@ class Bender:
         poshi *= scale
         velhi *= scale
 
-        if outsampfreq == 0 or stepsperrev == 0:
+        if outputfreq == 0 or stepsperrev == 0:
             raise ValueError('Problems with parameters')
 
         stepsize = 360.0 / stepsperrev
-        maxspeed = stepsize * outsampfreq / 2
+        maxspeed = stepsize * outputfreq / 2
 
         if np.any(np.abs(self.anglevel) > maxspeed):
             raise ValueError('Motion is too fast!')
@@ -475,10 +482,14 @@ class Bender:
 
 
 #
-    def generate_frequency_sweep_signals(self, startfreq, endfreq, amplitude, amplitude_frequency_exponent, duration, waitbefore):
+    def make_frequency_sweep(self, startfreq, endfreq, amplitude, amplitude_frequency_exponent, duration, waitbefore):
         """Generates the log sweep angle and anglevel signals based on input params."""
-        t = self.t # Use the time base already set by set_bending_signal
         samplefreq = self.samplefreq
+        
+        # Calculate the total duration needed for the sweep + wait times
+        total_duration = duration + waitbefore + self.waitafter
+        t = np.arange(0, total_duration, 1.0 / samplefreq)
+        t -= waitbefore # Shift time so the movement starts at t=0
 
         lnk = 1.0/duration * (np.log(endfreq) - np.log(startfreq))
 
@@ -505,12 +516,11 @@ class Bender:
         anglevel[t > duration] = 0
 
         isramp = (t >= duration) & (t < duration+0.5)
+
         # Ensure k calculation handles array indexing correctly
         k_index = np.argmax(t >= (waitbefore + duration))
-        
         pend = angle[k_index]
         velend = (0 - pend) / 0.5
-
         ramp = pend + (t[isramp] - t[k_index])*velend
 
         np.place(anglevel, isramp, velend)
@@ -519,7 +529,7 @@ class Bender:
         return angle, anglevel, tnorm, freq
 
     # Assuming this method exists inside a class definition
-    def generate_custom_cycle_signals(self, period_by_cycle, freq_by_cycle, amp_by_cycle):
+    def make_dynamic_cycles(self, period_by_cycle, freq_by_cycle, amp_by_cycle):
         """
         Generates signals for dynamic tests with a custom sequence of frequencies and amplitudes.
         
@@ -543,9 +553,9 @@ class Bender:
         allamps = self.allamps # Used for start/end ramps
         allfreqs = self.allfreqs # Used for start/end ramps
 
+        # Calculate timings and durations
         movedur = np.sum(period_by_cycle)
         totaldur = waitbefore + movedur + waitafter
-        
         t = np.arange(0, totaldur, 1.0 / samplefreq)
         t -= waitbefore # Shift time so the movement starts at t=0
 
@@ -599,14 +609,18 @@ class Bender:
 
         # Calculate angular velocity
         anglevel = np.zeros_like(angle)
-        # Avoid calculating velocity for the very first and last point
+
+        # DOUBLE CHECK: Avoid calculating velocity for the very first and last point
         anglevel[1:-1] = (angle[2:] - angle[:-2]) * (samplefreq / 2.0)
         
+        self.t = t
+        self.tnorm = tnorm
+
         # Return all generated signals
         return angle, anglevel, tnorm, freq
 
-            
-    def _generate_stimulation_waveforms(self, is_activation, phase_by_cycle, activation_pulse_rate, prestim_time, poststim_time, prepoststim_dur, prepoststim_sep, actburstdur, actburstduty, freq_by_cycle, movedur):
+    # Lots of unused arguments, need to check on that later.        
+    def _make_stimuli(self, is_activation, phase_by_cycle, activation_pulse_rate, prestim_time, poststim_time, prepoststim_dur, prepoststim_sep, actburstdur, duty_by_cycle, freq_by_cycle, movedur):
         # ... (imports, accessing self.t, self.tnorm, initialization of arrays S1actcmd, etc.) ...
         t = self.t 
         tnorm = self.tnorm
@@ -621,15 +635,14 @@ class Bender:
             burst *= 5.0
             prepostburst = (np.mod(t * activation_pulse_rate, 1) <= 0.5).astype(float)
             prepostburst *= 5.0
-
             bendphase = tnorm - 0.25
 
-        for c, (dur1, duty1, f1) in enumerate(zip(actburstdur, actburstduty, freq_by_cycle)):
+        for c, (dur1, duty1, f1, p1) in enumerate(zip(actburstdur, duty_by_cycle, freq_by_cycle, phase_by_cycle)):
             if dur1 == 0:
                 continue
             
             # We add the safety check recommended previously
-            target_time = c + activation_phase
+            target_time = c + p1
             if not np.any(bendphase >= target_time):
                 continue # Skip cycles that fall outside the time array bounds
 
@@ -639,15 +652,15 @@ class Bender:
 
             if np.any(bendphase >= target_time):
                 Lonoff.append([tstart, tend])
-            if np.any(bendphase >= c + 0.5 + activation_phase):
+            if np.any(bendphase >= c + 0.5 + p1):
                 Ronoff.append(np.array([tstart, tend]) + 0.5 / f1)
 
             # FIX 1: Replace np.place with boolean assignment for S1actcmd
-            mask1 = (bendphase >= c + activation_phase) & (bendphase < c + activation_phase + duty1)
+            mask1 = (bendphase >= c + p1) & (bendphase < c + p1 + duty1)
             S1actcmd[mask1] = burst[mask1] # Assign only where the mask is True
 
             # FIX 2: Replace np.place with boolean assignment for S2actcmd
-            mask2 = (bendphase >= c + 0.5 + activation_phase) & (bendphase < c + 0.5 + activation_phase + duty1)
+            mask2 = (bendphase >= c + 0.5 + p1) & (bendphase < c + 0.5 + p1 + duty1)
             S2actcmd[mask2] = burst[mask2] # Assign only where the mask is True
 
 
@@ -659,7 +672,6 @@ class Bender:
         # FIX 3: Replace np.place with boolean assignment for pre/post stim
         mask3 = (t >= tstart) & (t < tend)
         S1actcmd[mask3] = prepostburst[mask3] # Assign only where the mask is True
-        # ... (rest of the pre/post logic) ...
 
         # Store these in the instance if you need to access them later for analysis
         self.Lonoff = np.array(Lonoff)
