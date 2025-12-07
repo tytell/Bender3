@@ -105,7 +105,7 @@ class Bender:
         print(f"Data will be saved to: {filename}")
             
         # Run the experiment using 'self'
-        self.run(device_name=device_name, operation_type=test_type)
+        self.run(device_name=device_name)
 
 
 
@@ -145,8 +145,8 @@ class Bender:
         # Calculate amplitudes, strains, and strain rates for all curvature/frequency combinations
         allamps = np.rad2deg(allcurves * (dclamp/1000))
 
-        # allstrains = xsec_width/2/1000 * allcurves # Not needed if not stored/returned
-        # allstrainrates = 2*np.pi * allstrains * allfreqs # Not needed if not stored/returned
+        allstrains = xsec_width/2/1000 * allcurves # Not needed if not stored/returned
+        allstrainrates = 2*np.pi * allstrains * allfreqs # Not needed if not stored/returned
         # amp_step_vel = 2*np.pi*max(allfreqs * allamps) # Not needed if not stored/returned
 
         # Create frequency, amplitude, and period arrays by cycle
@@ -178,7 +178,7 @@ class Bender:
         is_act_cycle = np.concatenate((is_act_cycle, [False] * n_end_cycles))
 
 
-        # Calculate activation burst duration
+        # Calculate activation makeburst duration
         actburstdur = duty_by_cycle / freq_by_cycle 
         actburstdur = np.floor(actburstdur * activation_pulse_rate * 2) / (activation_pulse_rate * 2)
         actburstdur[is_act_cycle == False] = 0
@@ -190,9 +190,12 @@ class Bender:
         self.duty_by_cycle = duty_by_cycle # <--- Store new attribute
         self.phase_by_cycle = phase_by_cycle # <--- Store new attribute
         self.allfreqs = allfreqs
+        self.allcurves = allcurves
         self.allamps = allamps
         self.actburstdur = actburstdur
         self.duty_by_cycle = duty_by_cycle # Store the final duty array
+        self.allstrains = allstrains
+        self.allstrainrates = allstrainrates
 
         # No return statement is needed if you store everything in 'self'
 
@@ -274,6 +277,7 @@ class Bender:
 
         poshi *= scale
         velhi *= scale
+
 
         if outputfreq == 0 or stepsperrev == 0:
             raise ValueError('Problems with parameters')
@@ -628,6 +632,9 @@ class Bender:
         S2actcmd = np.zeros_like(t)
         Lonoff = []
         Ronoff = []
+        bendphase = np.zeros_like(tnorm)
+        prepostburst = (np.mod(t * activation_pulse_rate, 1) <= 0.5).astype(float)
+        prepostburst *= 5.0
 
         if is_activation:
             pulsedur = 0.01         
