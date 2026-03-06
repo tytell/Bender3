@@ -1,11 +1,8 @@
-import nidaqmx
 import numpy as np
-import plotly
-import plotly.graph_objects as go
 from scipy import interpolate
 from datetime import datetime
-import time
 from copy import copy
+import time
 import re
 import os
 print(f"DEBUG: Loading bender_functions.py from: {os.path.abspath(__file__)}")
@@ -32,9 +29,9 @@ class Bender:
 
     def run_experiment(self, device_name = "Dev1", test_type = "dynamic"):
 
-        # Replace ... with stimual channel names as needed (Operate on self)
+        # Replace ... with actual channel names as needed (Operate on self)
         self.set_input_channels(inchannels=['ai0'], inchannel_names=['Fx'])
-        self.set_stimulation_channels('ao0', 'ao1')
+        self.set_stim_channels('ao0', 'ao1')
         # self.calibration is assumed to be loaded in the notebook using bender.loadCalibration(...)
 
         # General parameters (duration/sample_rate passed from notebook)
@@ -66,15 +63,14 @@ class Bender:
             duration = self.duration + self.waitbefore + self.waitafter
 
             angle, anglevel, tnorm, _ = self.make_frequency_sweep(
-                self.startfreq, 
-                self.endfreq, 
-                self.amplitude, 
+                self.all_freqs, 
+                self.all_curves, 
                 self.amplitude_frequency_exponent, 
                 self.waitbefore)
         else:
             raise ValueError(f"Unknown test type: {test_type}")
     
-        # NOW stimUALLY MAKE THE SIGNAL FOR THE MOTOR (BASED ON PREVIOUS DYNAMIC, SWEEP, ETC)
+        # NOW ACTUALLY MAKE THE SIGNAL FOR THE MOTOR (BASED ON PREVIOUS DYNAMIC, SWEEP, ETC)
         # Set the generated signals for     the Bender instance ('self') to use in .run()
         self.set_bending_signal(self.t, angle, anglevel, tnorm) # Pass tnorm here as well
 
@@ -82,8 +78,8 @@ class Bender:
         # NOW LET'S ADD ELECTRICAL STIMULI!
         # Access stim parameters stored in 'self' (set by organize_cycles)
         stimulation_params = {
-            'is_stimulation': self.is_stimulation, # Must be set in notebook
-            'stimulation_pulse_rate': self.stimulation_pulse_rate, # Must be set in notebook
+            'is_stim': self.is_stim, # Must be set in notebook
+            'stim_pulse_rate': self.stim_pulse_rate, # Must be set in notebook
             'prestim_time': self.prestim_time, # Must be set in notebook
             'poststim_time': self.poststim_time, # Must be set in notebook
             'prepoststim_dur': self.prepoststim_dur, # Must be set in notebook
@@ -98,8 +94,8 @@ class Bender:
         # FINISH Generate electrical stimuli
         S1stimcmd, S2stimcmd = self._make_stimuli(**stimulation_params)
             
-        # Set the generated stimulation signals in 'self'
-        self.set_stimulation(S1stimcmd, S2stimcmd)
+        # Set the generated stim signals in 'self'
+        self.set_stim(S1stimcmd, S2stimcmd)
         self.make_motor_stepper_pulses(outputfreq=self.outputfreq)
         filename = self.increment_file_name(f'experiment_data_{test_type}_000.h5')
         print(f"Data will be saved to: {filename}")
@@ -109,63 +105,43 @@ class Bender:
 
 
 
-    def organize_cycles(self, curves, frequencies, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, stimulation_duties, stimulation_phases, stimulation_pulse_rate):
-    # Calculates the full sequence of frequencies, amplitudes, and periods by cycle, based on initial lists of curves/frequencies and test parameters.
+    def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate):
+        start = time.time()
+        # Build combinations without modifying input lists
+        combos = []
+        for c1 in all_curves:
+            for f1 in all_freqs:
+                for d1 in all_stimduties:
+                    for p1 in all_stimphases:
+                        combos.append((c1, f1, d1, p1))
+        # Unpack combos into separate arrays
+        all_curves_arr, all_freqs_arr, all_stimduties_arr, all_stimphases_arr = map(np.array, zip(*combos))
 
-
-        # Create all combinations of frequencies and curvatures
-        allfreqs = []
-        allcurves = []
-        all_phases = []
-        all_duties = []
-
-        for c1 in curves:
-            for f1 in frequencies:
-                for d1 in stimulation_duties:  # <--- Loop through duties
-                    for p1 in stimulation_phases: # <--- Loop through phases
-                        allfreqs.append(f1)
-                        allcurves.append(c1)
-                        all_duties.append(d1) # <--- Append duty
-                        all_phases.append(p1) # <--- Append phase
-
-        allfreqs = np.array(allfreqs)
-        allcurves = np.array(allcurves)
-        all_duties = np.array(all_duties) # <--- Convert to numpy array
-        all_phases = np.array(all_phases) # <--- Convert to numpy array
-        
-        # Randomize the order of the frequency/amplitude combinations (only if Randomize = TRUE above)
+        # Randomize if needed
         if randomize:
-            order = np.arange(0, len(allfreqs))
+            order = np.arange(len(all_freqs_arr))
             np.random.shuffle(order)
-            allfreqs = allfreqs[order]
-            allcurves = allcurves[order]
-            all_duties = all_duties[order] # <--- Randomize duties
-            all_phases = all_phases[order] # <--- Randomize phases
+            all_curves_arr = all_curves_arr[order]
+            all_freqs_arr = all_freqs_arr[order]
+            all_stimduties_arr = all_stimduties_arr[order]
+            all_stimphases_arr = all_stimphases_arr[order]
 
-        # Calculate amplitudes, strains, and strain rates for all curvature/frequency combinations
-        allamps = np.rad2deg(allcurves * (dclamp/1000))
-
-        allstrains = xsec_width/2/1000 * allcurves # Not needed if not stored/returned
-        allstrainrates = 2*np.pi * allstrains * allfreqs # Not needed if not stored/returned
-        # amp_step_vel = 2*np.pi*max(allfreqs * allamps) # Not needed if not stored/returned
+        # Calculate amplitudes, strains, and strain rates
+        all_amps = np.rad2deg(all_curves_arr * (dclamp/1000))
+        allstrains = xsec_width/2/1000 * all_curves_arr
+        allstrainrates = 2*np.pi * allstrains * all_freqs_arr
 
         # Create frequency, amplitude, and period arrays by cycle
-        freq_by_cycle = np.array([])
-        amp_by_cycle = np.array([])
-        duty_by_cycle = np.array([]) # <--- New array
-        phase_by_cycle = np.array([]) # <--- New array
-        
-        for f1, a1, d1, p1 in zip(allfreqs, allamps, all_duties, all_phases):
-            freq_by_cycle = np.concatenate((freq_by_cycle, [f1] * cycles_per_step))
-            amp_by_cycle = np.concatenate((amp_by_cycle, [a1] * cycles_per_step))
-            duty_by_cycle = np.concatenate((duty_by_cycle, [d1] * cycles_per_step)) # <--- Concatenate duty
-            phase_by_cycle = np.concatenate((phase_by_cycle, [p1] * cycles_per_step)) # <--- Concatenate phase
+        freq_by_cycle = np.repeat(all_freqs_arr, cycles_per_step)
+        amp_by_cycle = np.repeat(all_amps, cycles_per_step)
+        duty_by_cycle = np.repeat(all_stimduties_arr, cycles_per_step)
+        phase_by_cycle = np.repeat(all_stimphases_arr, cycles_per_step)
 
         # Add end cycles
-        freq_by_cycle = np.concatenate((freq_by_cycle, [allfreqs[-1]] * n_end_cycles))
-        amp_by_cycle = np.concatenate((amp_by_cycle, [allamps[-1]] * n_end_cycles))
-        duty_by_cycle = np.concatenate((duty_by_cycle, [all_duties[-1]] * n_end_cycles)) # <--- Add end duties
-        phase_by_cycle = np.concatenate((phase_by_cycle, [all_phases[-1]] * n_end_cycles)) # <--- Add end phases
+        freq_by_cycle = np.concatenate((freq_by_cycle, [all_freqs_arr[-1]] * n_end_cycles))
+        amp_by_cycle = np.concatenate((amp_by_cycle, [all_amps[-1]] * n_end_cycles))
+        duty_by_cycle = np.concatenate((duty_by_cycle, [all_stimduties_arr[-1]] * n_end_cycles))
+        phase_by_cycle = np.concatenate((phase_by_cycle, [all_stimphases_arr[-1]] * n_end_cycles))
 
         period_by_cycle = 1.0 / freq_by_cycle
 
@@ -174,30 +150,28 @@ class Bender:
 
         c = np.arange(0, cycles_per_step)
         is_stim_cycle = np.isin(c, stim_cycles_in_step)
-        is_stim_cycle = np.tile(is_stim_cycle, len(allfreqs))
+        is_stim_cycle = np.tile(is_stim_cycle, len(all_freqs_arr))
         is_stim_cycle = np.concatenate((is_stim_cycle, [False] * n_end_cycles))
 
-
-        # Calculate stimulation makeburst duration
-        stimburstdur = duty_by_cycle / freq_by_cycle 
-        stimburstdur = np.floor(stimburstdur * stimulation_pulse_rate * 2) / (stimulation_pulse_rate * 2)
+        stimburstdur = duty_by_cycle / freq_by_cycle
+        stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
         stimburstdur[is_stim_cycle == False] = 0
 
-        # --- Store all results as INSTANCE ATTRIBUTES (self.) ---
+        # Store results
         self.period_by_cycle = period_by_cycle
         self.freq_by_cycle = freq_by_cycle
         self.amp_by_cycle = amp_by_cycle
-        self.duty_by_cycle = duty_by_cycle # <--- Store new attribute
-        self.phase_by_cycle = phase_by_cycle # <--- Store new attribute
-        self.allfreqs = allfreqs
-        self.allcurves = allcurves
-        self.allamps = allamps
+        self.duty_by_cycle = duty_by_cycle
+        self.phase_by_cycle = phase_by_cycle
+        self.all_freqs = all_freqs_arr
+        self.all_curves = all_curves_arr
+        self.all_amps = all_amps
         self.stimburstdur = stimburstdur
-        self.duty_by_cycle = duty_by_cycle # Store the final duty array
         self.allstrains = allstrains
         self.allstrainrates = allstrainrates
-
-        # No return statement is needed if you store everything in 'self'
+        print("organize_cycles took", time.time() - start, "seconds")
+# ...existing code...
+    
 
     def set_bending_signal(self, t, angle, anglevel, tnorm=None):
         self.samplefreq = 1.0 / (t[1] - t[0])
@@ -211,7 +185,7 @@ class Bender:
         else:
             self.tnorm = tnorm
     
-    def set_stimulation(self, S1stimcmd, S2stimcmd):
+    def set_stim(self, S1stimcmd, S2stimcmd):
         self.S1stimcmd = S1stimcmd
         self.S2stimcmd = S2stimcmd
 
@@ -261,7 +235,9 @@ class Bender:
 
         return self.forcetorque
 
-    def make_motor_stepper_pulses(self, outputfreq = 1000, scale=6.0, stepsperrev=6400):
+    def make_motor_stepper_pulses(self, outputfreq = 1000,
+                                scale=6.0,
+                                stepsperrev=6400.0):
 
         self.outputfreq = outputfreq
         self.scale = scale
@@ -319,9 +295,9 @@ class Bender:
         self.inchannels = inchannels
         self.inchannel_names = inchannel_names
 
-    def set_stimulation_channels(self, S1stimulation_chan, S2stimulation_chan):
-        self.S1stimulation_chan = S1stimulation_chan
-        self.S2stimulation_chan = S2stimulation_chan
+    def set_stim_channels(self, S1stim_chan, S2stim_chan):
+        self.S1stim_chan = S1stim_chan
+        self.S2stim_chan = S2stim_chan
 
     def set_motor_channel(self, motor_control_chan):
         self.motor_control_chan = motor_control_chan
@@ -382,8 +358,8 @@ class Bender:
     
     def run(self, device_name):
         inchannels = ['/'.join((device_name, c1)) for c1 in self.inchannels]
-        S1stimulation_chan = '/'.join((device_name, self.S1stimulation_chan))
-        S2stimulation_chan = '/'.join((device_name, self.S2stimulation_chan))
+        S1stim_chan = '/'.join((device_name, self.S1stim_chan))
+        S2stim_chan = '/'.join((device_name, self.S2stim_chan))
         motor_control_chan = '/'.join((device_name, self.motor_control_chan))
         encoder_chan = '/'.join((device_name, self.encoder_chan))
 
@@ -408,8 +384,8 @@ class Bender:
                                                 samps_per_chan=len(self.t))
 
             # set up the analog output channels
-            analog_out.ao_channels.add_ao_voltage_chan(S1stimulation_chan, 'S1stim')
-            analog_out.ao_channels.add_ao_voltage_chan(S2stimulation_chan, 'S2stim')
+            analog_out.ao_channels.add_ao_voltage_chan(S1stim_chan, 'S1stim')
+            analog_out.ao_channels.add_ao_voltage_chan(S2stim_chan, 'S2stim')
             # it will run much faster than the input channels, because the digital output is linked
             # to it, and it needs to run fast so that the pulses 
             # are output fast enough for smooth motion
@@ -467,13 +443,6 @@ class Bender:
 
     
 ## TRYING SOMETHING OUT HERE...
-
-
-
-
-
-
-
 # --- New Execution Logic Starts Here---
 
 
@@ -484,10 +453,15 @@ class Bender:
 
 
 #
-    def make_frequency_sweep(self, startfreq, endfreq, amplitude, amplitude_frequency_exponent, duration, waitbefore):
-        """Generates the log sweep angle and anglevel signals based on input params."""
+    def make_frequency_sweep(self, all_freqs, all_curves, amplitude_frequency_exponent, duration, waitbefore):
+        # Generates the log sweep angle and anglevel signals based on input params
         samplefreq = self.samplefreq
         
+        # Define start and end frequencies for the sweep based on all_freqs (first and last values)
+        startfreq = all_freqs[0]
+        endfreq = all_freqs[-1]
+
+
         # Calculate the total duration needed for the sweep + wait times
         total_duration = duration + waitbefore + self.waitafter
         t = np.arange(0, total_duration, 1.0 / samplefreq)
@@ -553,7 +527,7 @@ class Bender:
         amp_step_vel = self.amp_step_vel
         samplefreq = self.samplefreq # <--- Use the value from the instance
         allamps = self.allamps # Used for start/end ramps
-        allfreqs = self.allfreqs # Used for start/end ramps
+        all_freqs = self.all_freqs # Used for start/end ramps
 
         # Calculate timings and durations
         movedur = np.sum(period_by_cycle)
@@ -594,14 +568,14 @@ class Bender:
 
         # Ramp to the start and end amplitudes (Original logic using boolean assignment)
         rampvel1 = allamps[0] / rampdur
-        tendramp1 = 0.25 / allfreqs[0]
+        tendramp1 = 0.25 / all_freqs[0]
         tstartramp1 = tendramp1 - rampdur
         rampvel2 = allamps[-1] / rampdur
-        tstartramp2 = movedur - 0.25 / allfreqs[-1]
+        tstartramp2 = movedur - 0.25 / all_freqs[-1]
         tendramp2 = tstartramp2 + rampdur
 
         if tstartramp1 > 0:
-            pass # stimual movement is slower than the ramp, so we won't bother adding the ramp
+            pass # actual movement is slower than the ramp, so we won't bother adding the ramp
         else:
             # Use boolean assignment
             mask1 = (t >= tstartramp1) & (t < tendramp1)
@@ -622,7 +596,7 @@ class Bender:
         return angle, anglevel, tnorm, freq
 
     # Lots of unused arguments, need to check on that later.        
-    def _make_stimuli(self, is_stimulation, phase_by_cycle, stimulation_pulse_rate, prestim_time, poststim_time, prepoststim_dur, prepoststim_sep, stimburstdur, duty_by_cycle, freq_by_cycle, movedur):
+    def _make_stimuli(self, is_stim, phase_by_cycle, stim_pulse_rate, prestim_time, poststim_time, prepoststim_dur, prepoststim_sep, stimburstdur, duty_by_cycle, freq_by_cycle, movedur):
         # ... (imports, accessing self.t, self.tnorm, initialization of arrays S1stimcmd, etc.) ...
         t = self.t 
         tnorm = self.tnorm
@@ -631,14 +605,14 @@ class Bender:
         Lonoff = []
         Ronoff = []
         bendphase = np.zeros_like(tnorm)
-        prepostburst = (np.mod(t * stimulation_pulse_rate, 1) <= 0.5).astype(float)
+        prepostburst = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float)
         prepostburst *= 5.0
 
-        if is_stimulation:
+        if is_stim:
             pulsedur = 0.01         
-            burst = (np.mod(t * stimulation_pulse_rate, 1) <= 0.5).astype(float)
+            burst = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float)
             burst *= 5.0
-            prepostburst = (np.mod(t * stimulation_pulse_rate, 1) <= 0.5).astype(float)
+            prepostburst = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float)
             prepostburst *= 5.0
             bendphase = tnorm - 0.25
 
