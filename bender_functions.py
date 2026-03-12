@@ -127,19 +127,19 @@ class Bender:
             all_stimphases_arr = all_stimphases_arr[order]
 
         # Calculate amplitudes, strains, and strain rates
-        all_amps = np.rad2deg(all_curves_arr * (dclamp/1000))
+        all_degs = np.rad2deg(all_curves_arr * (dclamp/1000))
         allstrains = xsec_width/2/1000 * all_curves_arr
         allstrainrates = 2*np.pi * allstrains * all_freqs_arr
 
         # Create frequency, amplitude, and period arrays by cycle
         freq_by_cycle = np.repeat(all_freqs_arr, cycles_per_step)
-        amp_by_cycle = np.repeat(all_amps, cycles_per_step)
+        amp_by_cycle = np.repeat(all_degs, cycles_per_step)
         duty_by_cycle = np.repeat(all_stimduties_arr, cycles_per_step)
         phase_by_cycle = np.repeat(all_stimphases_arr, cycles_per_step)
 
         # Add end cycles
         freq_by_cycle = np.concatenate((freq_by_cycle, [all_freqs_arr[-1]] * n_end_cycles))
-        amp_by_cycle = np.concatenate((amp_by_cycle, [all_amps[-1]] * n_end_cycles))
+        amp_by_cycle = np.concatenate((amp_by_cycle, [all_degs[-1]] * n_end_cycles))
         duty_by_cycle = np.concatenate((duty_by_cycle, [all_stimduties_arr[-1]] * n_end_cycles))
         phase_by_cycle = np.concatenate((phase_by_cycle, [all_stimphases_arr[-1]] * n_end_cycles))
 
@@ -165,7 +165,7 @@ class Bender:
         self.phase_by_cycle = phase_by_cycle
         self.all_freqs = all_freqs_arr
         self.all_curves = all_curves_arr
-        self.all_amps = all_amps
+        self.all_degs = all_degs
         self.stimburstdur = stimburstdur
         self.allstrains = allstrains
         self.allstrainrates = allstrainrates
@@ -526,7 +526,7 @@ class Bender:
         rampdur = self.rampdur
         amp_step_vel = self.amp_step_vel
         samplefreq = self.samplefreq # <--- Use the value from the instance
-        allamps = self.allamps # Used for start/end ramps
+        all_degs = self.all_degs # Used for start/end ramps
         all_freqs = self.all_freqs # Used for start/end ramps
 
         # Calculate timings and durations
@@ -567,10 +567,10 @@ class Bender:
         angle[t > movedur] = 0
 
         # Ramp to the start and end amplitudes (Original logic using boolean assignment)
-        rampvel1 = allamps[0] / rampdur
+        rampvel1 = all_degs[0] / rampdur
         tendramp1 = 0.25 / all_freqs[0]
         tstartramp1 = tendramp1 - rampdur
-        rampvel2 = allamps[-1] / rampdur
+        rampvel2 = all_degs[-1] / rampdur
         tstartramp2 = movedur - 0.25 / all_freqs[-1]
         tendramp2 = tstartramp2 + rampdur
 
@@ -596,9 +596,37 @@ class Bender:
         return angle, anglevel, tnorm, freq
 
     # Lots of unused arguments, need to check on that later.        
-    def _make_stimuli(self, is_stim, phase_by_cycle, stim_pulse_rate, prestim_time, poststim_time, prepoststim_dur, prepoststim_sep, stimburstdur, duty_by_cycle, freq_by_cycle, movedur):
-        # ... (imports, accessing self.t, self.tnorm, initialization of arrays S1stimcmd, etc.) ...
-        t = self.t 
+    def _make_stimuli(self, 
+                      is_stim=None, 
+                      phase_by_cycle=None, 
+                      stim_pulse_rate=None, 
+                      prestim_time=None, 
+                      poststim_time=None, 
+                      prepoststim_dur=None, 
+                      prepoststim_sep=None, 
+                      stimburstdur=None, 
+                      duty_by_cycle=None, 
+                      freq_by_cycle=None, 
+                      movedur=None):
+
+ # --- AUTO-FILL INGREDIENTS ---
+        # This checks if the user provided an input. If not, it pulls from 'self'.
+        is_stim         = is_stim         if is_stim is not None         else self.is_stim
+        phase_by_cycle  = phase_by_cycle  if phase_by_cycle is not None  else self.phase_by_cycle
+        stim_pulse_rate = stim_pulse_rate if stim_pulse_rate is not None else self.stim_pulse_rate
+        prestim_time    = prestim_time    if prestim_time is not None    else self.prestim_time
+        poststim_time   = poststim_time   if poststim_time is not None   else self.poststim_time
+        prepoststim_dur = prepoststim_dur if prepoststim_dur is not None else self.prepoststim_dur
+        prepoststim_sep = prepoststim_sep if prepoststim_sep is not None else self.prepoststim_sep
+        stimburstdur    = stimburstdur    if stimburstdur is not None    else self.stimburstdur
+        duty_by_cycle   = duty_by_cycle   if duty_by_cycle is not None   else self.duty_by_cycle
+        freq_by_cycle   = freq_by_cycle   if freq_by_cycle is not None   else self.freq_by_cycle
+        
+        # Logic for movedur: use input, or calculate from periods, or use self.duration
+        if movedur is None:
+            movedur = np.sum(self.period_by_cycle) if hasattr(self, 'period_by_cycle') else self.duration
+            
+        t = self.t
         tnorm = self.tnorm
         S1stimcmd = np.zeros_like(t)
         S2stimcmd = np.zeros_like(t)
