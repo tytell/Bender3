@@ -1,10 +1,13 @@
 import numpy as np
+import importlib
 from scipy import interpolate
 from datetime import datetime
 from copy import copy
 import time
 import re
 import os
+import xml.etree.ElementTree as ElementTree
+import json
 print(f"DEBUG: Loading bender_functions.py from: {os.path.abspath(__file__)}")
 import logging
 
@@ -22,16 +25,110 @@ import xml.etree.ElementTree as ElementTree
 import h5py
 
 class Bender:
-    def __init__(self):
+    def __init__(self, config_module_name):
+        # 1. Dynamically import the python config file
+        # This turns 'bender_config_A' into an object called 'cfg'
+        try:
+            cfg = importlib.import_module(config_module_name)
+        except ImportError:
+            raise ImportError(f"Could not find {config_module_name}.py in the current folder.")
+
+        self.config_name = config_module_name
+        self.cal_file = cfg.calibration_file
+        
+       
+        # 2. Assign Hardware settings from cfg
+        self.device_name = cfg.device_name
+        self.motor_port = cfg.motor_port 
+        self.encoder_chan = cfg.encoder_chan
+        self.stim_channels = cfg.stim_channels  
+        self.positive_motor_direction = cfg.positive_motor_direction
+        self.samplefreq = cfg.samplefreq
+        self.outputfreq = cfg.outputfreq
+        self.stepsperrev = cfg.stepsperrev
+        self.encoder_counts_per_rev = cfg.encoder_counts_per_rev
+        
+        # 3. Assign Calibration/Directionality from cfg
+        self.cal_file = cfg.calibration_file
+        self.positive_motor_direction = cfg.positive_motor_direction
+        self.S1side = cfg.S1side
+        self.S2side = cfg.S2side
+        self.motor_axis = cfg.motor_axis
+        self.bending_axis_sensor = cfg.bending_axis_sensor
+        
+        # 4. Assign Experiment Defaults from cfg
+        self.waitbefore = cfg.waitbefore
+        self.waitafter = cfg.waitafter
+        self.rampdur = cfg.rampdur
+        self.prepoststim_dur = cfg.prepoststim_dur
+        self.prepoststim_sep = cfg.prepoststim_sep
+        self.prestim_time = cfg.prestim_time
+        self.poststim_time = cfg.poststim_time
+        
+         # 4. AUTO-CONFIGURE HARDWARE
+        self.set_stim_channels(*self.stim_channels) 
+        self.set_motor_channel(self.motor_port)
+        self.set_encoder_channel(self.encoder_chan, counts_per_rev=self.encoder_counts_per_rev)
+
+        # 5. NEW: AUTO-LOAD CALIBRATION
+        # This uses the method you already wrote!
+        try:
+            self.loadCalibration(self.cal_file)
+        except Exception as e:
+            print(f"⚠️ WARNING: Calibration failed to load: {e}")
+            
+        # 5. Placeholders (to prevent NoneType/0-channel errors)
         self.S1stimcmd = None
         self.S2stimcmd = None
-#Sets up the specific parameters for a given test type using data stored in self and general parameters passed via kwargs.
+        self.i_total_system = 0.0
+        self.total_mass = 0.0
+        
+        self.t = np.array([0.0, 1.0/self.samplefreq])
+        self.angle = np.array([0.0, 0.0])
+        self.anglevel = np.array([0.0, 0.0])
+        self.tnorm = np.array([0.0, 0.0])
+        self.amp_step_vel = cfg.amp_step_vel 
 
-    def run_experiment(self, device_name = "Dev1", test_type = "dynamic"):
+        # Standard 2D shapes for NI-DAQmx (Channels, Samples)
+        self.stimcmdhi = np.zeros((2, 2))
+        self.dig = np.zeros((1, 2), dtype='uint32')
 
-        # Replace ... with actual channel names as needed (Operate on self)
-        self.set_input_channels(inchannels=['ai0'], inchannel_names=['Fx'])
-        self.set_stim_channels('ao0', 'ao1')
+        print(f"Bender initialized using: {config_module_name}.py")
+
+    def loadCalibration(self, calibrationFile):
+        if not os.path.exists(calibrationFile):
+            raise IOError("Calibration file %s not found", calibrationFile)
+
+        try:
+            tree = ElementTree.parse(calibrationFile)
+            cal = tree.getroot().find('Calibration')
+            if cal is None:
+                raise IOError('Not a calibration XML file')
+
+            mat = []
+            for ax in cal.findall('UserAxis'):
+                txt = ax.get('values')
+                row = [float(v) for v in txt.split()]
+                mat.append(row)
+
+        except IOError:
+          raise IOError(f"Calibration file {calibrationFile} not found")
+
+        self.calibration = np.array(mat).T
+
+    def applyCalibration(self, rawdata):
+        self.forcetorque = np.dot(rawdata[:6, :].T, self.calibration)
+        self.forcetorque = self.forcetorque.T
+
+        return self.forcetorque
+
+
+    def run_experiment(self, test_type = "dynamic"):
+
+        # Set input and output names/channels
+        self.set_input_channels(inchannels=self.input_channels, inchannel_names=self.inchannel_names)
+        self.set_stim_channels(*self.stim_channels) 
+
         # self.calibration is assumed to be loaded in the notebook using bender.loadCalibration(...)
 
         # General parameters (duration/sample_rate passed from notebook)
@@ -41,42 +138,36 @@ class Bender:
         angle, anglevel, tnorm = None, None, None
         duration = None #Initialize, but will be set below
 
-         # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
+     # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
         if test_type == 'dynamic':            
-            # Add safety check before using the attribute
             if self.period_by_cycle is None:
                 raise AttributeError("Dynamic test requires 'period_by_cycle' to be set via organize_cycles first.")
-            # Calculate duration. Needed for stimulation timing
+            
             duration = np.sum(self.period_by_cycle)
 
-            # Generate signals using the method on 'self', passing required inputs from self.attributes
-            angle, anglevel, tnorm, _ = self.make_dynamic_cycles(
+            angle, anglevel, tnorm, t = self.make_dynamic_cycles(
                 self.period_by_cycle, 
                 self.freq_by_cycle, 
                 self.amp_by_cycle)
             
-            # CHECK INDENT AND STRUCTURE HERE
         elif test_type == 'sweep':
-            # Check a SWEEP attribute instead
+            # Check a SWEEP attribute 
             if self.duration is None:
                 raise AttributeError("Sweep test requires 'self.duration' to be set in the notebook first.")
+
+            # Calculate experiment duration
             duration = self.duration + self.waitbefore + self.waitafter
 
-            angle, anglevel, tnorm, _ = self.make_frequency_sweep(
+            angle, anglevel, tnorm, t = self.make_frequency_sweep(
                 self.all_freqs, 
                 self.all_curves, 
                 self.amplitude_frequency_exponent, 
                 self.waitbefore)
+
         else:
             raise ValueError(f"Unknown test type: {test_type}")
-    
-        # NOW ACTUALLY MAKE THE SIGNAL FOR THE MOTOR (BASED ON PREVIOUS DYNAMIC, SWEEP, ETC)
-        # Set the generated signals for     the Bender instance ('self') to use in .run()
-        self.set_bending_signal(self.t, angle, anglevel, tnorm) # Pass tnorm here as well
 
-
-        # NOW LET'S ADD ELECTRICAL STIMULI!
-        # Access stim parameters stored in 'self' (set by organize_cycles)
+        # Access parameters for electrical stimuli stored in 'self' (set by organize_cycles)
         stimulation_params = {
             'is_stim': self.is_stim, # Must be set in notebook
             'stim_pulse_rate': self.stim_pulse_rate, # Must be set in notebook
@@ -91,17 +182,26 @@ class Bender:
             'phase_by_cycle': self.phase_by_cycle, 
             }
 
-        # FINISH Generate electrical stimuli
-        S1stimcmd, S2stimcmd = self._make_stimuli(**stimulation_params)
+        # 1. Make electrical stimuli
+        S1stimcmd, S2stimcmd = self.make_stimuli(**stimulation_params)
             
-        # Set the generated stim signals in 'self'
-        self.set_stim(S1stimcmd, S2stimcmd)
+        # 2. Record stimulation for saving the data
+        self.record_stim_signal(S1stimcmd, S2stimcmd)
+
+        # 3. Record (and SET) the generated signals for the Bender instance ('self') to use in .run(). MUST perform before making_motor_stepper_pulses.
+        self.record_motor_signal(t, angle, anglevel, tnorm)
+
+        # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
         self.make_motor_stepper_pulses(outputfreq=self.outputfreq)
+
+        # Print file save location
         filename = self.increment_file_name(f'experiment_data_{test_type}_000.h5')
         print(f"Data will be saved to: {filename}")
-            
+
         # Run the experiment using 'self'
         self.run(device_name=device_name)
+            
+
 
 
 
@@ -128,8 +228,8 @@ class Bender:
 
         # Calculate amplitudes, strains, and strain rates
         all_degs = np.rad2deg(all_curves_arr * (dclamp/1000))
-        allstrains = xsec_width/2/1000 * all_curves_arr
-        allstrainrates = 2*np.pi * allstrains * all_freqs_arr
+        all_strains = xsec_width/2/1000 * all_curves_arr
+        all_strainrates = 2*np.pi * all_strains * all_freqs_arr
 
         # Create frequency, amplitude, and period arrays by cycle
         freq_by_cycle = np.repeat(all_freqs_arr, cycles_per_step)
@@ -167,13 +267,15 @@ class Bender:
         self.all_curves = all_curves_arr
         self.all_degs = all_degs
         self.stimburstdur = stimburstdur
-        self.allstrains = allstrains
-        self.allstrainrates = allstrainrates
+        self.all_strains = all_strains
+        self.all_strainrates = all_strainrates
+        self.all_stimduties = all_stimduties_arr
+        self.all_stimphases = all_stimphases_arr
         print("organize_cycles took", time.time() - start, "seconds")
 # ...existing code...
     
 
-    def set_bending_signal(self, t, angle, anglevel, tnorm=None):
+    def record_motor_signal(self, t, angle, anglevel, tnorm=None):
         self.samplefreq = 1.0 / (t[1] - t[0])
 
         self.t = t
@@ -185,7 +287,7 @@ class Bender:
         else:
             self.tnorm = tnorm
     
-    def set_stim(self, S1stimcmd, S2stimcmd):
+    def record_stim_signal(self, S1stimcmd, S2stimcmd):
         self.S1stimcmd = S1stimcmd
         self.S2stimcmd = S2stimcmd
 
@@ -208,35 +310,9 @@ class Bender:
         self.filename = filename
         return filename
 
-    def loadCalibration(self, calibrationFile):
-        if not os.path.exists(calibrationFile):
-            raise IOError("Calibration file %s not found", calibrationFile)
-
-        try:
-            tree = ElementTree.parse(calibrationFile)
-            cal = tree.getroot().find('Calibration')
-            if cal is None:
-                raise IOError('Not a calibration XML file')
-
-            mat = []
-            for ax in cal.findall('UserAxis'):
-                txt = ax.get('values')
-                row = [float(v) for v in txt.split()]
-                mat.append(row)
-
-        except IOError:
-            raise IOError('Bad calibration file')
-
-        self.calibration = np.array(mat).T
-
-    def applyCalibration(self, rawdata):
-        self.forcetorque = np.dot(rawdata[:6, :].T, self.calibration)
-        self.forcetorque = self.forcetorque.T
-
-        return self.forcetorque
-
+   
     def make_motor_stepper_pulses(self, outputfreq = 1000,
-                                scale=6.0,
+                                scale=5,
                                 stepsperrev=6400.0):
 
         self.outputfreq = outputfreq
@@ -320,42 +396,54 @@ class Bender:
     def calculate_moi_specimen(self, rho_eff, obj_depth_length, 
                                 front_h_semi, back_h_semi, 
                                 front_w_semi, back_w_semi, 
-                                num_samples, axis_offset_x, axis_offset_z):
-            #Crude numerical calculation (voxelization) for the tapered specimen (H=Y, W=X, D=Z).
-            #Uses summation I = Sum(m*r^2)
-
-            # x_coords represents the Width axis (left/right, X)
-            # z_coords represents the Depth axis (front/back, Z)
-        x_coords = np.linspace(-max(front_w_semi, back_w_semi), max(front_w_semi, back_w_semi), num_samples)
-        z_coords = np.linspace(0, obj_depth_length, num_samples) 
+                                num_samples=50, axis_offset_x=0.0, axis_offset_z=0.0):
+        """
+        Calculates MOI for a tapered ellipsoid specimen using vectorized NumPy math.
         
-        # Calculate step sizes for voxel volume (dV = dx * dz * H_current)
-        dx_step = (x_coords[-1] - x_coords[0]) / (num_samples - 1)
-        dz_step = (z_coords[-1] - z_coords[0]) / (num_samples - 1)
+        Args:
+            rho_eff (float): Density (g/mm^3)
+            obj_depth_length (float): Total length of specimen along Z-axis (mm)
+            front_h_semi, back_h_semi (float): Half-heights at front/back (mm)
+            front_w_semi, back_w_semi (float): Half-widths at front/back (mm)
+            num_samples (int): Resolution of the grid
+            axis_offset_x, axis_offset_z (float): Distance from rotation axis (mm)
+        """
+        # 1. Create the 2D grid (X and Z planes)
+        # We use a large enough X range to cover the widest part of the fish
+        max_w = max(front_w_semi, back_w_semi)
+        x = np.linspace(-max_w, max_w, num_samples)
+        z = np.linspace(0, obj_depth_length, num_samples)
         
-        total_moi = 0.0
-        mass_sum = 0.0
+        # Create 2D coordinate matrices
+        X, Z = np.meshgrid(x, z)
         
-        for xi in x_coords:
-            for zi in z_coords:
-                f = zi / obj_depth_length 
-                current_Rx = front_w_semi * (1 - f) + back_w_semi * f # Current half-width (X)
-                current_Ry = front_h_semi * (1 - f) + back_h_semi * f # Current half-height (Y)
-                
-                current_H = current_Ry * 2 
+        # 2. Calculate the taper at every point on the Z-axis
+        # f is the fraction of length from front (0) to back (1)
+        f = Z / obj_depth_length
+        Rx = front_w_semi * (1 - f) + back_w_semi * f # Local semi-width
+        Ry = front_h_semi * (1 - f) + back_h_semi * f # Local semi-height
 
-                is_inside = (xi**2 / current_Rx**2) <= 1
-                
-                if is_inside:
-                    mass_per_voxel = rho_eff * dx_step * dz_step * current_H
+        # 3. Calculate local height of the oval at every (X, Z) coordinate
+        # Using the ellipse equation: (x/Rx)^2 + (y/Ry)^2 = 1 -> solve for y
+        # We use np.clip to prevent square roots of negative numbers for points outside the oval
+    # Use np.maximum to ensure we never pass a negative number to the square root
+        h_sq = 1 - (X**2 / Rx**2)
+        H = 2 * Ry * np.sqrt(np.maximum(h_sq, 0)) 
 
-                    # Distance squared (r^2) to the global rotation axis (in the XZ plane)
-                    distance_sq = (xi - axis_offset_x)**2 + (zi - axis_offset_z)**2
-                    
-                    total_moi += mass_per_voxel * distance_sq
-                    mass_sum += mass_per_voxel
-        return total_moi, mass_sum
-    
+        # 4. Calculate Mass and MOI for every "voxel"
+        dx = x[1] - x[0]
+        dz = z[1] - z[0]
+        
+        mass_matrix = rho_eff * H * dx * dz
+        # r^2 = (x - offset_x)^2 + (z - offset_z)^2
+        r_sq_matrix = (X - axis_offset_x)**2 + (Z - axis_offset_z)**2
+        
+        # 5. Sum the results
+        total_mass = np.sum(mass_matrix)
+        total_moi = np.sum(mass_matrix * r_sq_matrix)
+        
+        return total_moi, total_mass
+
     def run(self, device_name):
         inchannels = ['/'.join((device_name, c1)) for c1 in self.inchannels]
         S1stim_chan = '/'.join((device_name, self.S1stim_chan))
@@ -422,11 +510,9 @@ class Bender:
             digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
                                                         auto_start=False)
             nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
-            # print(f"{nwritten=}")
 
             # start everthing
-            # make sure to start the output first, because it'll wait until the 
-            # input starts
+            # make sure to start the output first, because it'll wait until the input starts
             digital_out.start()
             analog_out.start()
             angle_in.start()
@@ -440,17 +526,6 @@ class Bender:
             reader.read_many_sample(self.aidata)
             angle_reader.read_many_sample_double(self.angledata)
         return(self.aidata)
-
-    
-## TRYING SOMETHING OUT HERE...
-# --- New Execution Logic Starts Here---
-
-
-
-
-
-
-
 
 #
     def make_frequency_sweep(self, all_freqs, all_curves, amplitude_frequency_exponent, duration, waitbefore):
@@ -502,7 +577,7 @@ class Bender:
         np.place(anglevel, isramp, velend)
         np.place(angle, isramp, ramp)
 
-        return angle, anglevel, tnorm, freq
+        return angle, anglevel, tnorm, freq, t
 
     # Assuming this method exists inside a class definition
     def make_dynamic_cycles(self, period_by_cycle, freq_by_cycle, amp_by_cycle):
@@ -593,10 +668,9 @@ class Bender:
         self.tnorm = tnorm
 
         # Return all generated signals
-        return angle, anglevel, tnorm, freq
+        return angle, anglevel, tnorm, freq, t
 
-    # Lots of unused arguments, need to check on that later.        
-    def _make_stimuli(self, 
+    def make_stimuli(self, 
                       is_stim=None, 
                       phase_by_cycle=None, 
                       stim_pulse_rate=None, 
@@ -609,18 +683,20 @@ class Bender:
                       freq_by_cycle=None, 
                       movedur=None):
 
- # --- AUTO-FILL INGREDIENTS ---
-        # This checks if the user provided an input. If not, it pulls from 'self'.
-        is_stim         = is_stim         if is_stim is not None         else self.is_stim
-        phase_by_cycle  = phase_by_cycle  if phase_by_cycle is not None  else self.phase_by_cycle
-        stim_pulse_rate = stim_pulse_rate if stim_pulse_rate is not None else self.stim_pulse_rate
-        prestim_time    = prestim_time    if prestim_time is not None    else self.prestim_time
-        poststim_time   = poststim_time   if poststim_time is not None   else self.poststim_time
-        prepoststim_dur = prepoststim_dur if prepoststim_dur is not None else self.prepoststim_dur
-        prepoststim_sep = prepoststim_sep if prepoststim_sep is not None else self.prepoststim_sep
-        stimburstdur    = stimburstdur    if stimburstdur is not None    else self.stimburstdur
-        duty_by_cycle   = duty_by_cycle   if duty_by_cycle is not None   else self.duty_by_cycle
-        freq_by_cycle   = freq_by_cycle   if freq_by_cycle is not None   else self.freq_by_cycle
+        # 1. Use the input if provided
+        # 2. Else, use what's in the notebook (self)
+        # 3. Else, use the "Machine Default" (from config or hardcoded)
+        
+        is_stim         = is_stim         if is_stim is not None         else getattr(self, 'is_stim', False)
+        phase_by_cycle  = phase_by_cycle  if phase_by_cycle is not None  else getattr(self, 'phase_by_cycle', None)
+        stim_pulse_rate = stim_pulse_rate if stim_pulse_rate is not None else getattr(self, 'stim_pulse_rate', 75)
+        prestim_time    = prestim_time    if prestim_time is not None    else getattr(self, 'prestim_time', -2.0)
+        poststim_time   = poststim_time   if poststim_time is not None   else getattr(self, 'poststim_time', 2.0)
+        prepoststim_dur = prepoststim_dur if prepoststim_dur is not None else getattr(self, 'prepoststim_dur', 0.06)
+        prepoststim_sep = prepoststim_sep if prepoststim_sep is not None else getattr(self, 'prepoststim_sep', 1.0)
+        stimburstdur    = stimburstdur    if stimburstdur is not None    else getattr(self, 'stimburstdur', None)
+        duty_by_cycle   = duty_by_cycle   if duty_by_cycle is not None   else getattr(self, 'duty_by_cycle', None)
+        freq_by_cycle   = freq_by_cycle   if freq_by_cycle is not None   else getattr(self, 'freq_by_cycle', None)
         
         # Logic for movedur: use input, or calculate from periods, or use self.duration
         if movedur is None:
@@ -676,7 +752,7 @@ class Bender:
         tend = tstart + prepoststim_dur
         Lonoff.append([tstart, tend])
         
-        # FIX 3: Replace np.place with boolean assignment for pre/post stim
+        # Replace np.place with boolean assignment for pre/post stim
         mask3 = (t >= tstart) & (t < tend)
         S1stimcmd[mask3] = prepostburst[mask3] # Assign only where the mask is True
 
@@ -685,3 +761,101 @@ class Bender:
         self.Ronoff = np.array(Ronoff)
 
         return S1stimcmd, S2stimcmd
+
+    def set_physics(self, clamp_offset, front_h, front_w, back_h, back_w, spec_length, mode="lateral"):
+        """
+        Calculates the Moment of Inertia (MOI) for the system and specimen.
+        """
+        # --- THE TRANSLATOR (Fish -> Machine) ---
+        # Fixed: Using the correct argument names (front_w, front_h, spec_length)
+        if mode == "lateral":
+            w_math, h_math, d_math = front_w, front_h, spec_length
+        elif mode == "dorsoventral":
+            w_math, h_math, d_math = front_h, front_w, spec_length
+        elif mode == "torsional":
+            w_math, h_math, d_math = front_w, spec_length, front_h 
+        else:
+            raise ValueError("Invalid mode. Choose 'lateral', 'dorsoventral', or 'torsional'.")
+
+        # --- CONSTANTS ---
+        RHO_PLA, RHO_STEEL, RHO_NEO, RHO_SPECIMEN = 0.001116, 0.008, 0.0075, 0.001 
+        CLAMP_DIM = np.array([50.0, 100.0, 20.0]) # W, H, D
+        M_BOLT = 12.0 # Total hardware per clamp
+
+        # --- 1. SHAFT BASELINE (12" Steel) ---
+        m_shaft = (np.pi * (9.525/2)**2 * 304.8) * RHO_STEEL
+        i_shaft = 0.5 * m_shaft * (9.525/2)**2
+
+        # --- 2. ROTATING CLAMP PAIR ---
+        r_cm = clamp_offset + (CLAMP_DIM[2] / 2)
+        m_unit = (np.prod(CLAMP_DIM) * RHO_PLA) + (np.pi*5**2*3*RHO_NEO) + M_BOLT
+        i_rotating_clamps = 2 * (m_unit * r_cm**2)
+
+        # --- 3. SPECIMEN MOI (The Fish) ---
+        # Note: Using d_math, h_math, w_math from the translator above
+        i_spec, m_spec = self.calculate_moi_specimen(
+            rho_eff=RHO_SPECIMEN, 
+            obj_depth_length=d_math,
+            front_h_semi=h_math/2, 
+            back_h_semi=h_math/2,
+            front_w_semi=w_math/2, 
+            back_w_semi=w_math/2,
+            num_samples=50,      
+            axis_offset_x=0.0,   
+            axis_offset_z=0.0    
+        )
+
+        # --- 4. FINALIZE ---
+        self.i_total_system = i_shaft + i_rotating_clamps + i_spec
+        self.total_mass = m_shaft + (m_unit * 2) + m_spec
+        
+        # --- 5. REPORT ---
+        print("\n" + "="*50)
+        print(f"{'PHYSICS CONFIGURATION REPORT':^50}")
+        print("="*50)
+        print(f"{'Mode':<25} | {mode:<21}")
+        print(f"{'Total Rotating MOI':<25} | {self.i_total_system:<12.2f} | g*mm²")
+        print(f"{'Lever Arm (r)':<25} | {r_cm:<12.2f} | mm")
+        print(f"{'Specimen Mass':<25} | {m_spec:<12.2f} | g")
+        print("-" * 50)
+        print(f"{'TOTAL SYSTEM MASS':<25} | {self.total_mass:<12.2f} | g")
+        print("="*50 + "\n")
+
+    def get_corrected_torque(self, raw_data_dict):
+        """
+        Subtracts the inertial load from the specific sensor channel 
+        that matches the motor's rotation.
+        """
+        # Grab the raw data from the channel the user specified
+        raw_torque = raw_data_dict[self.bending_axis_sensor]
+        
+        # alpha = angular acceleration
+        alpha = np.gradient(self.anglevel) * self.samplefreq
+        
+        # The Correction
+        true_torque = raw_torque - (self.i_total_system * alpha)
+        return true_torque
+
+    def summary(self):
+        # 1. Build the list of lines
+        lines = [
+            "="*50,
+            f"{'BENDER SYSTEM SUMMARY':^50}",
+            "="*50,
+            f"Config:      {self.config_name}.py",
+            f"Device:      {self.device_name}",
+            f"Motor Port:  {self.motor_port}",
+            f"Direction:   POSITIVE = {self.positive_motor_direction.upper()}",
+            "-" * 50,
+            f"Cal File:    {self.cal_file}",
+            f"Sample Rate: {self.samplefreq} Hz",
+            f"Ramp:        {self.rampdur} s",
+            "="*50
+        ]
+        
+        # 2. Join them into one big block of text
+        report_text = "\n".join(lines)
+        
+        # 3. Print it now AND send it back to the notebook
+        print(report_text)
+        return report_text
