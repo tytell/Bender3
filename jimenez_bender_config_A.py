@@ -15,17 +15,33 @@ bending_axis_specimen = "dorsoventral" # "dorsoventral", "lateral", or "anteropo
 S1side = 'left' # Double check stimulator channel 1 side!
 S2side = 'right'
 
-# --- DAQ and Motor Parameters ---
+# --- ASSIGN DAQ and Motor Parameters ---
 samplefreq = 1000.0   # DAQ sample frequency
 outputfreq = 100000.0 # DAQ output frequency
 stepsperrev = 1600    # Motor steps per revolution (e.g., 1/8 microstepping)
 
-# --- DAQ Hardware Ports ---
+# --- ASSIGN DAQ Hardware Ports ---
 stim_channels = ["ao0", "ao1"]
 motor_port = "port0"
 encoder_chan = "ctr0" 
 device_name = "Dev1"
 
+# Add strain gauge input channels (if applicable) for six-axis force transducer (e.g., ATI Nano40). Make sure to assign correct channels and names based on your specific setup!
+SG_chan = ['ai0', 'ai1', 'ai2', 'ai3', 'ai4', 'ai5']
+SG_name = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
+
+# Add stim monitor channel (if applicable) from S88 stimulator. Make sure to assign correct channel and name based on your specific setup!
+stim_monitor_chan = ['ai6']
+stim_monitor_name = ['stim_monitor']
+
+# Add sonomicrometry channels from Sonometrics DS3 (if applicable)
+sono_channel = ["ai7", "ai8"] # If using sonomicrometry, assign output channels for sonomicrometer excitation
+sono_name = ["sono_left", "sono_right"]
+sono_internal_samplefreq = 241 # Internal sample rate of the sonomicrometry system (e.g., 981 or 251 Hz for Sonometrics DS3)
+
+# Combine all input channels and names into lists for Bender configuration
+input_channels = SG_chan + stim_monitor_chan + sono_channel
+input_channel_names = SG_name + stim_monitor_name + sono_name
 
 # --- Advanced / Stimulation Timing ---
 amp_step_vel = 10 

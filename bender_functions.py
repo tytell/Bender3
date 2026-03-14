@@ -36,7 +36,7 @@ class Bender:
         self.config_name = config_module_name
         self.cal_file = cfg.calibration_file
         
-       
+
         # 2. Assign Hardware settings from cfg
         self.device_name = cfg.device_name
         self.motor_port = cfg.motor_port 
@@ -47,7 +47,12 @@ class Bender:
         self.outputfreq = cfg.outputfreq
         self.stepsperrev = cfg.stepsperrev
         self.encoder_counts_per_rev = cfg.encoder_counts_per_rev
-        
+          
+          
+        # Grab the sensor lists
+        self.input_channels = cfg.input_channels
+        self.input_channel_names = cfg.input_channel_names
+
         # 3. Assign Calibration/Directionality from cfg
         self.cal_file = cfg.calibration_file
         self.positive_motor_direction = cfg.positive_motor_direction
@@ -76,7 +81,7 @@ class Bender:
             self.loadCalibration(self.cal_file)
         except Exception as e:
             print(f"⚠️ WARNING: Calibration failed to load: {e}")
-            
+
         # 5. Placeholders (to prevent NoneType/0-channel errors)
         self.S1stimcmd = None
         self.S2stimcmd = None
