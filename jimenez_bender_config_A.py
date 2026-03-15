@@ -2,7 +2,7 @@
 
 # --- Calibration & Directionality ---
 # Load sensor calibration file. Make sure max range/sensitivity match animal size!
-calibration_file = 'FT56491.cal' 
+forcetorque_calibration_file = 'FT56491.cal' 
 
 # Does positive angle command make bender go left or right? (Depends on mounting/settings)
 positive_motor_direction = "left"     
@@ -38,6 +38,10 @@ stim_monitor_name = ['stim_monitor']
 sono_channel = ["ai7", "ai8"] # If using sonomicrometry, assign output channels for sonomicrometer excitation
 sono_name = ["sono_left", "sono_right"]
 sono_internal_samplefreq = 241 # Internal sample rate of the sonomicrometry system (e.g., 981 or 251 Hz for Sonometrics DS3)
+# --- Sonometer Calibration (Linear: Volts to mm) ---
+# Format: [Low_Volts, High_Volts, Low_mm, High_mm]
+sono_cal_left = [0.0, 5.0, 0.0, 25.4] 
+sono_cal_right = [0.0, 5.0, 0.0, 25.4]
 
 # Combine all input channels and names into lists for Bender configuration
 input_channels = SG_chan + stim_monitor_chan + sono_channel

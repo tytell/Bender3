@@ -34,15 +34,14 @@ class Bender:
             raise ImportError(f"Could not find {config_module_name}.py in the current folder.")
 
         self.config_name = config_module_name
-        self.cal_file = cfg.calibration_file
-        
+
 
         # 2. Assign Hardware settings from cfg
         self.device_name = cfg.device_name
         self.motor_port = cfg.motor_port 
         self.encoder_chan = cfg.encoder_chan
         self.stim_channels = cfg.stim_channels  
-        self.positive_motor_direction = cfg.positive_motor_direction
+        self.S1stim_chan, self.S2stim_chan = self.stim_channels # Map names for run_experiment and run
         self.samplefreq = cfg.samplefreq
         self.outputfreq = cfg.outputfreq
         self.stepsperrev = cfg.stepsperrev
@@ -54,12 +53,17 @@ class Bender:
         self.input_channel_names = cfg.input_channel_names
 
         # 3. Assign Calibration/Directionality from cfg
-        self.cal_file = cfg.calibration_file
+        self.forcetorque_calibration_file = cfg.forcetorque_calibration_file
         self.positive_motor_direction = cfg.positive_motor_direction
         self.S1side = cfg.S1side
         self.S2side = cfg.S2side
         self.motor_axis = cfg.motor_axis
         self.bending_axis_sensor = cfg.bending_axis_sensor
+
+        # Sonomicrometer specific calibration
+        self.sono_cal_left = getattr(cfg, 'sono_cal_left', None)
+        self.sono_cal_right = getattr(cfg, 'sono_cal_right', None)
+        self.sono_internal_rate = getattr(cfg, 'sono_internal_samplefreq', 241)
         
         # 4. Assign Experiment Defaults from cfg
         self.waitbefore = cfg.waitbefore
@@ -78,7 +82,7 @@ class Bender:
         # 5. NEW: AUTO-LOAD CALIBRATION
         # This uses the method you already wrote!
         try:
-            self.loadCalibration(self.cal_file)
+            self.loadCalibration(self.forcetorque_calibration_file)
         except Exception as e:
             print(f"⚠️ WARNING: Calibration failed to load: {e}")
 
@@ -121,17 +125,37 @@ class Bender:
 
         self.calibration = np.array(mat).T
 
-    def applyCalibration(self, rawdata):
+    def apply_calibration_forcetorque(self, rawdata):
         self.forcetorque = np.dot(rawdata[:6, :].T, self.calibration)
         self.forcetorque = self.forcetorque.T
 
         return self.forcetorque
-
+    
+    def apply_calibration_sono(self, raw_volts, cal_list):
+        """Unpacks [v_low, v_high, mm_low, mm_high] and returns mm."""
+        if raw_volts is None or cal_list is None:
+            return None
+            
+        v_low, v_high, mm_low, mm_high = cal_list
+        
+        slope = (mm_high - mm_low) / (v_high - v_low)
+        intercept = mm_low - (slope * v_low)
+        return (raw_volts * slope) + intercept
 
     def run_experiment(self, test_type = "dynamic"):
 
+
+       # --- THE CLEANING CREW ---
+        self.aidata = None
+        self.forcetorque = None
+        self.sono_left_mm = None
+        self.sono_right_mm = None
+        self.angledata = None
+
+
+        # Now, if the DAQ fails, you won't accidentally save old data!
         # Set input and output names/channels
-        self.set_input_channels(inchannels=self.input_channels, inchannel_names=self.inchannel_names)
+        self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
         self.set_stim_channels(*self.stim_channels) 
 
         # self.calibration is assumed to be loaded in the notebook using bender.loadCalibration(...)
@@ -204,9 +228,45 @@ class Bender:
         print(f"Data will be saved to: {filename}")
 
         # Run the experiment using 'self'
-        self.run(device_name=device_name)
-            
+        self.aidata = self.run(device_name=self.device_name)
 
+        # --- 1. Process Force/Torque (Always assumed to exist) ---
+        # Find exactly where the 6 SG channels are, regardless of order
+        sg_names = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
+        forcetorque_indices = [self.input_channel_names.index(n) for n in sg_names if n in self.input_channel_names]
+
+        if len(forcetorque_indices) == 6:
+            self.forcetorque = self.apply_calibration_forcetorque(self.aidata[forcetorque_indices, :])
+        else:
+            print("⚠️ Warning: Could not find all 6 SG channels for Force/Torque calibration.")
+
+          # --- Process Sonometer (Checks if they exist in config first) ---
+        self.sono_left_mm = None
+        self.sono_right_mm = None
+
+        # Look for 'sono_left' in master name list
+        if 'sono_left' in self.input_channel_names:
+            raw_l = self.get_data_by_name('sono_left')
+            self.sono_left_mm = self.apply_calibration_sono(raw_l, self.sono_cal_left)
+            print(f"📏 Sonometer (Left) Calibrated: {np.mean(self.sono_left_mm):.2f} mm")
+
+        # Look for 'sono_right' in master name list
+        if 'sono_right' in self.input_channel_names:
+            raw_r = self.get_data_by_name('sono_right')
+            self.sono_right_mm = self.apply_calibration_sono(raw_r, self.sono_cal_right)
+            print(f"📏 Sonometer (Right) Calibrated: {np.mean(self.sono_right_mm):.2f} mm")
+
+        # --- 3. Process Stim Monitor (ONLY if it exists) ---
+        if 'stim_monitor' in self.input_channel_names:
+            self.stim_monitor = self.get_data_by_name('stim_monitor')
+            
+    def get_data_by_name(self, name):
+        """Returns the data row for a specific channel name."""
+        try:
+            idx = self.input_channel_names.index(name)
+            return self.aidata[idx, :]
+        except (ValueError, AttributeError):
+            return None
 
 
 
@@ -277,7 +337,6 @@ class Bender:
         self.all_stimduties = all_stimduties_arr
         self.all_stimphases = all_stimphases_arr
         print("organize_cycles took", time.time() - start, "seconds")
-# ...existing code...
     
 
     def record_motor_signal(self, t, angle, anglevel, tnorm=None):
@@ -372,16 +431,16 @@ class Bender:
 
         return tout, dig, motorstep, motordirection
 
-    def set_input_channels(self, inchannels, inchannel_names):
-        self.inchannels = inchannels
-        self.inchannel_names = inchannel_names
+    def set_input_channels(self, input_channels, input_channel_names):
+        self.input_channels = input_channels
+        self.input_channel_names = input_channel_names
 
     def set_stim_channels(self, S1stim_chan, S2stim_chan):
         self.S1stim_chan = S1stim_chan
         self.S2stim_chan = S2stim_chan
 
-    def set_motor_channel(self, motor_control_chan):
-        self.motor_control_chan = motor_control_chan
+    def set_motor_channel(self, motor_port):
+        self.motor_port = motor_port
 
     def set_encoder_channel(self, encoder_chan, 
                             counts_per_rev=10000):
@@ -450,16 +509,16 @@ class Bender:
         return total_moi, total_mass
 
     def run(self, device_name):
-        inchannels = ['/'.join((device_name, c1)) for c1 in self.inchannels]
+        input_channels = ['/'.join((device_name, c1)) for c1 in self.input_channels]
         S1stim_chan = '/'.join((device_name, self.S1stim_chan))
         S2stim_chan = '/'.join((device_name, self.S2stim_chan))
-        motor_control_chan = '/'.join((device_name, self.motor_control_chan))
+        motor_port = '/'.join((device_name, self.motor_port))
         encoder_chan = '/'.join((device_name, self.encoder_chan))
 
         with Task() as analog_in, Task() as analog_out, \
                 Task() as digital_out, Task() as angle_in:
             # set up the input channels
-            for c1, name1 in zip(inchannels, self.inchannel_names):
+            for c1, name1 in zip(input_channels, self.input_channel_names):
                 analog_in.ai_channels.add_ai_voltage_chan(c1, name1)
 
             # set up the input sample frequency
@@ -491,7 +550,7 @@ class Bender:
                                                     trigger_edge=daq.Edge.RISING)
 
             # set up the digital output channel
-            digital_out.do_channels.add_do_chan(motor_control_chan, 'motor')
+            digital_out.do_channels.add_do_chan(motor_port, 'motor')
             # use the analog output clock for digital output timing
             digital_out.timing.cfg_samp_clk_timing(self.outputfreq, 
                                                 source = "ao/SampleClock",
@@ -502,7 +561,7 @@ class Bender:
 
             # set up to read the input
             reader = AnalogMultiChannelReader(analog_in.in_stream)
-            self.aidata = np.zeros((len(self.inchannels), len(self.t)), dtype=np.float64)
+            self.aidata = np.zeros((len(self.input_channels), len(self.t)), dtype=np.float64)
             
             angle_reader = CounterReader(angle_in.in_stream)
             self.angledata = np.zeros((len(self.t),), dtype=np.float64)
@@ -599,6 +658,11 @@ class Bender:
         Returns:
             tuple: (angle, anglevel, tnorm, freq) NumPy arrays.
         """
+
+        # 1. KILL THE OLD CLOCK (This is the most common 'hang' source)
+        self.t = None 
+        self.tnorm = None
+        self.angle = None
         
         # Access parameters from self (ensure they are set by the __init__ or another method)
         waitbefore = self.waitbefore
@@ -675,96 +739,79 @@ class Bender:
         # Return all generated signals
         return angle, anglevel, tnorm, freq, t
 
-    def make_stimuli(self, 
-                      is_stim=None, 
-                      phase_by_cycle=None, 
-                      stim_pulse_rate=None, 
-                      prestim_time=None, 
-                      poststim_time=None, 
-                      prepoststim_dur=None, 
-                      prepoststim_sep=None, 
-                      stimburstdur=None, 
-                      duty_by_cycle=None, 
-                      freq_by_cycle=None, 
-                      movedur=None):
+    def make_stimuli(self, is_stim=None, phase_by_cycle=None, stim_pulse_rate=None, 
+                      prestim_time=None, poststim_time=None, prepoststim_dur=None, 
+                      prepoststim_sep=None, stimburstdur=None, duty_by_cycle=None, 
+                      freq_by_cycle=None, movedur=None):
+        
+        # 1. Reset ONLY the labels/lists (These are the 'ghost' sources)
+        self.Lonoff = []
+        self.Ronoff = []
+        Lonoff = []
+        Ronoff = []
 
-        # 1. Use the input if provided
-        # 2. Else, use what's in the notebook (self)
-        # 3. Else, use the "Machine Default" (from config or hardcoded)
+        # 1. Quick-fill defaults using getattr
+        is_stim = is_stim if is_stim is not None else getattr(self, 'is_stim', False)
         
-        is_stim         = is_stim         if is_stim is not None         else getattr(self, 'is_stim', False)
-        phase_by_cycle  = phase_by_cycle  if phase_by_cycle is not None  else getattr(self, 'phase_by_cycle', None)
+        # EARLY EXIT: If no stim, don't even create the empty arrays yet
+        if not is_stim:
+            self.S1stimcmd, self.S2stimcmd = np.zeros(2), np.zeros(2) # Tiny dummies
+            self.Lonoff, self.Ronoff = [], []
+            return self.S1stimcmd, self.S2stimcmd
+
+        # 2. Grab the 'Self' versions if arguments are None
+        phase_by_cycle = phase_by_cycle if phase_by_cycle is not None else getattr(self, 'phase_by_cycle', [])
+        duty_by_cycle  = duty_by_cycle  if duty_by_cycle  is not None else getattr(self, 'duty_by_cycle', [])
+        freq_by_cycle  = freq_by_cycle  if freq_by_cycle  is not None else getattr(self, 'freq_by_cycle', [])
+        stimburstdur   = stimburstdur   if stimburstdur   is not None else getattr(self, 'stimburstdur', [])
         stim_pulse_rate = stim_pulse_rate if stim_pulse_rate is not None else getattr(self, 'stim_pulse_rate', 75)
-        prestim_time    = prestim_time    if prestim_time is not None    else getattr(self, 'prestim_time', -2.0)
-        poststim_time   = poststim_time   if poststim_time is not None   else getattr(self, 'poststim_time', 2.0)
         prepoststim_dur = prepoststim_dur if prepoststim_dur is not None else getattr(self, 'prepoststim_dur', 0.06)
-        prepoststim_sep = prepoststim_sep if prepoststim_sep is not None else getattr(self, 'prepoststim_sep', 1.0)
-        stimburstdur    = stimburstdur    if stimburstdur is not None    else getattr(self, 'stimburstdur', None)
-        duty_by_cycle   = duty_by_cycle   if duty_by_cycle is not None   else getattr(self, 'duty_by_cycle', None)
-        freq_by_cycle   = freq_by_cycle   if freq_by_cycle is not None   else getattr(self, 'freq_by_cycle', None)
-        
-        # Logic for movedur: use input, or calculate from periods, or use self.duration
-        if movedur is None:
-            movedur = np.sum(self.period_by_cycle) if hasattr(self, 'period_by_cycle') else self.duration
-            
+        prestim_time    = prestim_time    if prestim_time    is not None else getattr(self, 'prestim_time', -2.0)
+
+        # 3. HEAVY LIFTING (Only happens if is_stim is True)
         t = self.t
         tnorm = self.tnorm
         S1stimcmd = np.zeros_like(t)
         S2stimcmd = np.zeros_like(t)
-        Lonoff = []
-        Ronoff = []
-        bendphase = np.zeros_like(tnorm)
-        prepostburst = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float)
-        prepostburst *= 5.0
-
-        if is_stim:
-            pulsedur = 0.01         
-            burst = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float)
-            burst *= 5.0
-            prepostburst = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float)
-            prepostburst *= 5.0
-            bendphase = tnorm - 0.25
-
-        for c, (dur1, duty1, f1, p1) in enumerate(zip(stimburstdur, duty_by_cycle, freq_by_cycle, phase_by_cycle)):
-            if dur1 == 0:
-                continue
-            
-            # We add the safety check recommended previously
-            target_time = c + p1
-            if not np.any(bendphase >= target_time):
-                continue # Skip cycles that fall outside the time array bounds
-
-            k = np.argmax(bendphase >= target_time)
-            tstart = t[k]
-            tend = tstart + dur1
-
-            if np.any(bendphase >= target_time):
-                Lonoff.append([tstart, tend])
-            if np.any(bendphase >= c + 0.5 + p1):
-                Ronoff.append(np.array([tstart, tend]) + 0.5 / f1)
-
-            # FIX 1: Replace np.place with boolean assignment for S1stimcmd
-            mask1 = (bendphase >= c + p1) & (bendphase < c + p1 + duty1)
-            S1stimcmd[mask1] = burst[mask1] # Assign only where the mask is True
-
-            # FIX 2: Replace np.place with boolean assignment for S2stimcmd
-            mask2 = (bendphase >= c + 0.5 + p1) & (bendphase < c + 0.5 + p1 + duty1)
-            S2stimcmd[mask2] = burst[mask2] # Assign only where the mask is True
-
-
-        # --- Pre/Post stimulation logic ---
-        tstart = prestim_time
-        tend = tstart + prepoststim_dur
-        Lonoff.append([tstart, tend])
+        Lonoff, Ronoff = [], []
         
-        # Replace np.place with boolean assignment for pre/post stim
-        mask3 = (t >= tstart) & (t < tend)
-        S1stimcmd[mask3] = prepostburst[mask3] # Assign only where the mask is True
+        # Calculate the pulse wave once
+        # Using 5.0 for the stimulator 'On' voltage
+        pulse_wave = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float) * 5.0
+        bendphase = tnorm - 0.25
+    
+        # 4. Optimized Cycle Loop
+        for c, (dur1, duty1, f1, p1) in enumerate(zip(stimburstdur, duty_by_cycle, freq_by_cycle, phase_by_cycle)):
+            if dur1 <= 0: continue
+            
+            # Left Side (S1)
+            t_s1 = c + p1
+            m1 = (bendphase >= t_s1) & (bendphase < t_s1 + duty1)
+            if np.any(m1):
+                S1stimcmd[m1] = pulse_wave[m1]
+                t_sub = t[m1]
+                Lonoff.append([t_sub[0], t_sub[-1]])
 
-        # Store these in the instance if you need to access them later for analysis
-        self.Lonoff = np.array(Lonoff)
-        self.Ronoff = np.array(Ronoff)
+            # Right Side (S2)
+            t_s2 = c + 0.5 + p1
+            m2 = (bendphase >= t_s2) & (bendphase < t_s2 + duty1)
+            if np.any(m2):
+                S2stimcmd[m2] = pulse_wave[m2]
+                t_sub2 = t[m2]
+                Ronoff.append([t_sub2[0], t_sub2[-1]])
 
+        # 5. Pre-stimulation (The "Start" burst)
+        m_pre = (t >= prestim_time) & (t < (prestim_time + prepoststim_dur))
+        if np.any(m_pre):
+            S1stimcmd[m_pre] = pulse_wave[m_pre]
+            Lonoff.append([prestim_time, prestim_time + prepoststim_dur])
+
+        # 6. Save and Return
+        self.Lonoff = Lonoff
+        self.Ronoff = Ronoff
+        self.S1stimcmd = S1stimcmd
+        self.S2stimcmd = S2stimcmd
+        
         return S1stimcmd, S2stimcmd
 
     def set_physics(self, clamp_offset, front_h, front_w, back_h, back_w, spec_length, mode="lateral"):
@@ -852,7 +899,7 @@ class Bender:
             f"Motor Port:  {self.motor_port}",
             f"Direction:   POSITIVE = {self.positive_motor_direction.upper()}",
             "-" * 50,
-            f"Cal File:    {self.cal_file}",
+            f"Cal File:    {self.forcetorque_calibration_file}",
             f"Sample Rate: {self.samplefreq} Hz",
             f"Ramp:        {self.rampdur} s",
             "="*50
@@ -864,3 +911,9 @@ class Bender:
         # 3. Print it now AND send it back to the notebook
         print(report_text)
         return report_text
+    
+    def update_metadata(self, **kwargs):
+        """Saves any passed-in variables directly to the bender object."""
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            print(f"  Stored: {key} = {value}")
