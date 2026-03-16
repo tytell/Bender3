@@ -17,9 +17,9 @@ S2side = 'right'
 
 # --- ASSIGN DAQ and Motor Parameters ---
 samplefreq = 1000.0   # DAQ sample frequency
-outputfreq = 100000.0 # DAQ output frequency
+outputfreq = 60000.0 # DAQ output frequency
 stepsperrev = 1600    # Motor steps per revolution (e.g., 1/8 microstepping)
-
+gear_ratio = 5 # Gear ratio of the motor (e.g., 5:1 means 5 motor revolutions = 1 output revolution). Depends on gear box!
 # --- ASSIGN DAQ Hardware Ports ---
 stim_channels = ["ao0", "ao1"]
 motor_port = "port0"

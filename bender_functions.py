@@ -44,6 +44,7 @@ class Bender:
         self.S1stim_chan, self.S2stim_chan = self.stim_channels # Map names for run_experiment and run
         self.samplefreq = cfg.samplefreq
         self.outputfreq = cfg.outputfreq
+        self.gear_ratio = cfg.gear_ratio
         self.stepsperrev = cfg.stepsperrev
         self.encoder_counts_per_rev = cfg.encoder_counts_per_rev
           
@@ -389,11 +390,11 @@ class Bender:
 
    
     def make_motor_stepper_pulses(self, outputfreq = 1000,
-                                scale=5,
+                                gear_ratio=5,
                                 stepsperrev=6400.0):
 
         self.outputfreq = outputfreq
-        self.scale = scale
+        self.gear_ratio = gear_ratio
 
         tout = np.arange(self.t[0], self.t[-1], 1.0/outputfreq)
 
@@ -402,8 +403,8 @@ class Bender:
         velhi = interpolate.interp1d(self.t, self.anglevel, kind='linear', assume_sorted=True, bounds_error=False,
                                     fill_value=0.0)(tout)
 
-        poshi *= scale
-        velhi *= scale
+        poshi *= gear_ratio
+        velhi *= gear_ratio
 
 
         if outputfreq == 0 or stepsperrev == 0:
@@ -420,13 +421,16 @@ class Bender:
         motorstep = np.concatenate((np.array([0], dtype='uint8'), (dstep != 0).astype('uint8')))
         motordirection = (velhi <= 0).astype('uint8')
 
+        # Change enable back to ones_like (High = 5V)
         motorenable = np.ones_like(motordirection, dtype='uint8')
-        motorenable[-5:] = 0
 
-        dig = np.packbits(np.column_stack((np.zeros((len(motorstep), 5), dtype=np.uint8),
-                                            motorenable,
-                                            motorstep,
-                                            motordirection)))
+        # Ensure the columns match your wires:
+        dig = np.packbits(np.column_stack((
+            np.zeros((len(motorstep), 5), dtype=np.uint8), 
+            motorenable,    # Goes to P0.2 (BLUE)
+            motorstep,      # Goes to P0.1 (BLACK)
+            motordirection  # Goes to P0.0 (WHITE)
+        )))
         # np.packbits always returns a uint8, so we need to convert to a uint32
         dig = dig.astype('uint32')
 
