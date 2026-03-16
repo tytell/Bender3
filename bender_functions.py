@@ -87,12 +87,12 @@ class Bender:
             print(f"⚠️ WARNING: Calibration failed to load: {e}")
 
         # 5. Placeholders (to prevent NoneType/0-channel errors)
-        self.S1stimcmd = None
-        self.S2stimcmd = None
+        self.t = np.array([0.0, 1.0/self.samplefreq])
+        self.S1stimcmd = np.zeros(len(self.t))
+        self.S2stimcmd = np.zeros(len(self.t))
         self.i_total_system = 0.0
         self.total_mass = 0.0
         
-        self.t = np.array([0.0, 1.0/self.samplefreq])
         self.angle = np.array([0.0, 0.0])
         self.anglevel = np.array([0.0, 0.0])
         self.tnorm = np.array([0.0, 0.0])
@@ -212,13 +212,26 @@ class Bender:
             }
 
         # 1. Make electrical stimuli
-        S1stimcmd, S2stimcmd = self.make_stimuli(**stimulation_params)
+        S1stimcmd, S2stimcmd = self.make_stimuli(
+            **stimulation_params, 
+            t_basis=t,         # Pass the new long time array
+            tnorm_basis=tnorm  # Pass the new normalized time array
+        )
             
-        # 2. Record stimulation for saving the data
+        # 2. Record stimulation (CRITICAL: Ensure these update self.S1stimcmd/S2stimcmd)
         self.record_stim_signal(S1stimcmd, S2stimcmd)
 
-        # 3. Record (and SET) the generated signals for the Bender instance ('self') to use in .run(). MUST perform before making_motor_stepper_pulses.
+        # 3. Record (and SET) the generated signals
+        # This MUST update self.t to match the new duration
         self.record_motor_signal(t, angle, anglevel, tnorm)
+
+        # --- ADD THESE THREE LINES HERE FOR SAFETY ---
+        # Force the class attributes to match the newly generated data
+        self.t = t
+        self.angle = angle
+        self.anglevel = anglevel
+        self.S1stimcmd = S1stimcmd
+        self.S2stimcmd = S2stimcmd
 
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
         self.make_motor_stepper_pulses(outputfreq=self.outputfreq)
@@ -737,12 +750,12 @@ class Bender:
         self.tnorm = tnorm
 
         # Return all generated signals
-        return angle, anglevel, tnorm, freq, t
+        return angle, anglevel, tnorm, t
 
     def make_stimuli(self, is_stim=None, phase_by_cycle=None, stim_pulse_rate=None, 
                       prestim_time=None, poststim_time=None, prepoststim_dur=None, 
                       prepoststim_sep=None, stimburstdur=None, duty_by_cycle=None, 
-                      freq_by_cycle=None, movedur=None):
+                      freq_by_cycle=None, movedur=None, t_basis=None, tnorm_basis=None):
         
         # 1. Reset ONLY the labels/lists (These are the 'ghost' sources)
         self.Lonoff = []
@@ -754,11 +767,14 @@ class Bender:
         is_stim = is_stim if is_stim is not None else getattr(self, 'is_stim', False)
         
         # EARLY EXIT: If no stim, don't even create the empty arrays yet
+   # EARLY EXIT: If no stim, create empty arrays that MATCH the time length
         if not is_stim:
-            self.S1stimcmd, self.S2stimcmd = np.zeros(2), np.zeros(2) # Tiny dummies
+            t = t_basis if t_basis is not None else self.t
+            self.S1stimcmd = np.zeros_like(t)
+            self.S2stimcmd = np.zeros_like(t)
             self.Lonoff, self.Ronoff = [], []
             return self.S1stimcmd, self.S2stimcmd
-
+        
         # 2. Grab the 'Self' versions if arguments are None
         phase_by_cycle = phase_by_cycle if phase_by_cycle is not None else getattr(self, 'phase_by_cycle', [])
         duty_by_cycle  = duty_by_cycle  if duty_by_cycle  is not None else getattr(self, 'duty_by_cycle', [])
@@ -768,9 +784,12 @@ class Bender:
         prepoststim_dur = prepoststim_dur if prepoststim_dur is not None else getattr(self, 'prepoststim_dur', 0.06)
         prestim_time    = prestim_time    if prestim_time    is not None else getattr(self, 'prestim_time', -2.0)
 
-        # 3. HEAVY LIFTING (Only happens if is_stim is True)
-        t = self.t
-        tnorm = self.tnorm
+
+        # 3. HEAVY LIFTING
+        # Use the passed-in basis if available, otherwise fallback to self
+        t = t_basis if t_basis is not None else self.t
+        tnorm = tnorm_basis if tnorm_basis is not None else self.tnorm
+        
         S1stimcmd = np.zeros_like(t)
         S2stimcmd = np.zeros_like(t)
         Lonoff, Ronoff = [], []
