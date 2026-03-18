@@ -31,21 +31,22 @@ SG_chan = ['ai0', 'ai1', 'ai2', 'ai3', 'ai4', 'ai5']
 SG_name = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
 
 # Add stim monitor channel (if applicable) from S88 stimulator. Make sure to assign correct channel and name based on your specific setup!
-stim_monitor_chan = ['ai6']
+stim_monitor_chan = ['ai8']
 stim_monitor_name = ['stim_monitor']
 
 # Add sonomicrometry channels from Sonometrics DS3 (if applicable)
-sono_channel = ["ai7", "ai8"] # If using sonomicrometry, assign output channels for sonomicrometer excitation
+sono_channel = ["ai6", "ai7"] # If using sonomicrometry, assign output channels for sonomicrometer excitation
 sono_name = ["sono_left", "sono_right"]
 sono_internal_samplefreq = 241 # Internal sample rate of the sonomicrometry system (e.g., 981 or 251 Hz for Sonometrics DS3)
 # --- Sonometer Calibration (Linear: Volts to mm) ---
 # Format: [Low_Volts, High_Volts, Low_mm, High_mm]
-sono_cal_left = [0.0, 5.0, 0.0, 25.4] 
-sono_cal_right = [0.0, 5.0, 0.0, 25.4]
+sono_cal_left = [1.1, 4.5, 11.8, 47] 
+sono_cal_right = [1.1, 4.5, 11.8, 47]
 
 # Combine all input channels and names into lists for Bender configuration
-input_channels = SG_chan + stim_monitor_chan + sono_channel
-input_channel_names = SG_name + stim_monitor_name + sono_name
+# Comment out any channels that you don't plant o use in the two lines below!! i.e., if not using sonomicrometry, comment out sono_channel and sono_name lines below.
+input_channels = SG_chan + sono_channel #+  stim_monitor_chan 
+input_channel_names = SG_name + sono_name #+ stim_monitor_name
 
 # --- Advanced / Stimulation Timing ---
 amp_step_vel = 10 
