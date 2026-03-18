@@ -17,6 +17,7 @@ try:
     from nidaqmx.stream_writers import AnalogMultiChannelWriter, DigitalSingleChannelWriter
     from nidaqmx.stream_readers import AnalogMultiChannelReader, CounterReader
     from nidaqmx.errors import DaqError
+    from nidaqmx.constants import TerminalConfiguration
 except ImportError:
     logging.warning('No DAQmx available')
     
@@ -336,25 +337,26 @@ class Bender:
         stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
         stimburstdur[is_stim_cycle == False] = 0
 
-        # Store results
+   # Store results as "organized" versions so we don't overwrite the metadata inputs
         self.period_by_cycle = period_by_cycle
         self.freq_by_cycle = freq_by_cycle
         self.amp_by_cycle = amp_by_cycle
         self.duty_by_cycle = duty_by_cycle
         self.phase_by_cycle = phase_by_cycle
-        self.all_freqs = all_freqs_arr
-        self.all_curves = all_curves_arr
+
+        # These match the metadata names but show they are the processed output
+        self.organized_freqs = all_freqs_arr      # instead of self.all_freqs
+        self.organized_curves = all_curves_arr    # instead of self.all_curves
+        self.organized_stimduties = all_stimduties_arr
+        self.organized_stimphases = all_stimphases_arr
+        
         self.all_degs = all_degs
         self.stimburstdur = stimburstdur
         self.all_strains = all_strains
         self.all_strainrates = all_strainrates
-        self.all_stimduties = all_stimduties_arr
-        self.all_stimphases = all_stimphases_arr
-        print("organize_cycles took", time.time() - start, "seconds")
-    
 
     def record_motor_signal(self, t, angle, anglevel, tnorm=None):
-        self.samplefreq = 1.0 / (t[1] - t[0])
+        self.samplefreq = round(1.0 / (t[1] - t[0]))
 
         self.t = t
         self.angle = angle
@@ -534,9 +536,17 @@ class Bender:
 
         with Task() as analog_in, Task() as analog_out, \
                 Task() as digital_out, Task() as angle_in:
-            # set up the input channels
+                       # set up the input channels
             for c1, name1 in zip(input_channels, self.input_channel_names):
-                analog_in.ai_channels.add_ai_voltage_chan(c1, name1)
+                # Check for 'sono' to set RSE mode, otherwise use Differential
+                if 'sono' in name1.lower():
+                    t_config = TerminalConfiguration.RSE # Need to reconfigure for Sonometrics DAC output channels
+                else:
+                    t_config = TerminalConfiguration.DIFF
+                
+                # Pass the terminal_config to the channel setup
+                analog_in.ai_channels.add_ai_voltage_chan(c1, name1, terminal_config=t_config,
+                                                              min_val=-10.0, max_val=10.0)     # Change from 5.0)
 
             # set up the input sample frequency
             # just records as many samples as are in the output
@@ -555,6 +565,7 @@ class Bender:
             # set up the analog output channels
             analog_out.ao_channels.add_ao_voltage_chan(S1stim_chan, 'S1stim')
             analog_out.ao_channels.add_ao_voltage_chan(S2stim_chan, 'S2stim')
+
             # it will run much faster than the input channels, because the digital output is linked
             # to it, and it needs to run fast so that the pulses 
             # are output fast enough for smooth motion
