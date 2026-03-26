@@ -236,7 +236,12 @@ class Bender:
         self.S2stimcmd = S2stimcmd
 
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
-        self.make_motor_stepper_pulses(outputfreq=self.outputfreq)
+        self.make_motor_stepper_pulses(
+                        outputfreq=self.outputfreq, 
+                        gear_ratio=self.gear_ratio, 
+                        stepsperrev=self.stepsperrev
+                    )
+                            
 
         # Print file save location
         filename = self.increment_file_name(f'experiment_data_{test_type}_000.h5')
@@ -274,6 +279,8 @@ class Bender:
         # --- 3. Process Stim Monitor (ONLY if it exists) ---
         if 'stim_monitor' in self.input_channel_names:
             self.stim_monitor = self.get_data_by_name('stim_monitor')
+
+        self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")   
             
     def get_data_by_name(self, name):
         """Returns the data row for a specific channel name."""
@@ -617,6 +624,10 @@ class Bender:
             # and read the data
             reader.read_many_sample(self.aidata)
             angle_reader.read_many_sample_double(self.angledata)
+
+
+            self.angle_measured = self.angledata  # This makes bender.angle_measured available
+
         return(self.aidata)
 
 #

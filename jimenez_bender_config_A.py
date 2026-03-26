@@ -50,7 +50,7 @@ input_channel_names = SG_name + sono_name #+ stim_monitor_name
 
 # --- Advanced / Stimulation Timing ---
 amp_step_vel = 10 
-encoder_counts_per_rev = 10000 # E5 optical encoder (1000 PPR)
+encoder_counts_per_rev = 10000 # E6 optical encoder (1000 PPR)
 
 # --- Time Buffers ---
 waitbefore = 3.0 # Seconds to wait before bending after stimulation starts
