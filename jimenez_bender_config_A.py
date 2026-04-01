@@ -8,8 +8,8 @@ forcetorque_calibration_file = 'FT56491.cal'
 positive_motor_direction = "left"     
 
 # User Configuration
-motor_axis = "y"           # Motor physically rotates along global 'Y' axis
-bending_axis_sensor = "x" # Sensor's 'X' is actually the motor's rotation
+motor_axis = "z"           # Motor physically rotates along global 'Y' axis
+bending_axis_sensor = "z" # Sensor's 'X' is actually the motor's rotation
 bending_axis_specimen = "dorsoventral" # "dorsoventral", "lateral", or "anteroposterior"
 
 S1side = 'left' # Double check stimulator channel 1 side!
@@ -62,3 +62,56 @@ prepoststim_dur = 0.3 / 5
 prepoststim_sep = 1             # Time between left and right bursts
 prestim_time = -2               # Time prestim left burst starts
 poststim_time = 2               # Time *after* end of bending
+
+
+# This dictionary is used by the HDF5 saver to label your data for R analysis.
+units = {
+    # Hardware & Sampling
+    'samplefreq': 'Hz',
+    'outputfreq': 'Hz',
+    'stepsperrev': 'steps/rev',
+    'gear_ratio': 'multiplier',
+    'encoder_counts_per_rev': 'counts/rev',
+    
+    # Timing & Buffers
+    'waitbefore': 'seconds',
+    'waitafter': 'seconds',
+    'rampdur': 'seconds',
+    'duration': 'seconds',
+    
+    # Physics & Results
+    'xForce': 'Newtons',
+    'yForce': 'Newtons',
+    'zForce': 'Newtons',
+    'xTorque': 'N-m',
+    'yTorque': 'N-m',
+    'zTorque': 'N-m',
+    'angle_measured': 'degrees',
+    'planned_angles': 'degrees',
+    
+    # Specimen & Setup
+    'body_thickness': 'meters',
+    'xsec_width': 'mm',
+    'desired_curves': '1/m',
+    'desired_strain_pct': 'percent',
+    
+    # Sonomics & Stimulation
+    'sono_left': 'mm',
+    'sono_right': 'mm',
+    'S1volts': 'Volts',
+    'S2volts': 'Volts',
+    'stim_pulse_rate': 'Hz',
+    'all_stimduties': 'fraction_of_cycle',
+    'all_stimphases': 'fraction_of_cycle'
+}
+
+unit_rules = {
+    'width': 'mm',
+    'height': 'mm',
+    'thickness': 'mm',
+    'length': 'mm',
+    'depth': 'mm',
+    'mass': 'grams',
+    'weight': 'grams',
+    'density': 'g/cm^3',
+}
