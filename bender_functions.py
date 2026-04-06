@@ -280,8 +280,9 @@ class Bender:
         if 'stim_monitor' in self.input_channel_names:
             self.stim_monitor = self.get_data_by_name('stim_monitor')
 
-        self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")   
-            
+        self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+   
     def get_data_by_name(self, name):
         """Returns the data row for a specific channel name."""
         try:
@@ -294,41 +295,56 @@ class Bender:
 
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate):
         start = time.time()
-        # Build combinations without modifying input lists
+        # 1. Build combinations
         combos = []
         for c1 in all_curves:
             for f1 in all_freqs:
                 for d1 in all_stimduties:
                     for p1 in all_stimphases:
                         combos.append((c1, f1, d1, p1))
-        # Unpack combos into separate arrays
+        
         all_curves_arr, all_freqs_arr, all_stimduties_arr, all_stimphases_arr = map(np.array, zip(*combos))
 
-        # Randomize if needed
+        # --- 2. CALCULATE SECONDARY VARIABLES BEFORE RANDOMIZING ---
+        # This ensures they are "locked" to the specific curve/freq combo
+        all_strains_arr = (xsec_width / 2 / 1000) * all_curves_arr
+        all_strainrates_arr = 2 * np.pi * all_strains_arr * all_freqs_arr
+        all_degs_arr = np.rad2deg(all_curves_arr * (dclamp/1000))
+
+        # --- 3. RANDOMIZE EVERYTHING TOGETHER ---
         if randomize:
             order = np.arange(len(all_freqs_arr))
             np.random.shuffle(order)
+            
+            # Shuffle primary variables
             all_curves_arr = all_curves_arr[order]
             all_freqs_arr = all_freqs_arr[order]
             all_stimduties_arr = all_stimduties_arr[order]
             all_stimphases_arr = all_stimphases_arr[order]
+            
+            # SHUFFLE SECONDARY VARIABLES TOO!
+            all_strains_arr = all_strains_arr[order]
+            all_strainrates_arr = all_strainrates_arr[order]
+            all_degs_arr = all_degs_arr[order]
 
-        # Calculate amplitudes, strains, and strain rates
-        all_degs = np.rad2deg(all_curves_arr * (dclamp/1000))
-        all_strains = xsec_width/2/1000 * all_curves_arr
-        all_strainrates = 2*np.pi * all_strains * all_freqs_arr
-
-        # Create frequency, amplitude, and period arrays by cycle
+        # --- 4. CREATE BY-CYCLE ARRAYS ---
         freq_by_cycle = np.repeat(all_freqs_arr, cycles_per_step)
-        amp_by_cycle = np.repeat(all_degs, cycles_per_step)
+        amp_by_cycle  = np.repeat(all_degs_arr, cycles_per_step)
         duty_by_cycle = np.repeat(all_stimduties_arr, cycles_per_step)
         phase_by_cycle = np.repeat(all_stimphases_arr, cycles_per_step)
+        
+        # New "By-Cycle" mappings for R
+        strain_by_cycle = np.repeat(all_strains_arr, cycles_per_step)
+        strainrate_by_cycle = np.repeat(all_strainrates_arr, cycles_per_step)
 
-        # Add end cycles
+        # 5. Add end cycles padding
         freq_by_cycle = np.concatenate((freq_by_cycle, [all_freqs_arr[-1]] * n_end_cycles))
-        amp_by_cycle = np.concatenate((amp_by_cycle, [all_degs[-1]] * n_end_cycles))
+        amp_by_cycle  = np.concatenate((amp_by_cycle, [all_degs_arr[-1]] * n_end_cycles))
         duty_by_cycle = np.concatenate((duty_by_cycle, [all_stimduties_arr[-1]] * n_end_cycles))
         phase_by_cycle = np.concatenate((phase_by_cycle, [all_stimphases_arr[-1]] * n_end_cycles))
+        
+        strain_by_cycle = np.concatenate((strain_by_cycle, [all_strains_arr[-1]] * n_end_cycles))
+        strainrate_by_cycle = np.concatenate((strainrate_by_cycle, [all_strainrates_arr[-1]] * n_end_cycles))
 
         period_by_cycle = 1.0 / freq_by_cycle
 
@@ -344,23 +360,39 @@ class Bender:
         stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
         stimburstdur[is_stim_cycle == False] = 0
 
-   # Store results as "organized" versions so we don't overwrite the metadata inputs
-        self.period_by_cycle = period_by_cycle
-        self.freq_by_cycle = freq_by_cycle
-        self.amp_by_cycle = amp_by_cycle
-        self.duty_by_cycle = duty_by_cycle
-        self.phase_by_cycle = phase_by_cycle
-
-        # These match the metadata names but show they are the processed output
-        self.organized_freqs = all_freqs_arr      # instead of self.all_freqs
-        self.organized_curves = all_curves_arr    # instead of self.all_curves
-        self.organized_stimduties = all_stimduties_arr
-        self.organized_stimphases = all_stimphases_arr
+    # --- 6. STORE RESULTS (For BOTH Motor Control & H5 Metadata) ---
+        self.period_by_cycle = 1.0 / freq_by_cycle
+        self.freq_by_cycle   = freq_by_cycle
+        self.amp_by_cycle    = amp_by_cycle
         
-        self.all_degs = all_degs
-        self.stimburstdur = stimburstdur
-        self.all_strains = all_strains
-        self.all_strainrates = all_strainrates
+        # Use the original names your motor controller expects
+        self.all_degs        = all_degs_arr
+        self.all_strains     = all_strains_arr
+        self.all_strainrates = all_strainrates_arr
+        self.duty_by_cycle  = all_stimduties_arr
+        self.phase_by_cycle = all_stimphases_arr
+        # Keep the timeline mapping for R
+        self.strain_by_cycle     = strain_by_cycle
+        self.strainrate_by_cycle = strainrate_by_cycle
+
+        # Organized outputs for MetaData (matches the shuffled experiment order)
+        self.organized_freqs       = all_freqs_arr
+        self.organized_curves      = all_curves_arr
+        self.organized_strains     = all_strains_arr
+        self.organized_strainrates = all_strainrates_arr
+        self.organized_stimduties  = all_stimduties_arr
+        self.organized_stimphases = all_stimphases_arr
+        self.is_stim_cycle = is_stim_cycle
+        self.stimburstdur = stimburstdur    
+        # Create an array [0, 0, ..., 1, 1, ..., N, N]
+        # len(all_freqs_arr) is the number of randomized trials
+        step_indices = np.arange(len(all_freqs_arr))
+        step_by_cycle = np.repeat(step_indices, cycles_per_step)
+
+        # Add padding for the "end cycles" (label them as a special step, e.g., -1 or max+1)
+        padding_steps = np.full(n_end_cycles, -1) 
+        self.step_by_cycle = np.concatenate((step_by_cycle, padding_steps))
+                
 
     def record_motor_signal(self, t, angle, anglevel, tnorm=None):
         self.samplefreq = round(1.0 / (t[1] - t[0]))
@@ -962,3 +994,36 @@ class Bender:
         for key, value in kwargs.items():
             setattr(self, key, value)
             print(f"  Stored: {key} = {value}")
+
+    def make_cycle_tags(self):
+   
+        # 1. Total samples from your data matrix [samples, channels]
+        total_pts = self.aidata.shape[0]
+        cycle_tag = np.full(total_pts, -1, dtype=int) # Initialize all as -1 (Pre/Post)
+        
+        # 2. Convert Pre-Stim Time to Points
+        pre_time = abs(getattr(self, 'prestim_time', 0)) 
+        pre_pts = int(pre_time * self.samplefreq)
+        
+        # 3. Tag Active Cycles (Starting at 0 to match 22-element metadata)
+        # We start 'current_pos' after the pre_pts (which remain -1)
+        current_pos = pre_pts
+        
+        # Using 'freq_by_cycle' which you already organized
+        for i, freq in enumerate(self.freq_by_cycle):
+            cycle_num = i  # 0, 1, 2... 21
+            pts = int(round(self.samplefreq / freq))
+            end_pos = current_pos + pts
+            
+            # Safety check: don't overshoot
+            if end_pos > total_pts: 
+                end_pos = total_pts
+                
+            cycle_tag[current_pos:end_pos] = cycle_num
+            current_pos = end_pos
+            
+            if current_pos >= total_pts: 
+                break
+                
+        # Store it for the H5 saver
+        self.cycle_index_history = cycle_tag
