@@ -16,10 +16,10 @@ S1side = 'left' # Double check stimulator channel 1 side!
 S2side = 'right'
 
 # --- ASSIGN DAQ and Motor Parameters ---
-samplefreq = 1000.0   # DAQ sample frequency
-outputfreq = 60000.0 # DAQ output frequency
-stepsperrev = 1600    # Motor steps per revolution (e.g., 1/8 microstepping)
-gear_ratio = 5 # Gear ratio of the motor (e.g., 5:1 means 5 motor revolutions = 1 output revolution). Depends on gear box!
+daq_ai_sample_rate_hz = 1000.0   # DAQ AI + encoder sample clock (Hz)
+daq_ao_do_sample_rate_hz = 60000.0  # DAQ AO stim + DO motor stream (Hz)
+motor_full_steps_per_rev = 1600  # Motor steps per revolution (e.g., 1/8 microstepping)
+motor_gear_ratio = 5  # e.g., 5:1 — motor revolutions per one output revolution (gearbox)
 # --- ASSIGN DAQ Hardware Ports ---
 stim_channels = ["ao0", "ao1"]
 motor_port = "port0"
@@ -50,7 +50,10 @@ input_channel_names = SG_name + sono_name #+ stim_monitor_name
 
 # --- Advanced / Stimulation Timing ---
 amp_step_vel = 10 
-encoder_counts_per_rev = 10000 # E6 optical encoder (1000 PPR)
+encoder_pulses_per_rev = 10000  # E6 optical encoder (NI-DAQ: pulses_per_rev)
+
+# Protocol ramps: 'linear' or 'exponential'. For 'exponential', set bender.velocity_exponent in the run notebook (default 1.0 in Bender.__init__).
+ramp_mode_default = 'linear'
 
 # --- Time Buffers ---
 waitbefore = 3.0 # Seconds to wait before bending after stimulation starts
@@ -67,11 +70,11 @@ poststim_time = 2               # Time *after* end of bending
 # This dictionary is used by the HDF5 saver to label your data for R analysis.
 units = {
     # Hardware & Sampling
-    'samplefreq': 'Hz',
-    'outputfreq': 'Hz',
-    'stepsperrev': 'steps/rev',
-    'gear_ratio': 'multiplier',
-    'encoder_counts_per_rev': 'counts/rev',
+    'daq_ai_sample_rate_hz': 'Hz',
+    'daq_ao_do_sample_rate_hz': 'Hz',
+    'motor_full_steps_per_rev': 'steps/rev',
+    'motor_gear_ratio': 'multiplier',
+    'encoder_pulses_per_rev': 'pulses/rev',
     
     # Timing & Buffers
     'waitbefore': 'seconds',
@@ -102,7 +105,18 @@ units = {
     'S2volts': 'Volts',
     'stim_pulse_rate': 'Hz',
     'all_stimduties': 'fraction_of_cycle',
-    'all_stimphases': 'fraction_of_cycle'
+    'all_stimphases': 'fraction_of_cycle',
+    'velocity_exponent': 'dimensionless',
+    'protocol': 'string',
+    'test_type': 'string',
+    'frequency_hz': 'Hz',
+    'curvature_1_per_m': '1/m',
+    'motion_duration_s': 'seconds',
+    'dynamic_movedur_s': 'seconds',
+    'amplitude_frequency_exponent': 'dimensionless',
+    'step_change_blocks': 'count',
+    'step_change_total_cycles': 'count',
+    'dclamp_mm': 'mm',
 }
 
 unit_rules = {

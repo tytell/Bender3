@@ -25,6 +25,69 @@ import xml.etree.ElementTree as ElementTree
 
 import h5py
 
+
+def _normalize_start_end(x):
+    """Accept float or sequence [start, end]; return (start, end)."""
+    if x is None:
+        return None
+    if np.isscalar(x):
+        xf = float(x)
+        return xf, xf
+    arr = np.asarray(x, dtype=float).reshape(-1)
+    if arr.size == 0:
+        raise ValueError("nominal frequency/curvature must be non-empty")
+    if arr.size == 1:
+        v = float(arr[0])
+        return v, v
+    return float(arr[0]), float(arr[-1])
+
+
+def _ramp_progress(u, ramp_mode, velocity_exponent):
+    """Map normalized time u in [0,1] to progress in [0,1]."""
+    u = np.clip(np.asarray(u, dtype=float), 0.0, 1.0)
+    if ramp_mode is None or ramp_mode == 'linear':
+        return u
+    if ramp_mode == 'exponential':
+        exp_x = float(velocity_exponent)
+        if abs(exp_x) < 1e-12:
+            return u
+        den = np.exp(np.clip(exp_x, -50.0, 50.0)) - 1.0
+        if abs(den) < 1e-12:
+            return u
+        exu = np.clip(exp_x * u, -50.0, 50.0)
+        return (np.exp(exu) - 1.0) / den
+    raise ValueError(f"Unknown ramp_mode: {ramp_mode!r}")
+
+
+def _scalar_or_pair(f0, f1):
+    """Single float if endpoints match, else [start, end] (Hz or 1/m)."""
+    a, b = float(f0), float(f1)
+    return a if abs(b - a) < 1e-12 else [a, b]
+
+
+class MasterLogger:
+    """Accumulates protocol metadata for HDF5 export (merge into saver attrs/datasets)."""
+
+    def __init__(self):
+        self.entries = {}
+
+    def record(self, **kwargs):
+        for k, v in kwargs.items():
+            if isinstance(v, (np.integer, np.floating)):
+                v = float(v) if getattr(v, 'shape', ()) == () else np.asarray(v).tolist()
+            elif isinstance(v, np.ndarray):
+                v = v.tolist()
+            elif isinstance(v, (list, tuple)) and len(v) == 2 and all(np.isscalar(s) for s in v):
+                v = [float(v[0]), float(v[1])]
+            self.entries[k] = v
+
+    def clear(self):
+        self.entries = {}
+
+    def as_dict(self):
+        return dict(self.entries)
+
+
 class Bender:
     def __init__(self, config_module_name):
         # 1. Dynamically import the python config file
@@ -43,11 +106,11 @@ class Bender:
         self.encoder_chan = cfg.encoder_chan
         self.stim_channels = cfg.stim_channels  
         self.S1stim_chan, self.S2stim_chan = self.stim_channels # Map names for run_experiment and run
-        self.samplefreq = cfg.samplefreq
-        self.outputfreq = cfg.outputfreq
-        self.gear_ratio = cfg.gear_ratio
-        self.stepsperrev = cfg.stepsperrev
-        self.encoder_counts_per_rev = cfg.encoder_counts_per_rev
+        self.daq_ai_sample_rate_hz = cfg.daq_ai_sample_rate_hz
+        self.daq_ao_do_sample_rate_hz = cfg.daq_ao_do_sample_rate_hz
+        self.motor_gear_ratio = cfg.motor_gear_ratio
+        self.motor_full_steps_per_rev = cfg.motor_full_steps_per_rev
+        self.encoder_pulses_per_rev = cfg.encoder_pulses_per_rev
           
           
         # Grab the sensor lists
@@ -79,7 +142,7 @@ class Bender:
          # 4. AUTO-CONFIGURE HARDWARE
         self.set_stim_channels(*self.stim_channels) 
         self.set_motor_channel(self.motor_port)
-        self.set_encoder_channel(self.encoder_chan, counts_per_rev=self.encoder_counts_per_rev)
+        self.set_encoder_channel(self.encoder_chan, encoder_pulses_per_rev=self.encoder_pulses_per_rev)
 
         # 5. NEW: AUTO-LOAD CALIBRATION
         # This uses the method you already wrote!
@@ -89,7 +152,7 @@ class Bender:
             print(f"⚠️ WARNING: Calibration failed to load: {e}")
 
         # 5. Placeholders (to prevent NoneType/0-channel errors)
-        self.t = np.array([0.0, 1.0/self.samplefreq])
+        self.t = np.array([0.0, 1.0/self.daq_ai_sample_rate_hz])
         self.S1stimcmd = np.zeros(len(self.t))
         self.S2stimcmd = np.zeros(len(self.t))
         self.i_total_system = 0.0
@@ -98,7 +161,11 @@ class Bender:
         self.angle = np.array([0.0, 0.0])
         self.anglevel = np.array([0.0, 0.0])
         self.tnorm = np.array([0.0, 0.0])
-        self.amp_step_vel = cfg.amp_step_vel 
+        self.amp_step_vel = cfg.amp_step_vel
+        self.velocity_exponent = 1.0
+        self.ramp_mode_default = getattr(cfg, 'ramp_mode_default', 'linear')
+        self.master_logger = MasterLogger()
+        self.h5_protocol_metadata = {}
 
         # Standard 2D shapes for NI-DAQmx (Channels, Samples)
         self.stimcmdhi = np.zeros((2, 2))
@@ -153,7 +220,7 @@ class Bender:
         self.sono_left_mm = None
         self.sono_right_mm = None
         self.angledata = None
-
+        self.master_logger.clear()
 
         # Now, if the DAQ fails, you won't accidentally save old data!
         # Set input and output names/channels
@@ -163,40 +230,95 @@ class Bender:
         # self.calibration is assumed to be loaded in the notebook using bender.loadCalibration(...)
 
         # General parameters (duration/sample_rate passed from notebook)
-        sample_rate = self.samplefreq
+        sample_rate = self.daq_ai_sample_rate_hz
 
         # Define angle/anglevel/tnorm variables for scope consistency
         angle, anglevel, tnorm = None, None, None
         duration = None #Initialize, but will be set below
 
      # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
-        if test_type == 'dynamic':            
+        if test_type == 'dynamic':
             if self.period_by_cycle is None:
                 raise AttributeError("Dynamic test requires 'period_by_cycle' to be set via organize_cycles first.")
-            
+
             duration = np.sum(self.period_by_cycle)
 
-            angle, anglevel, tnorm, t = self.make_dynamic_cycles(
-                self.period_by_cycle, 
-                self.freq_by_cycle, 
-                self.amp_by_cycle)
-            
-        elif test_type == 'sweep':
-            # Check a SWEEP attribute 
-            if self.duration is None:
-                raise AttributeError("Sweep test requires 'self.duration' to be set in the notebook first.")
+            angle, anglevel, tnorm, t = self.make_cycles_dynamic(
+                self.period_by_cycle,
+                self.freq_by_cycle,
+                self.amp_by_cycle,
+            )
 
-            # Calculate experiment duration
+        elif test_type == 'frequency_sweep':
+            if self.duration is None:
+                raise AttributeError("frequency_sweep requires 'self.duration' to be set in the notebook first.")
+
             duration = self.duration + self.waitbefore + self.waitafter
 
-            angle, anglevel, tnorm, t = self.make_frequency_sweep(
-                self.all_freqs, 
-                self.all_curves, 
-                self.amplitude_frequency_exponent, 
-                self.waitbefore)
+            angle, anglevel, tnorm, t, sweep_freq = self.make_cycles_frequency_sweep(
+                self.all_freqs,
+                self.all_curves,
+                self.amplitude_frequency_exponent,
+                self.duration,
+                self.waitbefore,
+                nominal_frequency=getattr(self, 'sweep_nominal_frequency', None),
+                nominal_curvature=getattr(self, 'sweep_nominal_curvature', None),
+            )
+            self.sweep_instantaneous_freq = sweep_freq
+
+        elif test_type == 'frequency_step':
+            if self.duration is None:
+                raise AttributeError("frequency_step requires 'self.duration' to be set in the notebook first.")
+
+            duration = self.duration + self.waitbefore + self.waitafter
+
+            angle, anglevel, tnorm, t, _ = self.make_cycles_frequency_step(
+                self.all_freqs,
+                self.all_curves,
+                self.duration,
+                self.waitbefore,
+                nominal_frequency=getattr(self, 'step_nominal_frequency', None),
+                nominal_curvature=getattr(self, 'step_nominal_curvature', None),
+            )
+
+        elif test_type == 'curvature_step':
+            if self.duration is None:
+                raise AttributeError("curvature_step requires 'self.duration' to be set in the notebook first.")
+
+            duration = self.duration + self.waitbefore + self.waitafter
+
+            angle, anglevel, tnorm, t, _ = self.make_cycles_curvature_step(
+                self.all_freqs,
+                self.all_curves,
+                self.duration,
+                self.waitbefore,
+                nominal_frequency=getattr(self, 'step_nominal_frequency', None),
+                nominal_curvature=getattr(self, 'step_nominal_curvature', None),
+            )
+
+        elif test_type == 'step_change':
+            freqs = getattr(self, 'step_change_frequencies', None)
+            curves = getattr(self, 'step_change_curves', None)
+            cps = getattr(self, 'step_change_cycles_per_step', None)
+            if freqs is None or curves is None or cps is None:
+                raise AttributeError(
+                    "step_change requires step_change_frequencies, step_change_curves, "
+                    "and step_change_cycles_per_step on the Bender instance."
+                )
+            angle, anglevel, tnorm, t, movedur = self.make_cycles_step_change(
+                freqs,
+                curves,
+                cps,
+                dclamp=getattr(self, 'dclamp', None),
+                amp_step_vel=getattr(self, 'step_change_amp_step_vel', None),
+            )
+            duration = movedur
 
         else:
-            raise ValueError(f"Unknown test type: {test_type}")
+            raise ValueError(
+                f"Unknown test type: {test_type!r} (use 'dynamic', 'frequency_sweep', "
+                f"'frequency_step', 'curvature_step', or 'step_change')"
+            )
 
         # Access parameters for electrical stimuli stored in 'self' (set by organize_cycles)
         stimulation_params = {
@@ -235,11 +357,14 @@ class Bender:
         self.S1stimcmd = S1stimcmd
         self.S2stimcmd = S2stimcmd
 
+        self.master_logger.record(test_type=test_type)
+        self.h5_protocol_metadata = self.master_logger.as_dict()
+
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
         self.make_motor_stepper_pulses(
-                        outputfreq=self.outputfreq, 
-                        gear_ratio=self.gear_ratio, 
-                        stepsperrev=self.stepsperrev
+                        daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
+                        motor_gear_ratio=self.motor_gear_ratio,
+                        motor_full_steps_per_rev=self.motor_full_steps_per_rev
                     )
                             
 
@@ -295,6 +420,7 @@ class Bender:
 
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate):
         start = time.time()
+        self.dclamp = float(dclamp)
         # 1. Build combinations
         combos = []
         for c1 in all_curves:
@@ -395,7 +521,7 @@ class Bender:
                 
 
     def record_motor_signal(self, t, angle, anglevel, tnorm=None):
-        self.samplefreq = round(1.0 / (t[1] - t[0]))
+        self.daq_ai_sample_rate_hz = round(1.0 / (t[1] - t[0]))
 
         self.t = t
         self.angle = angle
@@ -409,6 +535,16 @@ class Bender:
     def record_stim_signal(self, S1stimcmd, S2stimcmd):
         self.S1stimcmd = S1stimcmd
         self.S2stimcmd = S2stimcmd
+
+    def _protocol_log(self, protocol, f0=None, f1=None, c0=None, c1=None, **extra):
+        """Write compact protocol fields: frequency_hz, curvature_1_per_m (float or [lo, hi])."""
+        payload = {'protocol': protocol}
+        if f0 is not None and f1 is not None:
+            payload['frequency_hz'] = _scalar_or_pair(f0, f1)
+        if c0 is not None and c1 is not None:
+            payload['curvature_1_per_m'] = _scalar_or_pair(c0, c1)
+        payload.update(extra)
+        self.master_logger.record(**payload)
 
     def increment_file_name(self, filename):
         m = re.search('(d+).h5', filename)
@@ -430,29 +566,29 @@ class Bender:
         return filename
 
    
-    def make_motor_stepper_pulses(self, outputfreq = 1000,
-                                gear_ratio=5,
-                                stepsperrev=6400.0):
+    def make_motor_stepper_pulses(self, daq_ao_do_sample_rate_hz=1000,
+                                motor_gear_ratio=5,
+                                motor_full_steps_per_rev=6400.0):
 
-        self.outputfreq = outputfreq
-        self.gear_ratio = gear_ratio
+        self.daq_ao_do_sample_rate_hz = daq_ao_do_sample_rate_hz
+        self.motor_gear_ratio = motor_gear_ratio
 
-        tout = np.arange(self.t[0], self.t[-1], 1.0/outputfreq)
+        tout = np.arange(self.t[0], self.t[-1], 1.0/daq_ao_do_sample_rate_hz)
 
         poshi = interpolate.interp1d(self.t, self.angle, kind='linear', assume_sorted=True, bounds_error=False,
                                     fill_value=0.0)(tout)
         velhi = interpolate.interp1d(self.t, self.anglevel, kind='linear', assume_sorted=True, bounds_error=False,
                                     fill_value=0.0)(tout)
 
-        poshi *= gear_ratio
-        velhi *= gear_ratio
+        poshi *= motor_gear_ratio
+        velhi *= motor_gear_ratio
 
 
-        if outputfreq == 0 or stepsperrev == 0:
+        if daq_ao_do_sample_rate_hz == 0 or motor_full_steps_per_rev == 0:
             raise ValueError('Problems with parameters')
 
-        stepsize = 360.0 / stepsperrev
-        maxspeed = stepsize * outputfreq / 2
+        stepsize = 360.0 / motor_full_steps_per_rev
+        maxspeed = stepsize * daq_ao_do_sample_rate_hz / 2
 
         if np.any(np.abs(self.anglevel) > maxspeed):
             raise ValueError('Motion is too fast!')
@@ -500,10 +636,10 @@ class Bender:
     def set_motor_channel(self, motor_port):
         self.motor_port = motor_port
 
-    def set_encoder_channel(self, encoder_chan, 
-                            counts_per_rev=10000):
+    def set_encoder_channel(self, encoder_chan,
+                            encoder_pulses_per_rev=10000):
         self.encoder_chan = encoder_chan
-        self.encoder_counts_per_rev = counts_per_rev
+        self.encoder_pulses_per_rev = encoder_pulses_per_rev
 
     def calculate_moi_clamp(self, H, W, D, rho, offset_x, offset_z):
         # Calculates MOI for a single rectangular prism about a global axis 
@@ -589,14 +725,14 @@ class Bender:
 
             # set up the input sample frequency
             # just records as many samples as are in the output
-            analog_in.timing.cfg_samp_clk_timing(self.samplefreq,
+            analog_in.timing.cfg_samp_clk_timing(self.daq_ai_sample_rate_hz,
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.t))
 
             # set up the encoder channel
             angle_in.ci_channels.add_ci_ang_encoder_chan(encoder_chan, 'encoder',
-                                    pulses_per_rev=self.encoder_counts_per_rev)
-            angle_in.timing.cfg_samp_clk_timing(self.samplefreq,
+                                    pulses_per_rev=self.encoder_pulses_per_rev)
+            angle_in.timing.cfg_samp_clk_timing(self.daq_ai_sample_rate_hz,
                                                 source="ai/SampleClock",
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.t))
@@ -608,7 +744,7 @@ class Bender:
             # it will run much faster than the input channels, because the digital output is linked
             # to it, and it needs to run fast so that the pulses 
             # are output fast enough for smooth motion
-            analog_out.timing.cfg_samp_clk_timing(self.outputfreq,
+            analog_out.timing.cfg_samp_clk_timing(self.daq_ao_do_sample_rate_hz,
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.tout))    
 
@@ -619,7 +755,7 @@ class Bender:
             # set up the digital output channel
             digital_out.do_channels.add_do_chan(motor_port, 'motor')
             # use the analog output clock for digital output timing
-            digital_out.timing.cfg_samp_clk_timing(self.outputfreq, 
+            digital_out.timing.cfg_samp_clk_timing(self.daq_ao_do_sample_rate_hz, 
                                                 source = "ao/SampleClock",
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.tout))
@@ -663,71 +799,139 @@ class Bender:
         return(self.aidata)
 
 #
-    def make_frequency_sweep(self, all_freqs, all_curves, amplitude_frequency_exponent, duration, waitbefore):
-        # Generates the log sweep angle and anglevel signals based on input params
-        samplefreq = self.samplefreq
-        
-        # Define start and end frequencies for the sweep based on all_freqs (first and last values)
-        startfreq = all_freqs[0]
-        endfreq = all_freqs[-1]
+    def _uniform_cycles_from_duration(self, duration, f0, amp_deg):
+        """Build period/freq/amp arrays so ``make_cycles_dynamic`` runs uniform f and amplitude for ~``duration`` s."""
+        n = max(1, int(round(float(duration) * float(f0))))
+        p = 1.0 / float(f0)
+        period_by_cycle = np.full(n, p, dtype=float)
+        freq_by_cycle = np.full(n, float(f0), dtype=float)
+        amp_by_cycle = np.full(n, float(amp_deg), dtype=float)
+        return period_by_cycle, freq_by_cycle, amp_by_cycle
 
-
-        # Calculate the total duration needed for the sweep + wait times
-        total_duration = duration + waitbefore + self.waitafter
-        t = np.arange(0, total_duration, 1.0 / samplefreq)
-        t -= waitbefore # Shift time so the movement starts at t=0
-
-        lnk = 1.0/duration * (np.log(endfreq) - np.log(startfreq))
-
-        freq = startfreq * np.exp(t * lnk)
-
-        tnorm = 2*np.pi*startfreq * (np.exp(t * lnk) - 1) / lnk
-
-        tnorm[t < 0] = -1
-        tnorm[t > duration] = np.ceil(np.max(tnorm))
-
-        A0 = startfreq ** amplitude_frequency_exponent
-
-        angle = amplitude / A0 * np.power(freq, amplitude_frequency_exponent) * np.sin(tnorm)
-        anglevel = amplitude / A0 * np.exp(amplitude_frequency_exponent * t * lnk) * lnk * \
-            (amplitude_frequency_exponent * np.sin(tnorm) + 2*np.pi/lnk * freq * np.cos(tnorm))
-
-        freq[t < 0] = np.nan
-        freq[t > duration] = np.nan
-
-        angle[t < 0] = 0
-        angle[t > duration] = 0
-
-        anglevel[t < 0] = 0
-        anglevel[t > duration] = 0
-
-        isramp = (t >= duration) & (t < duration+0.5)
-
-        # Ensure k calculation handles array indexing correctly
-        k_index = np.argmax(t >= (waitbefore + duration))
-        pend = angle[k_index]
-        velend = (0 - pend) / 0.5
-        ramp = pend + (t[isramp] - t[k_index])*velend
-
-        np.place(anglevel, isramp, velend)
-        np.place(angle, isramp, ramp)
-
+    def make_cycles_frequency_step(self, all_freqs, all_curves, duration, waitbefore,
+                                   nominal_frequency=None, nominal_curvature=None):
+        dclamp = getattr(self, 'dclamp', None)
+        if dclamp is None:
+            raise ValueError("frequency_step requires self.dclamp (set via organize_cycles).")
+        fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
+        cq_src = nominal_curvature if nominal_curvature is not None else all_curves
+        f0, f1 = _normalize_start_end(fq_src)
+        c0, c1 = _normalize_start_end(cq_src)
+        if abs(f1 - f0) > 1e-9 or abs(c1 - c0) > 1e-9:
+            raise ValueError(
+                "frequency_step expects a single Hz and 1/m setpoint (float or equal [start, end])."
+            )
+        amp_deg = np.rad2deg(c0 * dclamp / 1000.0)
+        period_by_cycle, freq_by_cycle, amp_by_cycle = self._uniform_cycles_from_duration(duration, f0, amp_deg)
+        saved_degs, saved_freqs = self.all_degs, self.all_freqs
+        self.all_degs = np.array([amp_deg, amp_deg], dtype=float)
+        self.all_freqs = np.array([f0, f0], dtype=float)
+        try:
+            angle, anglevel, tnorm, t = self.make_cycles_dynamic(
+                period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=False)
+        finally:
+            self.all_degs, self.all_freqs = saved_degs, saved_freqs
+        movedur = float(np.sum(period_by_cycle))
+        freq = np.full_like(t, np.nan, dtype=float)
+        mask = (t >= 0) & (t < movedur)
+        freq[mask] = f0
+        self._protocol_log('frequency_step', f0, f0, c0, c0, motion_duration_s=float(duration))
         return angle, anglevel, tnorm, freq, t
 
-    # Assuming this method exists inside a class definition
-    def make_dynamic_cycles(self, period_by_cycle, freq_by_cycle, amp_by_cycle):
+    def make_cycles_curvature_step(self, all_freqs, all_curves, duration, waitbefore,
+                                   nominal_frequency=None, nominal_curvature=None):
+        dclamp = getattr(self, 'dclamp', None)
+        if dclamp is None:
+            raise ValueError("curvature_step requires self.dclamp (set via organize_cycles).")
+        fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
+        cq_src = nominal_curvature if nominal_curvature is not None else all_curves
+        f0, f1 = _normalize_start_end(fq_src)
+        c0, c1 = _normalize_start_end(cq_src)
+        if abs(f1 - f0) > 1e-9 or abs(c1 - c0) > 1e-9:
+            raise ValueError(
+                "curvature_step expects a single Hz and 1/m setpoint (float or equal [start, end])."
+            )
+        amp_deg = np.rad2deg(c0 * dclamp / 1000.0)
+        period_by_cycle, freq_by_cycle, amp_by_cycle = self._uniform_cycles_from_duration(duration, f0, amp_deg)
+        saved_degs, saved_freqs = self.all_degs, self.all_freqs
+        self.all_degs = np.array([amp_deg, amp_deg], dtype=float)
+        self.all_freqs = np.array([f0, f0], dtype=float)
+        try:
+            angle, anglevel, tnorm, t = self.make_cycles_dynamic(
+                period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=False)
+        finally:
+            self.all_degs, self.all_freqs = saved_degs, saved_freqs
+        movedur = float(np.sum(period_by_cycle))
+        freq = np.full_like(t, np.nan, dtype=float)
+        mask = (t >= 0) & (t < movedur)
+        freq[mask] = f0
+        self._protocol_log('curvature_step', f0, f0, c0, c0, motion_duration_s=float(duration))
+        return angle, anglevel, tnorm, freq, t
+
+    def make_cycles_frequency_sweep(self, all_freqs, all_curves, amplitude_frequency_exponent, duration, waitbefore,
+                                    nominal_frequency=None, nominal_curvature=None):
+        """Log-frequency sweep with curvature-based amplitude scaling (exponent matches legacy sweep)."""
+        daq_ai_hz = self.daq_ai_sample_rate_hz
+        dclamp = getattr(self, 'dclamp', None)
+        if dclamp is None:
+            raise ValueError("make_cycles_frequency_sweep requires self.dclamp (set via organize_cycles).")
+        fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
+        cq_src = nominal_curvature if nominal_curvature is not None else all_curves
+        f0, f1 = _normalize_start_end(fq_src)
+        c0, c1 = _normalize_start_end(cq_src)
+
+        total_duration = duration + waitbefore + self.waitafter
+        t = np.arange(0, total_duration, 1.0 / daq_ai_hz)
+        t -= waitbefore
+        movedur = float(duration)
+        startfreq, endfreq = f0, f1
+        lnk = 1.0 / movedur * (np.log(endfreq) - np.log(startfreq))
+        freq = startfreq * np.exp(t * lnk)
+        tnorm = 2 * np.pi * startfreq * (np.exp(t * lnk) - 1) / lnk
+        tnorm[t < 0] = -1
+        tnorm[t > movedur] = np.ceil(np.max(tnorm))
+        A0 = startfreq ** amplitude_frequency_exponent
+        amplitude = np.rad2deg(c0 * dclamp / 1000.0)
+        angle = amplitude / A0 * np.power(freq, amplitude_frequency_exponent) * np.sin(tnorm)
+        anglevel = amplitude / A0 * np.exp(amplitude_frequency_exponent * t * lnk) * lnk * (
+            amplitude_frequency_exponent * np.sin(tnorm) + 2 * np.pi / lnk * freq * np.cos(tnorm))
+        freq[t < 0] = np.nan
+        freq[t > movedur] = np.nan
+        angle[t < 0] = 0
+        angle[t > movedur] = 0
+        anglevel[t < 0] = 0
+        anglevel[t > movedur] = 0
+        isramp = (t >= movedur) & (t < movedur + 0.5)
+        k_index = np.argmax(t >= (waitbefore + movedur))
+        pend = angle[k_index]
+        velend = (0 - pend) / 0.5
+        np.place(anglevel, isramp, velend)
+        np.place(angle, isramp, pend + (t[isramp] - t[k_index]) * velend)
+
+        self._protocol_log(
+            'frequency_sweep', f0, f1, c0, c1,
+            motion_duration_s=movedur,
+            amplitude_frequency_exponent=float(amplitude_frequency_exponent),
+        )
+
+        self.t = t
+        self.tnorm = tnorm
+        return angle, anglevel, tnorm, freq, t
+
+    def make_cycles_dynamic(self, period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=True):
         """
         Generates signals for dynamic tests with a custom sequence of frequencies and amplitudes.
-        
+
         Includes amplitude ramps during step changes and start/end ramps.
-        
+
         Args:
             period_by_cycle (list/array): Duration of each cycle in seconds.
             freq_by_cycle (list/array): Frequency for each cycle (Hz).
-            amp_by_cycle (list/array): Amplitude for each cycle.
+            amp_by_cycle (list/array): Amplitude for each cycle (degrees).
+            record_protocol: If False, skip MasterLogger protocol entry (used when a wrapper logs).
 
         Returns:
-            tuple: (angle, anglevel, tnorm, freq) NumPy arrays.
+            tuple: (angle, anglevel, tnorm, t) NumPy arrays.
         """
 
         # 1. KILL THE OLD CLOCK (This is the most common 'hang' source)
@@ -740,14 +944,14 @@ class Bender:
         waitafter = self.waitafter
         rampdur = self.rampdur
         amp_step_vel = self.amp_step_vel
-        samplefreq = self.samplefreq # <--- Use the value from the instance
+        daq_ai_hz = self.daq_ai_sample_rate_hz
         all_degs = self.all_degs # Used for start/end ramps
         all_freqs = self.all_freqs # Used for start/end ramps
 
         # Calculate timings and durations
         movedur = np.sum(period_by_cycle)
         totaldur = waitbefore + movedur + waitafter
-        t = np.arange(0, totaldur, 1.0 / samplefreq)
+        t = np.arange(0, totaldur, 1.0 / daq_ai_hz)
         t -= waitbefore # Shift time so the movement starts at t=0
 
         # Generate the base signals
@@ -802,13 +1006,86 @@ class Bender:
         anglevel = np.zeros_like(angle)
 
         # DOUBLE CHECK: Avoid calculating velocity for the very first and last point
-        anglevel[1:-1] = (angle[2:] - angle[:-2]) * (samplefreq / 2.0)
-        
+        anglevel[1:-1] = (angle[2:] - angle[:-2]) * (daq_ai_hz / 2.0)
+
         self.t = t
         self.tnorm = tnorm
 
-        # Return all generated signals
+        if record_protocol:
+            lf0, lf1 = float(freq_by_cycle[0]), float(freq_by_cycle[-1])
+            dc = getattr(self, 'dclamp', None)
+            dyn_extra = {'dynamic_movedur_s': float(movedur)}
+            if dc is not None:
+                lc0 = float(np.deg2rad(amp_by_cycle[0]) * 1000.0 / dc)
+                lc1 = float(np.deg2rad(amp_by_cycle[-1]) * 1000.0 / dc)
+                self._protocol_log('dynamic', lf0, lf1, lc0, lc1, **dyn_extra)
+            else:
+                self.master_logger.record(
+                    protocol='dynamic',
+                    frequency_hz=_scalar_or_pair(lf0, lf1),
+                    **dyn_extra,
+                )
+
         return angle, anglevel, tnorm, t
+
+    def make_cycles_step_change(self, frequencies, curves, cycles_per_step, dclamp=None,
+                                amp_step_vel=None, record_protocol=True):
+        """
+        Step-change protocol (``step_change.ipynb``): each block has one (frequency, curvature)
+        pair repeated ``cycles_per_step[i]`` times. Builds per-cycle arrays and delegates to
+        :meth:`make_cycles_dynamic`.
+
+        Arrays ``frequencies``, ``curves``, and ``cycles_per_step`` must have the same length
+        (one row per step in the schedule).
+
+        Also assigns ``self.freq_by_cycle``, ``self.amp_by_cycle``, and ``self.period_by_cycle``
+        to the expanded per-cycle vectors for stimulation bookkeeping.
+        """
+        dc = float(dclamp) if dclamp is not None else getattr(self, 'dclamp', None)
+        if dc is None:
+            raise ValueError("make_cycles_step_change requires dclamp (argument or self.dclamp).")
+        freqs = np.asarray(frequencies, dtype=float).reshape(-1)
+        curv = np.asarray(curves, dtype=float).reshape(-1)
+        cps = np.asarray(cycles_per_step, dtype=int).reshape(-1)
+        if not (len(freqs) == len(curv) == len(cps)):
+            raise ValueError("frequencies, curves, and cycles_per_step must have the same length.")
+        allfreqs = np.concatenate([np.full((int(c),), f, dtype=float) for c, f in zip(cps, freqs)])
+        allcurves = np.concatenate([np.full((int(c),), k, dtype=float) for c, k in zip(cps, curv)])
+        period_by_cycle = 1.0 / allfreqs
+        freq_by_cycle = allfreqs
+        amp_by_cycle = np.rad2deg(allcurves * (dc / 1000.0))
+
+        self.period_by_cycle = period_by_cycle
+        self.freq_by_cycle = freq_by_cycle
+        self.amp_by_cycle = amp_by_cycle
+
+        saved_degs = self.all_degs
+        saved_freqs = self.all_freqs
+        saved_v = self.amp_step_vel
+        try:
+            self.all_degs = np.array([amp_by_cycle[0], amp_by_cycle[-1]], dtype=float)
+            self.all_freqs = np.array([freq_by_cycle[0], freq_by_cycle[-1]], dtype=float)
+            if amp_step_vel is not None:
+                self.amp_step_vel = float(amp_step_vel)
+            angle, anglevel, tnorm, t = self.make_cycles_dynamic(
+                period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=False)
+        finally:
+            self.all_degs = saved_degs
+            self.all_freqs = saved_freqs
+            self.amp_step_vel = saved_v
+
+        movedur = float(np.sum(period_by_cycle))
+        if record_protocol:
+            f_lo, f_hi = float(np.min(allfreqs)), float(np.max(allfreqs))
+            c_lo, c_hi = float(np.min(allcurves)), float(np.max(allcurves))
+            self._protocol_log(
+                'step_change', f_lo, f_hi, c_lo, c_hi,
+                motion_duration_s=movedur,
+                step_change_blocks=int(len(freqs)),
+                step_change_total_cycles=int(len(allfreqs)),
+                dclamp_mm=float(dc),
+            )
+        return angle, anglevel, tnorm, t, movedur
 
     def make_stimuli(self, is_stim=None, phase_by_cycle=None, stim_pulse_rate=None, 
                       prestim_time=None, poststim_time=None, prepoststim_dur=None, 
@@ -959,7 +1236,7 @@ class Bender:
         raw_torque = raw_data_dict[self.bending_axis_sensor]
         
         # alpha = angular acceleration
-        alpha = np.gradient(self.anglevel) * self.samplefreq
+        alpha = np.gradient(self.anglevel) * self.daq_ai_sample_rate_hz
         
         # The Correction
         true_torque = raw_torque - (self.i_total_system * alpha)
@@ -977,7 +1254,7 @@ class Bender:
             f"Direction:   POSITIVE = {self.positive_motor_direction.upper()}",
             "-" * 50,
             f"Cal File:    {self.forcetorque_calibration_file}",
-            f"Sample Rate: {self.samplefreq} Hz",
+            f"Sample Rate: {self.daq_ai_sample_rate_hz} Hz",
             f"Ramp:        {self.rampdur} s",
             "="*50
         ]
@@ -1003,7 +1280,7 @@ class Bender:
         
         # 2. Convert Pre-Stim Time to Points
         pre_time = abs(getattr(self, 'prestim_time', 0)) 
-        pre_pts = int(pre_time * self.samplefreq)
+        pre_pts = int(pre_time * self.daq_ai_sample_rate_hz)
         
         # 3. Tag Active Cycles (Starting at 0 to match 22-element metadata)
         # We start 'current_pos' after the pre_pts (which remain -1)
@@ -1012,7 +1289,7 @@ class Bender:
         # Using 'freq_by_cycle' which you already organized
         for i, freq in enumerate(self.freq_by_cycle):
             cycle_num = i  # 0, 1, 2... 21
-            pts = int(round(self.samplefreq / freq))
+            pts = int(round(self.daq_ai_sample_rate_hz / freq))
             end_pos = current_pos + pts
             
             # Safety check: don't overshoot
