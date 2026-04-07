@@ -43,7 +43,13 @@ def _normalize_start_end(x):
 
 
 def _ramp_progress(u, ramp_mode, velocity_exponent):
-    """Map normalized time u in [0,1] to progress in [0,1]."""
+    """Map normalized time u in [0,1] to progress in [0,1].
+
+    NOTE: ``velocity_exponent`` is NOT ``amplitude_frequency_exponent``. This helper only
+    warps *when* along a generic ramp (ease-in/out of normalized time). It does not set
+    how bend amplitude scales with frequency during a log-frequency sweep; see
+    :meth:`Bender.make_cycles_frequency_sweep` for that.
+    """
     u = np.clip(np.asarray(u, dtype=float), 0.0, 1.0)
     if ramp_mode is None or ramp_mode == 'linear':
         return u
@@ -162,10 +168,19 @@ class Bender:
         self.anglevel = np.array([0.0, 0.0])
         self.tnorm = np.array([0.0, 0.0])
         self.amp_step_vel = cfg.amp_step_vel
+        # NOTE: velocity_exponent vs amplitude_frequency_exponent — different physics:
+        #   velocity_exponent feeds _ramp_progress (exponential ramp_mode): warps normalized
+        #   time u∈[0,1]; does not appear in the frequency-sweep sine law.
+        #   amplitude_frequency_exponent is only for make_cycles_frequency_sweep: amplitude
+        #   scales as (f/f_start)^α while f sweeps (α=0 constant amp, α=-1 constant peak |ω|).
         self.velocity_exponent = 1.0
         self.ramp_mode_default = getattr(cfg, 'ramp_mode_default', 'linear')
         self.master_logger = MasterLogger()
         self.h5_protocol_metadata = {}
+        # Sweep / step motion length (seconds); set via update_metadata(duration=...) or bender.duration = ...
+        self.duration = None
+        self.amplitude_frequency_exponent = None
+        self.test_type = None  # set in notebook via bender.test_type + update_metadata
 
         # Standard 2D shapes for NI-DAQmx (Channels, Samples)
         self.stimcmdhi = np.zeros((2, 2))
@@ -211,10 +226,11 @@ class Bender:
         intercept = mm_low - (slope * v_low)
         return (raw_volts * slope) + intercept
 
-    def run_experiment(self, test_type = "dynamic"):
+    def run_experiment(self, test_type=None):
+        if test_type is None:
+            test_type = getattr(self, 'test_type', None) or 'dynamic'
 
-
-       # --- THE CLEANING CREW ---
+        # --- THE CLEANING CREW ---
         self.aidata = None
         self.forcetorque = None
         self.sono_left_mm = None
@@ -236,7 +252,7 @@ class Bender:
         angle, anglevel, tnorm = None, None, None
         duration = None #Initialize, but will be set below
 
-     # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
+        # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
         if test_type == 'dynamic':
             if self.period_by_cycle is None:
                 raise AttributeError("Dynamic test requires 'period_by_cycle' to be set via organize_cycles first.")
@@ -255,7 +271,7 @@ class Bender:
 
             duration = self.duration + self.waitbefore + self.waitafter
 
-            angle, anglevel, tnorm, t, sweep_freq = self.make_cycles_frequency_sweep(
+            angle, anglevel, tnorm, sweep_freq, t = self.make_cycles_frequency_sweep(
                 self.all_freqs,
                 self.all_curves,
                 self.amplitude_frequency_exponent,
@@ -272,7 +288,7 @@ class Bender:
 
             duration = self.duration + self.waitbefore + self.waitafter
 
-            angle, anglevel, tnorm, t, _ = self.make_cycles_frequency_step(
+            angle, anglevel, tnorm, _, t = self.make_cycles_frequency_step(
                 self.all_freqs,
                 self.all_curves,
                 self.duration,
@@ -287,7 +303,7 @@ class Bender:
 
             duration = self.duration + self.waitbefore + self.waitafter
 
-            angle, anglevel, tnorm, t, _ = self.make_cycles_curvature_step(
+            angle, anglevel, tnorm, _, t = self.make_cycles_curvature_step(
                 self.all_freqs,
                 self.all_curves,
                 self.duration,
@@ -421,6 +437,16 @@ class Bender:
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate):
         start = time.time()
         self.dclamp = float(dclamp)
+        if not np.isfinite(cycles_per_step) or cycles_per_step <= 0:
+            raise ValueError(
+                f"organize_cycles: cycles_per_step must be a positive finite number; got {cycles_per_step!r}."
+            )
+        cycles_per_step = int(cycles_per_step)
+        if not np.isfinite(n_end_cycles) or n_end_cycles < 0:
+            raise ValueError(
+                f"organize_cycles: n_end_cycles must be a non-negative finite integer; got {n_end_cycles!r}."
+            )
+        n_end_cycles = int(n_end_cycles)
         # 1. Build combinations
         combos = []
         for c1 in all_curves:
@@ -486,17 +512,17 @@ class Bender:
         stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
         stimburstdur[is_stim_cycle == False] = 0
 
-    # --- 6. STORE RESULTS (For BOTH Motor Control & H5 Metadata) ---
+        # --- 6. STORE RESULTS (For BOTH Motor Control & H5 Metadata) ---
         self.period_by_cycle = 1.0 / freq_by_cycle
         self.freq_by_cycle   = freq_by_cycle
         self.amp_by_cycle    = amp_by_cycle
-        
+
         # Use the original names your motor controller expects
         self.all_degs        = all_degs_arr
         self.all_strains     = all_strains_arr
         self.all_strainrates = all_strainrates_arr
-        self.duty_by_cycle  = all_stimduties_arr
-        self.phase_by_cycle = all_stimphases_arr
+        self.duty_by_cycle   = duty_by_cycle
+        self.phase_by_cycle  = phase_by_cycle
         # Keep the timeline mapping for R
         self.strain_by_cycle     = strain_by_cycle
         self.strainrate_by_cycle = strainrate_by_cycle
@@ -521,16 +547,38 @@ class Bender:
                 
 
     def record_motor_signal(self, t, angle, anglevel, tnorm=None):
-        self.daq_ai_sample_rate_hz = round(1.0 / (t[1] - t[0]))
+        t_arr = np.asarray(t, dtype=float)
+        if t_arr.ndim != 1:
+            raise ValueError(
+                f"record_motor_signal: t must be a 1-D sequence; got shape {t_arr.shape}."
+            )
+        if t_arr.size < 2:
+            raise ValueError(
+                "record_motor_signal: t must have at least 2 samples to infer dt. "
+                "This usually means make_cycles_* produced an empty or single-sample timeline "
+                "(check duration, waitbefore/waitafter, daq_ai_sample_rate_hz, and that all "
+                "cycle frequencies are finite and > 0)."
+            )
+        if not np.all(np.isfinite(t_arr)):
+            raise ValueError(
+                "record_motor_signal: t contains NaN or Inf. "
+                "Check for zero/invalid Hz in all_freqs (curvature_step / dynamic) or non-finite motion duration."
+            )
+        dt = float(t_arr[1] - t_arr[0])
+        if not np.isfinite(dt) or dt <= 0:
+            raise ValueError(
+                f"record_motor_signal: invalid spacing dt = t[1]-t[0] = {dt!r} (need finite dt > 0)."
+            )
+        self.daq_ai_sample_rate_hz = round(1.0 / dt)
 
-        self.t = t
-        self.angle = angle
-        self.anglevel = anglevel
+        self.t = t_arr
+        self.angle = np.asarray(angle, dtype=float)
+        self.anglevel = np.asarray(anglevel, dtype=float)
 
         if tnorm is None:
-            self.tnorm = copy(t)
+            self.tnorm = copy(t_arr)
         else:
-            self.tnorm = tnorm
+            self.tnorm = np.asarray(tnorm, dtype=float)
     
     def record_stim_signal(self, S1stimcmd, S2stimcmd):
         self.S1stimcmd = S1stimcmd
@@ -801,18 +849,38 @@ class Bender:
 #
     def _uniform_cycles_from_duration(self, duration, f0, amp_deg):
         """Build period/freq/amp arrays so ``make_cycles_dynamic`` runs uniform f and amplitude for ~``duration`` s."""
-        n = max(1, int(round(float(duration) * float(f0))))
-        p = 1.0 / float(f0)
+        dur = float(duration)
+        fq = float(f0)
+        amp = float(amp_deg)
+        if not np.isfinite(dur) or dur <= 0:
+            raise ValueError(
+                f"_uniform_cycles_from_duration: duration must be finite and > 0 s; got {duration!r}."
+            )
+        if not np.isfinite(fq) or fq <= 0:
+            raise ValueError(
+                f"_uniform_cycles_from_duration: frequency f0 must be finite and > 0 Hz; got {f0!r}. "
+                "Zero or NaN Hz yields Inf/NaN periods and breaks the time axis."
+            )
+        if not np.isfinite(amp):
+            raise ValueError(f"_uniform_cycles_from_duration: amp_deg must be finite; got {amp_deg!r}.")
+        n = max(1, int(round(dur * fq)))
+        p = 1.0 / fq
         period_by_cycle = np.full(n, p, dtype=float)
-        freq_by_cycle = np.full(n, float(f0), dtype=float)
-        amp_by_cycle = np.full(n, float(amp_deg), dtype=float)
+        freq_by_cycle = np.full(n, fq, dtype=float)
+        amp_by_cycle = np.full(n, amp, dtype=float)
         return period_by_cycle, freq_by_cycle, amp_by_cycle
 
     def make_cycles_frequency_step(self, all_freqs, all_curves, duration, waitbefore,
                                    nominal_frequency=None, nominal_curvature=None):
+        """Returns (angle, anglevel, tnorm, freq, t); ``freq`` is NaN outside the motion window."""
         dclamp = getattr(self, 'dclamp', None)
         if dclamp is None:
             raise ValueError("frequency_step requires self.dclamp (set via organize_cycles).")
+        if duration is None:
+            raise ValueError(
+                "frequency_step requires motion duration (seconds). "
+                "Set bender.duration or use update_metadata(duration=...)."
+            )
         fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
         cq_src = nominal_curvature if nominal_curvature is not None else all_curves
         f0, f1 = _normalize_start_end(fq_src)
@@ -820,6 +888,11 @@ class Bender:
         if abs(f1 - f0) > 1e-9 or abs(c1 - c0) > 1e-9:
             raise ValueError(
                 "frequency_step expects a single Hz and 1/m setpoint (float or equal [start, end])."
+            )
+        if not np.isfinite(f0) or f0 <= 0:
+            raise ValueError(
+                "make_cycles_frequency_step needs a positive finite frequency (Hz); "
+                f"got f={f0!r} from all_freqs/nominal_frequency {fq_src!r}."
             )
         amp_deg = np.rad2deg(c0 * dclamp / 1000.0)
         period_by_cycle, freq_by_cycle, amp_by_cycle = self._uniform_cycles_from_duration(duration, f0, amp_deg)
@@ -840,9 +913,15 @@ class Bender:
 
     def make_cycles_curvature_step(self, all_freqs, all_curves, duration, waitbefore,
                                    nominal_frequency=None, nominal_curvature=None):
+        """Returns (angle, anglevel, tnorm, freq, t); ``freq`` is NaN outside the motion window."""
         dclamp = getattr(self, 'dclamp', None)
         if dclamp is None:
             raise ValueError("curvature_step requires self.dclamp (set via organize_cycles).")
+        if duration is None:
+            raise ValueError(
+                "curvature_step requires motion duration (seconds). "
+                "Set bender.duration or use update_metadata(duration=...)."
+            )
         fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
         cq_src = nominal_curvature if nominal_curvature is not None else all_curves
         f0, f1 = _normalize_start_end(fq_src)
@@ -850,6 +929,12 @@ class Bender:
         if abs(f1 - f0) > 1e-9 or abs(c1 - c0) > 1e-9:
             raise ValueError(
                 "curvature_step expects a single Hz and 1/m setpoint (float or equal [start, end])."
+            )
+        if not np.isfinite(f0) or f0 <= 0:
+            raise ValueError(
+                "make_cycles_curvature_step needs a positive finite bending frequency (Hz); "
+                f"got f={f0!r} from all_freqs/nominal_frequency {fq_src!r}. "
+                "Zero or NaN Hz makes cycle periods invalid and produces an empty or NaN time array."
             )
         amp_deg = np.rad2deg(c0 * dclamp / 1000.0)
         period_by_cycle, freq_by_cycle, amp_by_cycle = self._uniform_cycles_from_duration(duration, f0, amp_deg)
@@ -870,11 +955,30 @@ class Bender:
 
     def make_cycles_frequency_sweep(self, all_freqs, all_curves, amplitude_frequency_exponent, duration, waitbefore,
                                     nominal_frequency=None, nominal_curvature=None):
-        """Log-frequency sweep with curvature-based amplitude scaling (exponent matches legacy sweep)."""
+        """Log-frequency sweep with curvature-based amplitude scaling (exponent matches legacy sweep).
+
+        NOTE: ``amplitude_frequency_exponent`` (α) scales *commanded amplitude with instantaneous
+        frequency*: θ ∝ f^α relative to the sweep start frequency. It is unrelated to
+        ``self.velocity_exponent``, which only affects :func:`_ramp_progress` when ramp_mode
+        is ``'exponential'`` (time-warp of generic ramps, not used in this sweep implementation).
+
+        Returns:
+            tuple: (angle, anglevel, tnorm, freq, t) — ``freq`` is NaN outside the motion window.
+        """
         daq_ai_hz = self.daq_ai_sample_rate_hz
         dclamp = getattr(self, 'dclamp', None)
         if dclamp is None:
             raise ValueError("make_cycles_frequency_sweep requires self.dclamp (set via organize_cycles).")
+        if duration is None:
+            raise ValueError(
+                "frequency_sweep requires motion duration (seconds). "
+                "Set bender.duration or use update_metadata(duration=...)."
+            )
+        if amplitude_frequency_exponent is None:
+            raise ValueError(
+                "frequency_sweep requires amplitude_frequency_exponent. "
+                "Set bender.amplitude_frequency_exponent or pass it via update_metadata(...)."
+            )
         fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
         cq_src = nominal_curvature if nominal_curvature is not None else all_curves
         f0, f1 = _normalize_start_end(fq_src)
@@ -916,6 +1020,7 @@ class Bender:
 
         self.t = t
         self.tnorm = tnorm
+        # Order is (angle, anglevel, tnorm, freq, t) — freq has NaNs during waitbefore/waitafter.
         return angle, anglevel, tnorm, freq, t
 
     def make_cycles_dynamic(self, period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=True):
@@ -948,10 +1053,56 @@ class Bender:
         all_degs = self.all_degs # Used for start/end ramps
         all_freqs = self.all_freqs # Used for start/end ramps
 
+        if not np.isfinite(amp_step_vel) or float(amp_step_vel) == 0.0:
+            raise ValueError(
+                "make_cycles_dynamic: amp_step_vel must be finite and non-zero (deg/s scale for inter-cycle ramps)."
+            )
+        period_by_cycle = np.asarray(period_by_cycle, dtype=float).reshape(-1)
+        freq_by_cycle = np.asarray(freq_by_cycle, dtype=float).reshape(-1)
+        amp_by_cycle = np.asarray(amp_by_cycle, dtype=float).reshape(-1)
+        if period_by_cycle.size != freq_by_cycle.size or period_by_cycle.size != amp_by_cycle.size:
+            raise ValueError(
+                "make_cycles_dynamic: period_by_cycle, freq_by_cycle, and amp_by_cycle must have the same length."
+            )
+        if not np.all(np.isfinite(period_by_cycle)) or not np.all(np.isfinite(freq_by_cycle)) or not np.all(np.isfinite(amp_by_cycle)):
+            raise ValueError("make_cycles_dynamic: period_by_cycle, freq_by_cycle, and amp_by_cycle must be finite (no NaN/Inf).")
+        if np.any(freq_by_cycle <= 0):
+            raise ValueError("make_cycles_dynamic: every entry in freq_by_cycle must be > 0 Hz.")
+        if np.any(period_by_cycle <= 0):
+            raise ValueError("make_cycles_dynamic: every entry in period_by_cycle must be > 0 s.")
+        all_freqs = np.asarray(all_freqs, dtype=float).reshape(-1)
+        all_degs = np.asarray(all_degs, dtype=float).reshape(-1)
+        if all_freqs.size < 1 or all_degs.size < 1:
+            raise ValueError(
+                "make_cycles_dynamic: self.all_freqs and self.all_degs must be non-empty (set via organize_cycles)."
+            )
+        if not np.isfinite(all_freqs[0]) or all_freqs[0] <= 0 or not np.isfinite(all_freqs[-1]) or all_freqs[-1] <= 0:
+            raise ValueError(
+                "make_cycles_dynamic: self.all_freqs[0] and [-1] must be finite and > 0 Hz (start/end ramp timing)."
+            )
+
         # Calculate timings and durations
-        movedur = np.sum(period_by_cycle)
-        totaldur = waitbefore + movedur + waitafter
+        movedur = float(np.sum(period_by_cycle))
+        if not np.isfinite(movedur) or movedur <= 0:
+            raise ValueError(
+                f"make_cycles_dynamic: total motion duration from period_by_cycle is invalid ({movedur!r})."
+            )
+        totaldur = float(waitbefore + movedur + waitafter)
+        if not np.isfinite(totaldur) or totaldur <= 0:
+            raise ValueError(
+                f"make_cycles_dynamic: total timeline waitbefore+movedur+waitafter is invalid ({totaldur!r})."
+            )
+        if not np.isfinite(daq_ai_hz) or daq_ai_hz <= 0:
+            raise ValueError(f"make_cycles_dynamic: daq_ai_sample_rate_hz must be finite and > 0; got {daq_ai_hz!r}.")
         t = np.arange(0, totaldur, 1.0 / daq_ai_hz)
+        if t.size < 2:
+            raise ValueError(
+                "make_cycles_dynamic: generated fewer than 2 time samples; increase duration or wait intervals, "
+                "or check daq_ai_sample_rate_hz."
+            )
+        if not np.all(np.isfinite(t)):
+            raise ValueError("make_cycles_dynamic: internal error — time axis t contains non-finite values.")
+        t = np.asarray(t, dtype=float)
         t -= waitbefore # Shift time so the movement starts at t=0
 
         # Generate the base signals

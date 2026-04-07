@@ -52,7 +52,8 @@ input_channel_names = SG_name + sono_name #+ stim_monitor_name
 amp_step_vel = 10 
 encoder_pulses_per_rev = 10000  # E6 optical encoder (NI-DAQ: pulses_per_rev)
 
-# Protocol ramps: 'linear' or 'exponential'. For 'exponential', set bender.velocity_exponent in the run notebook (default 1.0 in Bender.__init__).
+# Protocol ramps: 'linear' or 'exponential' (for code that calls _ramp_progress). This is
+# separate from amplitude_frequency_exponent on the sweep — see NOTE in bender_run / bender_functions.
 ramp_mode_default = 'linear'
 
 # --- Time Buffers ---
