@@ -1,0 +1,97 @@
+# Universal plotting + save for any dispatched test type.
+trial_records = list(getattr(bender, "trial_records", []) or [])
+if len(trial_records) == 0:
+    trial_records = [{
+        "t": np.asarray(getattr(bender, "t", np.array([]))),
+        "angle_cmd": np.asarray(getattr(bender, "angle", np.array([]))),
+        "anglevel_cmd": np.asarray(getattr(bender, "anglevel", np.array([]))),
+        "angle_measured": np.asarray(getattr(bender, "angle_measured", np.array([]))),
+        "S1stimcmd": np.asarray(getattr(bender, "S1stimcmd", np.array([]))),
+        "S2stimcmd": np.asarray(getattr(bender, "S2stimcmd", np.array([]))),
+        "forcetorque": np.asarray(getattr(bender, "forcetorque", np.array([]))),
+        "forcetorque_raw": np.asarray(getattr(bender, "forcetorque_raw", np.array([]))),
+        "forcetorque_corrected": np.asarray(getattr(bender, "forcetorque_corrected", np.array([]))),
+    }]
+
+# Choose which trial to visualize.
+qc_trial_index = int(globals().get("qc_trial_index", len(trial_records) - 1))
+qc_trial_index = max(0, min(qc_trial_index, len(trial_records) - 1))
+rec = trial_records[qc_trial_index]
+
+t = np.asarray(rec.get("t", np.array([])))
+angle_cmd = np.asarray(rec.get("angle_cmd", np.array([])))
+angle_meas = np.asarray(rec.get("angle_measured", np.array([])))
+S1 = np.asarray(rec.get("S1stimcmd", np.array([])))
+S2 = np.asarray(rec.get("S2stimcmd", np.array([])))
+
+# Prefer explicit raw/corrected channels; fallback to forcetorque.
+ft_raw = np.asarray(rec.get("forcetorque_raw", rec.get("forcetorque", np.array([]))))
+ft_corr = np.asarray(rec.get("forcetorque_corrected", np.array([])))
+
+axis_key = str(getattr(bender, "primary_bending_axis", getattr(bender, "bending_axis_sensor", "zTorque"))).lower().strip()
+axis_norm = {"x": "xTorque", "xtorque": "xTorque", "y": "yTorque", "ytorque": "yTorque", "z": "zTorque", "ztorque": "zTorque"}.get(axis_key, "zTorque")
+axis_to_idx = {"xTorque": 3, "yTorque": 4, "zTorque": 5}
+primary_idx = axis_to_idx.get(axis_norm, 5)
+all_torque_axes = ["xTorque", "yTorque", "zTorque"]
+off_axes = [ax for ax in all_torque_axes if ax != axis_norm]
+
+def _torque_row(arr, idx):
+    a = np.asarray(arr)
+    if a.ndim == 2 and a.shape[0] >= 6:
+        return a[idx, :]
+    return np.array([])
+
+primary_raw = _torque_row(ft_raw, primary_idx)
+primary_corr = _torque_row(ft_corr, primary_idx)
+off1 = _torque_row(ft_raw, axis_to_idx[off_axes[0]]) if len(off_axes) > 0 else np.array([])
+off2 = _torque_row(ft_raw, axis_to_idx[off_axes[1]]) if len(off_axes) > 1 else np.array([])
+
+fig = make_subplots(rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03)
+
+if t.size > 0 and angle_cmd.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=angle_cmd, mode="lines", name="angle_cmd", line=dict(dash="dash", color="black")), row=1, col=1)
+if t.size > 0 and angle_meas.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=angle_meas, mode="lines", name="angle_measured", line=dict(color="royalblue")), row=1, col=1)
+
+if t.size > 0 and primary_raw.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=primary_raw, mode="lines", name=f"{axis_norm} raw", line=dict(color="firebrick")), row=2, col=1)
+if t.size > 0 and primary_corr.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=primary_corr, mode="lines", name=f"{axis_norm} corrected", line=dict(color="seagreen")), row=2, col=1)
+
+if t.size > 0 and off1.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=off1, mode="lines", name=f"{off_axes[0]} raw", line=dict(color="darkorange")), row=3, col=1)
+if t.size > 0 and off2.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=off2, mode="lines", name=f"{off_axes[1]} raw", line=dict(color="purple")), row=4, col=1)
+
+if t.size > 0 and S1.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=S1, mode="lines", name="S1 stim", line=dict(color="teal")), row=5, col=1)
+if t.size > 0 and S2.size == t.size:
+    fig.add_trace(go.Scatter(x=t, y=S2, mode="lines", name="S2 stim", line=dict(color="gray", dash="dot")), row=5, col=1)
+
+proc = str(getattr(bender, "test_type", "unknown"))
+_angle_title = "Angle (deg)"
+if proc in ("isometric", "isovelocity"):
+    _parts = bender.strain_yaxis_title_pct().split(" — ", 1)
+    _angle_title = "Angle (deg) — " + (_parts[1] if len(_parts) > 1 else _parts[0])
+fig.update_yaxes(title_text=_angle_title, row=1, col=1)
+fig.update_yaxes(title_text=f"{axis_norm} (N-m)", row=2, col=1)
+fig.update_yaxes(title_text=f"{off_axes[0]} (N-m)", row=3, col=1)
+fig.update_yaxes(title_text=f"{off_axes[1]} (N-m)", row=4, col=1)
+fig.update_yaxes(title_text="Stim (V)", row=5, col=1)
+fig.update_xaxes(title_text="Time (s)", row=5, col=1)
+_qc_cap = f"QC: {proc} | trial {qc_trial_index}"
+if proc in ("isometric", "isovelocity"):
+    _qc_cap = _qc_cap + "<br><sup style='font-size:11px'>" + bender.strain_geometry_plot_context() + "</sup>"
+fig.update_layout(height=1400, width=1100, title_text=_qc_cap, showlegend=True)
+fig.show()
+
+# Save figure: PNG when kaleido is available, otherwise HTML fallback.
+base = str(getattr(bender, "outputfile", "bender_output.h5")).replace(".h5", f"_{proc}_trial{qc_trial_index:03d}_qc")
+png_path = f"{base}.png"
+html_path = f"{base}.html"
+try:
+    fig.write_image(png_path, engine="kaleido", scale=2)
+    print(f"Saved QC figure: {png_path}")
+except Exception as e:
+    fig.write_html(html_path)
+    print(f"PNG export unavailable ({e}); saved HTML instead: {html_path}")

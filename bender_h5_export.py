@@ -1,0 +1,502 @@
+"""
+Experiment **data file** (HDF5 / `.h5`) export and universal QC figure — same behavior as ``bender_run.ipynb`` cells.
+
+Used by the Streamlit GUI and callable from scripts/notebooks to avoid duplicating logic.
+"""
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple
+
+import h5py
+import numpy as np
+
+
+def _read_existing_post_trial_notes(h5_path: str) -> str:
+    """Return root ``post-trial notes`` attribute from an existing file, if any."""
+    if not h5_path or not os.path.isfile(h5_path):
+        return ''
+    try:
+        with h5py.File(h5_path, 'r') as old:
+            raw = old.attrs.get('post-trial notes', '') or ''
+            return str(raw).strip()
+    except Exception:
+        return ''
+
+
+def _append_post_trial_notes_to_file_notes(previous: str, addition: str) -> str:
+    """
+    Build the full ``post-trial notes`` string for the HDF5 root / metadata attrs.
+
+    New non-empty text is appended as a dated block so repeated exports to the same path
+    preserve earlier QC / rig comments.
+    """
+    add = (addition or '').strip()
+    prev = (previous or '').strip()
+    if not add:
+        return prev
+    if not prev:
+        return add
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return f'{prev}\n\n--- QC / post-experiment ({ts}) ---\n{add}'
+
+
+def export_primary_h5(
+    bender: Any,
+    *,
+    post_trial_notes: Optional[str] = None,
+    outputfile: Optional[str] = None,
+    append_post_trial_notes: bool = True,
+) -> Dict[str, Any]:
+    """
+    Write schema-v2 H5 from ``bender.trial_records`` (or legacy flat buffers).
+
+    Parameters
+    ----------
+    bender
+        :class:`bender_functions.Bender` instance with ``outputfile`` set.
+    post_trial_notes
+        New text to store. If ``append_post_trial_notes`` is ``True``, only this
+        string is **appended** (``None`` or empty = add nothing new, keep existing
+        file note). If ``append_post_trial_notes`` is ``False``, ``None`` falls
+        back to ``bender.post_trial_notes`` for the full stored string.
+    outputfile
+        Full path for the new file; default ``bender.outputfile``.
+    append_post_trial_notes
+        If ``True`` (default) and ``outputfile`` already exists, read its current
+        ``post-trial notes`` attribute and **append** this call's text as a new
+        timestamped block. If ``False``, stored notes are replaced by this call's
+        text only. Empty new text leaves prior notes unchanged when appending.
+
+    Returns
+    -------
+    dict
+        ``outputfile``, ``n_trials``, ``test_type``, ``schema_version``, ``message``,
+        ``post_trial_notes`` (full string written to the file).
+    """
+    out_path = outputfile or getattr(bender, 'outputfile', None)
+    if not out_path:
+        raise ValueError("export_primary_h5 requires bender.outputfile or outputfile=...")
+
+    test_type = str(getattr(bender, 'test_type', 'unknown') or 'unknown')
+    h5_schema_version = str(getattr(bender, 'h5_schema_version', '2.0'))
+    if append_post_trial_notes:
+        incoming = '' if post_trial_notes is None else str(post_trial_notes).strip()
+        previous = _read_existing_post_trial_notes(out_path) if os.path.isfile(out_path) else ''
+        notes = _append_post_trial_notes_to_file_notes(previous, incoming)
+    else:
+        if post_trial_notes is not None:
+            notes = str(post_trial_notes).strip()
+        else:
+            notes = str(getattr(bender, 'post_trial_notes', '') or '').strip()
+
+    setattr(bender, 'post_trial_notes', notes)
+
+    cal_file = str(getattr(bender, 'inertial_calibration_file', '') or '')
+    use_cal = bool(getattr(bender, 'use_inertial_calibration', False))
+    cal_available = bool(use_cal and cal_file and os.path.isfile(cal_file))
+
+    trial_records = list(getattr(bender, 'trial_records', []) or [])
+    if len(trial_records) == 0:
+        trial_records = [{
+            'test_type': test_type,
+            'trial_index': 0,
+            'cycle_index': 0,
+            't': np.asarray(getattr(bender, 't', np.array([]))),
+            'angle_cmd': np.asarray(getattr(bender, 'angle', np.array([]))),
+            'anglevel_cmd': np.asarray(getattr(bender, 'anglevel', np.array([]))),
+            'tnorm': np.asarray(getattr(bender, 'tnorm', np.array([]))),
+            'S1stimcmd': np.asarray(getattr(bender, 'S1stimcmd', np.array([]))),
+            'S2stimcmd': np.asarray(getattr(bender, 'S2stimcmd', np.array([]))),
+            'aidata': np.asarray(getattr(bender, 'aidata', np.array([]))),
+            'angle_measured': np.asarray(getattr(bender, 'angle_measured', np.array([]))),
+            'forcetorque': np.asarray(getattr(bender, 'forcetorque', np.array([]))),
+            'forcetorque_raw': np.asarray(getattr(bender, 'forcetorque_raw', np.array([]))),
+            'forcetorque_corrected': np.asarray(getattr(bender, 'forcetorque_corrected', np.array([]))),
+            'inertial_torque_system_primary': np.asarray(
+                getattr(bender, 'inertial_torque_system_primary', np.array([]))
+            ),
+            'inertial_torque_specimen_primary': np.asarray(
+                getattr(bender, 'inertial_torque_specimen_primary', np.array([]))
+            ),
+            'inertial_torque_total_primary': np.asarray(
+                getattr(bender, 'inertial_torque_total_primary', np.array([]))
+            ),
+            'primary_torque_raw': np.asarray(getattr(bender, 'primary_torque_raw', np.array([]))),
+            'primary_torque_corrected': np.asarray(getattr(bender, 'primary_torque_corrected', np.array([]))),
+        }]
+
+    with h5py.File(out_path, 'w') as f:
+        f.attrs['schema_version'] = h5_schema_version
+        f.attrs['test_type'] = test_type
+        f.attrs['post-trial notes'] = notes
+
+        g_meta = f.create_group('01_Metadata')
+        g_meta.attrs['test_type'] = test_type
+        g_meta.attrs['schema_version'] = h5_schema_version
+        g_meta.attrs['post-trial notes'] = notes
+
+        g_cal_link = g_meta.create_group('calibration_link')
+        g_cal_link.attrs['use_inertial_calibration'] = bool(use_cal)
+        g_cal_link.attrs['calibration_file'] = cal_file
+        g_cal_link.attrs['calibration_available'] = bool(cal_available)
+
+        g_ts = f.create_group('02_TimeSeries')
+        manifest_rows = []
+
+        for i, rec in enumerate(trial_records):
+            tg = g_ts.create_group(f'trial_{i:04d}')
+            tg.attrs['trial_index'] = int(rec.get('trial_index', i))
+            tg.attrs['cycle_index'] = int(rec.get('cycle_index', i))
+            rec_tt = str(rec.get('test_type', test_type))
+            tg.attrs['test_type'] = rec_tt
+            manifest = {
+                'trial_name': f'trial_{i:04d}',
+                'trial_index': int(rec.get('trial_index', i)),
+                'cycle_index': int(rec.get('cycle_index', i)),
+                'test_type': rec_tt,
+            }
+
+            series_keys = [
+                't', 'angle_cmd', 'anglevel_cmd', 'tnorm', 'S1stimcmd', 'S2stimcmd',
+                'aidata', 'angle_measured', 'forcetorque', 'forcetorque_raw', 'forcetorque_corrected',
+                'inertial_torque_system_primary', 'inertial_torque_specimen_primary',
+                'inertial_torque_total_primary',
+                'primary_torque_raw', 'primary_torque_corrected',
+                'cycle_index_by_sample', 'stim_type', 'stim_state', 'stim_side',
+            ]
+
+            t_arr = np.asarray(rec.get('t', np.array([]))).reshape(-1)
+            s1_arr = np.asarray(rec.get('S1stimcmd', np.array([]))).reshape(-1)
+            s2_arr = np.asarray(rec.get('S2stimcmd', np.array([]))).reshape(-1)
+            cyc_arr = np.asarray(rec.get('cycle_index_by_sample', np.array([]))).reshape(-1)
+            n = int(t_arr.size)
+            if n <= 0:
+                n = int(max(s1_arr.size, s2_arr.size, cyc_arr.size, 0))
+            if n > 0:
+                s1 = np.zeros(n, dtype=float)
+                s2 = np.zeros(n, dtype=float)
+                s1[:min(n, s1_arr.size)] = s1_arr[:min(n, s1_arr.size)]
+                s2[:min(n, s2_arr.size)] = s2_arr[:min(n, s2_arr.size)]
+                stim_on_mask = (np.abs(s1) > 1e-12) | (np.abs(s2) > 1e-12)
+                stim_enabled = bool(rec.get('is_stim', getattr(bender, 'is_stim', False)))
+                phase_state = np.full(n, 'passive', dtype='<U8')
+                activity_state = np.full(n, 'passive', dtype='<U8')
+                if stim_enabled:
+                    if cyc_arr.size == n:
+                        valid_cyc = np.isfinite(cyc_arr)
+                        if np.any(valid_cyc):
+                            for cyc in np.unique(cyc_arr[valid_cyc]):
+                                m = valid_cyc & (cyc_arr == cyc)
+                                if np.any(stim_on_mask[m]):
+                                    phase_state[m] = 'off'
+                                    phase_state[m & stim_on_mask] = 'on'
+                                    activity_state[m] = 'active'
+                        else:
+                            if np.any(stim_on_mask):
+                                phase_state[:] = 'off'
+                                phase_state[stim_on_mask] = 'on'
+                                activity_state[:] = 'active'
+                    else:
+                        if np.any(stim_on_mask):
+                            phase_state[:] = 'off'
+                            phase_state[stim_on_mask] = 'on'
+                            activity_state[:] = 'active'
+                side_state = np.full(n, 'none', dtype='<U8')
+                left_on = np.abs(s1) > 1e-12
+                right_on = np.abs(s2) > 1e-12
+                side_state[left_on & ~right_on] = 'left'
+                side_state[~left_on & right_on] = 'right'
+                side_state[left_on & right_on] = 'both'
+                rec['stim_type'] = np.asarray(activity_state, dtype='S8')
+                rec['stim_state'] = np.asarray(phase_state, dtype='S8')
+                rec['stim_side'] = np.asarray(side_state, dtype='S8')
+                tg.attrs['stim_enabled'] = bool(stim_enabled)
+                tg.attrs['stim_any_on'] = bool(np.any(stim_on_mask))
+                manifest['stim_enabled'] = bool(stim_enabled)
+                manifest['stim_any_on'] = bool(np.any(stim_on_mask))
+            for key in series_keys:
+                if key in rec and rec[key] is not None:
+                    arr = np.asarray(rec[key])
+                    if arr.size > 0:
+                        tg.create_dataset(key, data=arr)
+
+            for k, v in rec.items():
+                if k in series_keys or k in ('trial_index', 'cycle_index', 'test_type'):
+                    continue
+                try:
+                    arr = np.asarray(v)
+                    if arr.ndim == 0:
+                        vv = arr.item()
+                        tg.attrs[str(k)] = vv
+                        manifest[str(k)] = vv
+                    elif arr.size == 1:
+                        vv = arr.reshape(-1)[0].item()
+                        tg.attrs[str(k)] = vv
+                        manifest[str(k)] = vv
+                except Exception:
+                    tg.attrs[str(k)] = str(v)
+                    manifest[str(k)] = str(v)
+            manifest_rows.append(manifest)
+
+        g_idx = g_meta.create_group('trial_index')
+        g_idx.create_dataset(
+            'trial_names',
+            data=np.array([f'trial_{i:04d}' for i in range(len(trial_records))], dtype='S'),
+        )
+        g_idx.create_dataset(
+            'trial_index',
+            data=np.array([int(r.get('trial_index', i)) for i, r in enumerate(manifest_rows)], dtype=np.int64),
+        )
+        g_idx.create_dataset(
+            'cycle_index',
+            data=np.array([int(r.get('cycle_index', i)) for i, r in enumerate(manifest_rows)], dtype=np.int64),
+        )
+        g_idx.create_dataset(
+            'test_type',
+            data=np.array([str(r.get('test_type', test_type)) for r in manifest_rows], dtype='S'),
+        )
+        reserved = {'trial_name', 'trial_index', 'cycle_index', 'test_type'}
+        all_keys = sorted({k for r in manifest_rows for k in r.keys() if k not in reserved})
+        for cond_key in all_keys:
+            col = [r.get(cond_key, np.nan) for r in manifest_rows]
+            numeric_vals = []
+            numeric_ok = True
+            has_numeric = False
+            for v in col:
+                try:
+                    fv = float(v)
+                    numeric_vals.append(fv)
+                    if np.isfinite(fv):
+                        has_numeric = True
+                except Exception:
+                    numeric_ok = False
+                    break
+            if numeric_ok and has_numeric:
+                g_idx.create_dataset(cond_key, data=np.array(numeric_vals, dtype=float))
+            else:
+                svals = ['' if (v is None) else str(v) for v in col]
+                if any(len(s) > 0 for s in svals):
+                    g_idx.create_dataset(cond_key, data=np.array(svals, dtype='S'))
+
+        g_meta.attrs['n_trials'] = int(len(trial_records))
+
+        prof = getattr(bender, 'inertial_calibration_profile', None)
+        if isinstance(prof, dict):
+            g_ic = g_meta.create_group('inertial_calibration_profile')
+            for k, v in prof.items():
+                g_ic.attrs[str(k)] = v
+
+        h5p = dict(getattr(bender, 'h5_protocol_metadata', {}) or {})
+        g_proto = g_meta.create_group('protocol_metadata')
+        for k, v in h5p.items():
+            try:
+                arr = np.asarray(v)
+                if arr.ndim > 0 and arr.size > 1:
+                    g_proto.create_dataset(str(k), data=arr)
+                elif arr.ndim == 0:
+                    g_proto.attrs[str(k)] = arr.item()
+                else:
+                    g_proto.attrs[str(k)] = str(v)
+            except Exception:
+                g_proto.attrs[str(k)] = str(v)
+
+        g_settings = g_meta.create_group('bender_settings')
+        skip_keys = {
+            'aidata', 'forcetorque', 'angle', 'anglevel', 'tnorm', 't', 'angledata',
+            'S1stimcmd', 'S2stimcmd', 'trial_records',
+        }
+        for k, v in bender.__dict__.items():
+            if k.startswith('_') or k in skip_keys or v is None:
+                continue
+            try:
+                arr = np.asarray(v)
+                if arr.ndim == 0:
+                    g_settings.attrs[str(k)] = arr.item()
+                elif arr.size <= 512:
+                    g_settings.create_dataset(str(k), data=arr)
+                else:
+                    g_settings.attrs[str(k)] = f'<omitted_large_array shape={arr.shape}>'
+            except Exception:
+                g_settings.attrs[str(k)] = str(v)
+
+    msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})'
+    return {
+        'outputfile': out_path,
+        'n_trials': len(trial_records),
+        'test_type': test_type,
+        'schema_version': h5_schema_version,
+        'message': msg,
+        'post_trial_notes': notes,
+    }
+
+
+def build_universal_qc_figure(bender: Any, qc_trial_index: Optional[int] = None):
+    """
+    Build the multi-row QC Plotly figure for one trial (same traces as the notebook QC cell).
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    trial_records = list(getattr(bender, 'trial_records', []) or [])
+    if len(trial_records) == 0:
+        trial_records = [{
+            't': np.asarray(getattr(bender, 't', np.array([]))),
+            'angle_cmd': np.asarray(getattr(bender, 'angle', np.array([]))),
+            'anglevel_cmd': np.asarray(getattr(bender, 'anglevel', np.array([]))),
+            'angle_measured': np.asarray(getattr(bender, 'angle_measured', np.array([]))),
+            'S1stimcmd': np.asarray(getattr(bender, 'S1stimcmd', np.array([]))),
+            'S2stimcmd': np.asarray(getattr(bender, 'S2stimcmd', np.array([]))),
+            'forcetorque': np.asarray(getattr(bender, 'forcetorque', np.array([]))),
+            'forcetorque_raw': np.asarray(getattr(bender, 'forcetorque_raw', np.array([]))),
+            'forcetorque_corrected': np.asarray(getattr(bender, 'forcetorque_corrected', np.array([]))),
+            'inertial_torque_total_primary': np.asarray(
+                getattr(bender, 'inertial_torque_total_primary', np.array([]))
+            ),
+        }]
+
+    if qc_trial_index is None:
+        qc_trial_index = len(trial_records) - 1
+    qc_trial_index = int(max(0, min(qc_trial_index, len(trial_records) - 1)))
+    rec = trial_records[qc_trial_index]
+
+    t = np.asarray(rec.get('t', np.array([])))
+    angle_cmd = np.asarray(rec.get('angle_cmd', np.array([])))
+    anglevel_cmd = np.asarray(rec.get('anglevel_cmd', np.array([])))
+    angle_meas = np.asarray(rec.get('angle_measured', np.array([])))
+    S1 = np.asarray(rec.get('S1stimcmd', np.array([])))
+    S2 = np.asarray(rec.get('S2stimcmd', np.array([])))
+
+    ft_raw = np.asarray(rec.get('forcetorque_raw', rec.get('forcetorque', np.array([]))))
+    ft_corr = np.asarray(rec.get('forcetorque_corrected', np.array([])))
+    inertial_total = np.asarray(rec.get('inertial_torque_total_primary', np.array([])))
+
+    axis_key = str(
+        getattr(bender, 'primary_bending_axis', getattr(bender, 'bending_axis_sensor', 'zTorque'))
+    ).lower().strip()
+    axis_norm = {
+        'x': 'xTorque', 'xtorque': 'xTorque',
+        'y': 'yTorque', 'ytorque': 'yTorque',
+        'z': 'zTorque', 'ztorque': 'zTorque',
+    }.get(axis_key, 'zTorque')
+    axis_to_idx = {'xTorque': 3, 'yTorque': 4, 'zTorque': 5}
+    primary_idx = axis_to_idx.get(axis_norm, 5)
+    all_torque_axes = ['xTorque', 'yTorque', 'zTorque']
+    off_axes = [ax for ax in all_torque_axes if ax != axis_norm]
+
+    def _torque_row(arr, idx):
+        a = np.asarray(arr)
+        if a.ndim == 2 and a.shape[0] >= 6:
+            return a[idx, :]
+        return np.array([])
+
+    primary_raw = _torque_row(ft_raw, primary_idx)
+    primary_corr = _torque_row(ft_corr, primary_idx)
+    off1 = _torque_row(ft_raw, axis_to_idx[off_axes[0]]) if len(off_axes) > 0 else np.array([])
+    off2 = _torque_row(ft_raw, axis_to_idx[off_axes[1]]) if len(off_axes) > 1 else np.array([])
+
+    fig = make_subplots(
+        rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+        specs=[[{'secondary_y': True}], [{}], [{}], [{}], [{}]],
+    )
+
+    if t.size > 0 and angle_cmd.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=angle_cmd, mode='lines', name='angle_cmd', line=dict(dash='dash', color='black')),
+            row=1, col=1, secondary_y=False,
+        )
+    if t.size > 0 and angle_meas.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=angle_meas, mode='lines', name='angle_measured', line=dict(color='royalblue')),
+            row=1, col=1, secondary_y=False,
+        )
+    if t.size > 0 and anglevel_cmd.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=anglevel_cmd, mode='lines', name='anglevel_cmd', line=dict(color='orange', width=1)),
+            row=1, col=1, secondary_y=True,
+        )
+
+    if t.size > 0 and primary_raw.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=primary_raw, mode='lines', name=f'{axis_norm} raw', line=dict(color='firebrick')),
+            row=2, col=1,
+        )
+    if t.size > 0 and primary_corr.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=primary_corr, mode='lines', name=f'{axis_norm} corrected', line=dict(color='seagreen')),
+            row=2, col=1,
+        )
+    if t.size > 0 and inertial_total.size == t.size and np.any(np.isfinite(inertial_total)):
+        fig.add_trace(
+            go.Scatter(
+                x=t, y=inertial_total, mode='lines',
+                name='inertial torque (total, primary)',
+                line=dict(color='goldenrod', dash='dot'),
+            ),
+            row=2, col=1,
+        )
+
+    if t.size > 0 and off1.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=off1, mode='lines', name=f'{off_axes[0]} raw', line=dict(color='darkorange')),
+            row=3, col=1,
+        )
+    if t.size > 0 and off2.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=off2, mode='lines', name=f'{off_axes[1]} raw', line=dict(color='purple')),
+            row=4, col=1,
+        )
+
+    if t.size > 0 and S1.size == t.size:
+        fig.add_trace(go.Scatter(x=t, y=S1, mode='lines', name='S1 stim', line=dict(color='teal')), row=5, col=1)
+    if t.size > 0 and S2.size == t.size:
+        fig.add_trace(
+            go.Scatter(x=t, y=S2, mode='lines', name='S2 stim', line=dict(color='gray', dash='dot')),
+            row=5, col=1,
+        )
+
+    proc = str(getattr(bender, 'test_type', 'unknown'))
+    angle_title = 'Angle (deg)'
+    if proc in ('isometric', 'isovelocity'):
+        parts = bender.strain_yaxis_title_pct().split(' — ', 1)
+        angle_title = 'Angle (deg) — ' + (parts[1] if len(parts) > 1 else parts[0])
+    fig.update_yaxes(title_text=angle_title, row=1, col=1, secondary_y=False)
+    fig.update_yaxes(title_text='Velocity (deg/s)', row=1, col=1, secondary_y=True, showgrid=False)
+    fig.update_yaxes(title_text=f'{axis_norm} (N-m)', row=2, col=1)
+    fig.update_yaxes(title_text=f'{off_axes[0]} (N-m)', row=3, col=1)
+    fig.update_yaxes(title_text=f'{off_axes[1]} (N-m)', row=4, col=1)
+    fig.update_yaxes(title_text='Stim (V)', row=5, col=1)
+    fig.update_xaxes(title_text='Time (s)', row=5, col=1)
+    qc_cap = f'QC: {proc} | trial {qc_trial_index}'
+    if proc in ('isometric', 'isovelocity'):
+        qc_cap = qc_cap + "<br><sup style='font-size:11px'>" + bender.strain_geometry_plot_context() + '</sup>'
+    fig.update_layout(height=1400, width=1100, title_text=qc_cap, showlegend=True, hovermode='x unified')
+    return fig, qc_trial_index
+
+
+def save_universal_qc_figure(
+    bender: Any,
+    qc_trial_index: Optional[int] = None,
+    *,
+    base_path: Optional[str] = None,
+) -> Tuple[str, Optional[str]]:
+    """
+    Write QC figure to PNG (kaleido) or HTML fallback.
+
+    Returns
+    -------
+    (png_or_html_path, secondary_path_or_none)
+    """
+    fig, idx = build_universal_qc_figure(bender, qc_trial_index=qc_trial_index)
+    proc = str(getattr(bender, 'test_type', 'unknown'))
+    h5p = str(getattr(bender, 'outputfile', 'bender_output.h5'))
+    base = base_path or h5p.replace('.h5', f'_{proc}_trial{idx:03d}_qc')
+    png_path = f'{base}.png'
+    html_path = f'{base}.html'
+    try:
+        fig.write_image(png_path, engine='kaleido', scale=2)
+        return png_path, None
+    except Exception:
+        fig.write_html(html_path)
+        return html_path, None

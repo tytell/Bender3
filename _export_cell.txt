@@ -1,0 +1,228 @@
+# Preferred exporter: writes one or many trials using bender.trial_records.
+test_type = str(getattr(bender, "test_type", "unknown") or "unknown")
+h5_schema_version = str(getattr(bender, "h5_schema_version", "2.0"))
+post_trial_notes = str(getattr(bender, "post_trial_notes", "") or "")
+
+cal_file = ""
+if "inertial_calibration_file" in globals() and inertial_calibration_file:
+    cal_file = str(inertial_calibration_file)
+elif getattr(bender, "inertial_calibration_file", None):
+    cal_file = str(bender.inertial_calibration_file)
+use_cal = bool(globals().get("use_inertial_calibration", getattr(bender, "use_inertial_calibration", False)))
+cal_available = bool(use_cal and cal_file and os.path.exists(cal_file))
+
+trial_records = list(getattr(bender, "trial_records", []) or [])
+if len(trial_records) == 0:
+    trial_records = [{
+        "test_type": test_type,
+        "trial_index": 0,
+        "cycle_index": 0,
+        "t": np.asarray(getattr(bender, "t", np.array([]))),
+        "angle_cmd": np.asarray(getattr(bender, "angle", np.array([]))),
+        "anglevel_cmd": np.asarray(getattr(bender, "anglevel", np.array([]))),
+        "tnorm": np.asarray(getattr(bender, "tnorm", np.array([]))),
+        "S1stimcmd": np.asarray(getattr(bender, "S1stimcmd", np.array([]))),
+        "S2stimcmd": np.asarray(getattr(bender, "S2stimcmd", np.array([]))),
+        "aidata": np.asarray(getattr(bender, "aidata", np.array([]))),
+        "angle_measured": np.asarray(getattr(bender, "angle_measured", np.array([]))),
+        "forcetorque": np.asarray(getattr(bender, "forcetorque", np.array([]))),
+        "forcetorque_raw": np.asarray(getattr(bender, "forcetorque_raw", np.array([]))),
+        "forcetorque_corrected": np.asarray(getattr(bender, "forcetorque_corrected", np.array([]))),
+        "inertial_torque_system_primary": np.asarray(getattr(bender, "inertial_torque_system_primary", np.array([]))),
+        "inertial_torque_specimen_primary": np.asarray(getattr(bender, "inertial_torque_specimen_primary", np.array([]))),
+        "inertial_torque_total_primary": np.asarray(getattr(bender, "inertial_torque_total_primary", np.array([]))),
+        "primary_torque_raw": np.asarray(getattr(bender, "primary_torque_raw", np.array([]))),
+        "primary_torque_corrected": np.asarray(getattr(bender, "primary_torque_corrected", np.array([]))),
+    }]
+
+with h5py.File(bender.outputfile, "w") as f:
+    f.attrs["schema_version"] = h5_schema_version
+    f.attrs["test_type"] = test_type
+    f.attrs["post-trial notes"] = post_trial_notes
+
+    g_meta = f.create_group("01_Metadata")
+    g_meta.attrs["test_type"] = test_type
+    g_meta.attrs["schema_version"] = h5_schema_version
+    g_meta.attrs["post-trial notes"] = post_trial_notes
+
+    g_cal_link = g_meta.create_group("calibration_link")
+    g_cal_link.attrs["use_inertial_calibration"] = bool(use_cal)
+    g_cal_link.attrs["calibration_file"] = cal_file
+    g_cal_link.attrs["calibration_available"] = bool(cal_available)
+
+    g_ts = f.create_group("02_TimeSeries")
+    manifest_rows = []
+
+    # Trial groups: complete time-series + condition annotations per trial.
+    for i, rec in enumerate(trial_records):
+        tg = g_ts.create_group(f"trial_{i:04d}")
+        tg.attrs["trial_index"] = int(rec.get("trial_index", i))
+        tg.attrs["cycle_index"] = int(rec.get("cycle_index", i))
+        rec_tt = str(rec.get("test_type", test_type))
+        tg.attrs["test_type"] = rec_tt
+        manifest = {
+            "trial_name": f"trial_{i:04d}",
+            "trial_index": int(rec.get("trial_index", i)),
+            "cycle_index": int(rec.get("cycle_index", i)),
+            "test_type": rec_tt,
+        }
+
+        series_keys = [
+            "t", "angle_cmd", "anglevel_cmd", "tnorm", "S1stimcmd", "S2stimcmd",
+            "aidata", "angle_measured", "forcetorque", "forcetorque_raw", "forcetorque_corrected",
+            "inertial_torque_system_primary", "inertial_torque_specimen_primary", "inertial_torque_total_primary",
+            "primary_torque_raw", "primary_torque_corrected",
+            "cycle_index_by_sample", "stim_type", "stim_state", "stim_side"
+        ]
+
+        # Build per-sample stimulation state labels.
+        t_arr = np.asarray(rec.get("t", np.array([]))).reshape(-1)
+        s1_arr = np.asarray(rec.get("S1stimcmd", np.array([]))).reshape(-1)
+        s2_arr = np.asarray(rec.get("S2stimcmd", np.array([]))).reshape(-1)
+        cyc_arr = np.asarray(rec.get("cycle_index_by_sample", np.array([]))).reshape(-1)
+        n = int(t_arr.size)
+        if n <= 0:
+            n = int(max(s1_arr.size, s2_arr.size, cyc_arr.size, 0))
+        if n > 0:
+            s1 = np.zeros(n, dtype=float)
+            s2 = np.zeros(n, dtype=float)
+            s1[:min(n, s1_arr.size)] = s1_arr[:min(n, s1_arr.size)]
+            s2[:min(n, s2_arr.size)] = s2_arr[:min(n, s2_arr.size)]
+            stim_on_mask = (np.abs(s1) > 1e-12) | (np.abs(s2) > 1e-12)
+            stim_enabled = bool(rec.get("is_stim", getattr(bender, "is_stim", False)))
+            phase_state = np.full(n, "passive", dtype='<U8')
+            activity_state = np.full(n, "passive", dtype='<U8')
+            if stim_enabled:
+                if cyc_arr.size == n:
+                    valid_cyc = np.isfinite(cyc_arr)
+                    if np.any(valid_cyc):
+                        for cyc in np.unique(cyc_arr[valid_cyc]):
+                            m = valid_cyc & (cyc_arr == cyc)
+                            if np.any(stim_on_mask[m]):
+                                phase_state[m] = "off"
+                                phase_state[m & stim_on_mask] = "on"
+                                activity_state[m] = "active"
+                    else:
+                        if np.any(stim_on_mask):
+                            phase_state[:] = "off"
+                            phase_state[stim_on_mask] = "on"
+                            activity_state[:] = "active"
+                else:
+                    if np.any(stim_on_mask):
+                        phase_state[:] = "off"
+                        phase_state[stim_on_mask] = "on"
+                        activity_state[:] = "active"
+            side_state = np.full(n, "none", dtype='<U8')
+            left_on = np.abs(s1) > 1e-12
+            right_on = np.abs(s2) > 1e-12
+            side_state[left_on & ~right_on] = "left"
+            side_state[~left_on & right_on] = "right"
+            side_state[left_on & right_on] = "both"
+            rec["stim_type"] = np.asarray(activity_state, dtype='S8')
+            rec["stim_state"] = np.asarray(phase_state, dtype='S8')
+            rec["stim_side"] = np.asarray(side_state, dtype='S8')
+            tg.attrs["stim_enabled"] = bool(stim_enabled)
+            tg.attrs["stim_any_on"] = bool(np.any(stim_on_mask))
+            manifest["stim_enabled"] = bool(stim_enabled)
+            manifest["stim_any_on"] = bool(np.any(stim_on_mask))
+        for key in series_keys:
+            if key in rec and rec[key] is not None:
+                arr = np.asarray(rec[key])
+                if arr.size > 0:
+                    tg.create_dataset(key, data=arr)
+
+        # Save per-trial scalar conditions as attrs for easy filtering (e.g., freq, velocity, step).
+        for k, v in rec.items():
+            if k in series_keys or k in ("trial_index", "cycle_index", "test_type"):
+                continue
+            try:
+                arr = np.asarray(v)
+                if arr.ndim == 0:
+                    vv = arr.item()
+                    tg.attrs[str(k)] = vv
+                    manifest[str(k)] = vv
+                elif arr.size == 1:
+                    vv = arr.reshape(-1)[0].item()
+                    tg.attrs[str(k)] = vv
+                    manifest[str(k)] = vv
+            except Exception:
+                tg.attrs[str(k)] = str(v)
+                manifest[str(k)] = str(v)
+        manifest_rows.append(manifest)
+
+    # Compact index table for quick trial browsing/filtering.
+    g_idx = g_meta.create_group("trial_index")
+    g_idx.create_dataset("trial_names", data=np.array([f"trial_{i:04d}" for i in range(len(trial_records))], dtype='S'))
+    g_idx.create_dataset("trial_index", data=np.array([int(r.get("trial_index", i)) for i, r in enumerate(manifest_rows)], dtype=np.int64))
+    g_idx.create_dataset("cycle_index", data=np.array([int(r.get("cycle_index", i)) for i, r in enumerate(manifest_rows)], dtype=np.int64))
+    g_idx.create_dataset("test_type", data=np.array([str(r.get("test_type", test_type)) for r in manifest_rows], dtype='S'))
+    # Auto-index all scalar trial condition keys (phase, duty, freq, amp, etc.).
+    reserved = {"trial_name", "trial_index", "cycle_index", "test_type"}
+    all_keys = sorted({k for r in manifest_rows for k in r.keys() if k not in reserved})
+    for cond_key in all_keys:
+        col = [r.get(cond_key, np.nan) for r in manifest_rows]
+        # Try numeric column first; fallback to string column.
+        numeric_vals = []
+        numeric_ok = True
+        has_numeric = False
+        for v in col:
+            try:
+                fv = float(v)
+                numeric_vals.append(fv)
+                if np.isfinite(fv):
+                    has_numeric = True
+            except Exception:
+                numeric_ok = False
+                break
+        if numeric_ok and has_numeric:
+            g_idx.create_dataset(cond_key, data=np.array(numeric_vals, dtype=float))
+        else:
+            svals = ["" if (v is None) else str(v) for v in col]
+            if any(len(s) > 0 for s in svals):
+                g_idx.create_dataset(cond_key, data=np.array(svals, dtype='S'))
+
+    g_meta.attrs["n_trials"] = int(len(trial_records))
+
+    # Inertial calibration profile snapshot (if available).
+    prof = getattr(bender, "inertial_calibration_profile", None)
+    if isinstance(prof, dict):
+        g_ic = g_meta.create_group("inertial_calibration_profile")
+        for k, v in prof.items():
+            g_ic.attrs[str(k)] = v
+
+    # Persist protocol metadata dictionary for grouped analysis.
+    h5p = dict(getattr(bender, "h5_protocol_metadata", {}) or {})
+    g_proto = g_meta.create_group("protocol_metadata")
+    for k, v in h5p.items():
+        try:
+            arr = np.asarray(v)
+            if arr.ndim > 0 and arr.size > 1:
+                g_proto.create_dataset(str(k), data=arr)
+            elif arr.ndim == 0:
+                g_proto.attrs[str(k)] = arr.item()
+            else:
+                g_proto.attrs[str(k)] = str(v)
+        except Exception:
+            g_proto.attrs[str(k)] = str(v)
+
+    # Persist compact scalar/vector settings from bender.__dict__ for reproducibility.
+    g_settings = g_meta.create_group("bender_settings")
+    skip_keys = {
+        "aidata", "forcetorque", "angle", "anglevel", "tnorm", "t", "angledata",
+        "S1stimcmd", "S2stimcmd", "trial_records"
+    }
+    for k, v in bender.__dict__.items():
+        if k.startswith("_") or k in skip_keys or v is None:
+            continue
+        try:
+            arr = np.asarray(v)
+            if arr.ndim == 0:
+                g_settings.attrs[str(k)] = arr.item()
+            elif arr.size <= 512:
+                g_settings.create_dataset(str(k), data=arr)
+            else:
+                g_settings.attrs[str(k)] = f"<omitted_large_array shape={arr.shape}>"
+        except Exception:
+            g_settings.attrs[str(k)] = str(v)
+
+print(f"✅ EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})")

@@ -26,6 +26,14 @@ import xml.etree.ElementTree as ElementTree
 import h5py
 
 
+# --- Specimen lateral frame (signed indices) ---------------------------------
+# Live values come from config ``specimen_lateral_index_on_positive_motor_side`` (non-zero)
+# paired with ``positive_motor_direction``; assigned on :class:`Bender` construction.
+# Default -1 / +1 below match the default config and are only for offline reference.
+SPECIMEN_SIDE_INDEX_LEFT = -1
+SPECIMEN_SIDE_INDEX_RIGHT = 1
+
+
 def _normalize_start_end(x):
     """Accept float or sequence [start, end]; return (start, end)."""
     if x is None:
@@ -69,6 +77,88 @@ def _scalar_or_pair(f0, f1):
     """Single float if endpoints match, else [start, end] (Hz or 1/m)."""
     a, b = float(f0), float(f1)
     return a if abs(b - a) < 1e-12 else [a, b]
+
+
+def convert_to_curvature(value, mode, *, dclamp_mm=None, xsec_width_mm=None):
+    """
+    Convert specimen inputs to curvature κ (1/m) or curvature rate dκ/dt (1/m/s).
+
+    Position modes
+    --------------
+    'curvature'
+        ``value`` is κ (1/m); returned unchanged.
+    'strain'
+        ``value`` is **engineering strain as a fraction** (0.05 = 5 %). Same relation as
+        ``organize_cycles``: strain = κ * (xsec_width/2/1000 m).
+
+        **Interpretation (bending):** this scalar is κ times distance from the neutral axis to
+        the **surface** (half-width). Linear bending gives **equal magnitude** tensile strain on
+        one surface and compressive (shortening) strain on the other; the sign of κ (and thus
+        ε) follows the commanded bend direction. It is **not** automatically “ipsilateral
+        muscle shortening”; map sign to left/right fibers using anatomy + mounting, or flip
+        displayed traces with :attr:`Bender.strain_shortening_positive_display_sign`.
+    'strain_pct'
+        ``value`` is strain in **percent** (5 = 5 %).
+    'angle'
+        ``value`` is commanded motor / specimen bend angle in **degrees**; uses
+        κ = rad(angle) * 1000 / dclamp_mm (inverse of ``rad2deg(κ * dclamp/1000)``).
+
+    Rate modes (curvature velocity)
+    -------------------------------
+    These are **time derivatives** (e.g. during a linear ramp), not peak rates in cyclic bending.
+    For sinusoidal motion at frequency ``f`` Hz, peak |dε/dt| is ``2π f ε_max`` (strain fraction);
+    see :func:`peak_strain_rate_sinusoidal` — same relation as ``organize_cycles`` strain rates.
+
+    'curvature_rate' — dκ/dt in (1/m)/s.
+    'strain_rate' — d(strain_fraction)/dt in 1/s.
+    'strain_pct_rate' — d(percent strain)/dt in %/s.
+    'angle_vel' — angular rate in deg/s.
+    """
+    mode = str(mode).lower().strip()
+    v = np.asarray(value, dtype=float)
+
+    if mode == 'curvature':
+        return v
+
+    if mode in ('strain', 'strain_rate'):
+        if xsec_width_mm is None:
+            raise ValueError(f"convert_to_curvature(mode={mode!r}) requires xsec_width_mm (mm).")
+        half_m = (float(xsec_width_mm) / 2.0) / 1000.0  # m; matches organize_cycles (xsec_width mm)
+        return v / half_m
+
+    if mode in ('strain_pct', 'strain_pct_rate'):
+        if xsec_width_mm is None:
+            raise ValueError(f"convert_to_curvature(mode={mode!r}) requires xsec_width_mm (mm).")
+        half_m = (float(xsec_width_mm) / 2.0) / 1000.0
+        frac = v / 100.0
+        return frac / half_m
+
+    if mode in ('angle', 'angle_vel'):
+        if dclamp_mm is None:
+            raise ValueError(f"convert_to_curvature(mode={mode!r}) requires dclamp_mm (mm).")
+        dc = float(dclamp_mm)
+        return np.deg2rad(v) * 1000.0 / dc
+
+    if mode == 'curvature_rate':
+        return v
+
+    raise ValueError(
+        f"Unknown convert_to_curvature mode {mode!r}. "
+        "Use curvature, strain, strain_pct, angle, or *_rate / angle_vel / curvature_rate."
+    )
+
+
+def peak_strain_rate_sinusoidal(strain_fraction, frequency_hz):
+    """
+    Peak |dε/dt| for ε(t) = ε_max sin(2π f t) with ε_max = ``strain_fraction``.
+
+    Matches ``organize_cycles``: ``strainrate = 2 * π * strain * freq``. Use this when you care
+    about cyclic strain rate at a chosen **frequency**; it is not the same as a constant
+    ``strain_rate`` passed to :func:`convert_to_curvature` (which is dε/dt for a ramp, in 1/s).
+    """
+    f = np.asarray(frequency_hz, dtype=float)
+    e = np.asarray(strain_fraction, dtype=float)
+    return 2.0 * np.pi * f * e
 
 
 class MasterLogger:
@@ -120,16 +210,57 @@ class Bender:
           
           
         # Grab the sensor lists
-        self.input_channels = cfg.input_channels
-        self.input_channel_names = cfg.input_channel_names
+        self._cfg_input_channels = list(getattr(cfg, 'input_channels', []))
+        self._cfg_input_channel_names = list(getattr(cfg, 'input_channel_names', []))
+        self.sg_channels = list(getattr(cfg, 'SG_chan', []))
+        self.sg_names = list(getattr(cfg, 'SG_name', []))
+        self.sono_channels = list(getattr(cfg, 'sono_channel', []))
+        self.sono_names = list(getattr(cfg, 'sono_name', []))
+        self.input_channels = list(self._cfg_input_channels)
+        self.input_channel_names = list(self._cfg_input_channel_names)
+        self.use_sono = bool(getattr(cfg, 'use_sono', True))
+        if not self.use_sono:
+            # Defensive filter in case config still includes sono channels.
+            pairs = [
+                (ch, nm) for ch, nm in zip(self.input_channels, self.input_channel_names)
+                if not str(nm).lower().startswith('sono_')
+            ]
+            self.input_channels = [p[0] for p in pairs]
+            self.input_channel_names = [p[1] for p in pairs]
 
         # 3. Assign Calibration/Directionality from cfg
         self.forcetorque_calibration_file = cfg.forcetorque_calibration_file
         self.positive_motor_direction = cfg.positive_motor_direction
+        anchor = getattr(cfg, 'specimen_lateral_index_on_positive_motor_side', None)
+        if anchor is None:
+            anchor = -1
+        self.specimen_lateral_index_on_positive_motor_side = int(anchor)
+        if self.specimen_lateral_index_on_positive_motor_side == 0:
+            raise ValueError(
+                "config specimen_lateral_index_on_positive_motor_side must be non-zero: "
+                "signed lateral index for the anatomical side named in positive_motor_direction "
+                "(opposite side is the negated index)."
+            )
+        pm0 = str(self.positive_motor_direction).lower()
+        a = self.specimen_lateral_index_on_positive_motor_side
+        if pm0 == 'left':
+            self.specimen_side_index_left = a
+            self.specimen_side_index_right = -a
+        elif pm0 == 'right':
+            self.specimen_side_index_right = a
+            self.specimen_side_index_left = -a
+        else:
+            logging.warning(
+                "positive_motor_direction is not 'left' or 'right'; "
+                "defaulting specimen_side_index_left=-1, specimen_side_index_right=1"
+            )
+            self.specimen_side_index_left = -1
+            self.specimen_side_index_right = 1
         self.S1side = cfg.S1side
         self.S2side = cfg.S2side
         self.motor_axis = cfg.motor_axis
         self.bending_axis_sensor = cfg.bending_axis_sensor
+        self.primary_bending_axis = getattr(cfg, 'primary_bending_axis', self.bending_axis_sensor)
 
         # Sonomicrometer specific calibration
         self.sono_cal_left = getattr(cfg, 'sono_cal_left', None)
@@ -177,16 +308,64 @@ class Bender:
         self.ramp_mode_default = getattr(cfg, 'ramp_mode_default', 'linear')
         self.master_logger = MasterLogger()
         self.h5_protocol_metadata = {}
+        self.h5_schema_version = "2.0"
+        self.post_trial_notes = ""
+        # Optional inertial-calibration linkage; safe defaults keep legacy runs working.
+        self.inertial_calibration_file = None
+        self.use_inertial_calibration = False
+        self.inertial_calibration_profile = None
+        self.inertial_torque_system_primary = np.array([])
+        self.inertial_torque_specimen_primary = np.array([])
+        self.inertial_torque_total_primary = np.array([])
+        self.primary_torque_raw = np.array([])
+        self.primary_torque_corrected = np.array([])
+        self.trial_records = []
         # Sweep / step motion length (seconds); set via update_metadata(duration=...) or bender.duration = ...
         self.duration = None
         self.amplitude_frequency_exponent = None
         self.test_type = None  # set in notebook via bender.test_type + update_metadata
+        # Recruitment / lateral stimulation for isometric & isovelocity (see _normalize_recruitment).
+        self.recruitment = 'bilateral_simultaneous'
+        self.lateral_mode = None  # optional alias; merged into stim_params as recruitment
+        self.bilateral_mirror_motor = False
+        self.bilateral_sequential_left_frac = 0.5
+        # Multiply geometric strain (κ·w/2) in plots/post-hoc by this after sono validation if
+        # you want “positive = shortening on the recruited side” (typically ±1).
+        self.strain_shortening_positive_display_sign = 1.0
 
         # Standard 2D shapes for NI-DAQmx (Channels, Samples)
         self.stimcmdhi = np.zeros((2, 2))
         self.dig = np.zeros((1, 2), dtype='uint32')
 
         print(f"Bender initialized using: {config_module_name}.py")
+
+    def _build_trial_record(self, test_type, trial_index, cycle_index=0, extra=None):
+        """Create a standardized per-trial record for H5 export."""
+        tt = str(test_type)
+        rec = {
+            'test_type': tt,
+            'trial_index': int(trial_index),
+            'cycle_index': int(cycle_index),
+            't': np.array(getattr(self, 't', np.array([])), copy=True),
+            'angle_cmd': np.array(getattr(self, 'angle', np.array([])), copy=True),
+            'anglevel_cmd': np.array(getattr(self, 'anglevel', np.array([])), copy=True),
+            'tnorm': np.array(getattr(self, 'tnorm', np.array([])), copy=True),
+            'S1stimcmd': np.array(getattr(self, 'S1stimcmd', np.array([])), copy=True),
+            'S2stimcmd': np.array(getattr(self, 'S2stimcmd', np.array([])), copy=True),
+            'aidata': np.array(getattr(self, 'aidata', np.array([])), copy=True),
+            'angle_measured': np.array(getattr(self, 'angle_measured', np.array([])), copy=True),
+            'forcetorque': np.array(getattr(self, 'forcetorque', np.array([])), copy=True),
+            'forcetorque_raw': np.array(getattr(self, 'forcetorque_raw', np.array([])), copy=True),
+            'forcetorque_corrected': np.array(getattr(self, 'forcetorque_corrected', np.array([])), copy=True),
+            'inertial_torque_system_primary': np.array(getattr(self, 'inertial_torque_system_primary', np.array([])), copy=True),
+            'inertial_torque_specimen_primary': np.array(getattr(self, 'inertial_torque_specimen_primary', np.array([])), copy=True),
+            'inertial_torque_total_primary': np.array(getattr(self, 'inertial_torque_total_primary', np.array([])), copy=True),
+            'primary_torque_raw': np.array(getattr(self, 'primary_torque_raw', np.array([])), copy=True),
+            'primary_torque_corrected': np.array(getattr(self, 'primary_torque_corrected', np.array([])), copy=True),
+        }
+        if extra:
+            rec.update(extra)
+        return rec
 
     def loadCalibration(self, calibrationFile):
         if not os.path.exists(calibrationFile):
@@ -226,9 +405,211 @@ class Bender:
         intercept = mm_low - (slope * v_low)
         return (raw_volts * slope) + intercept
 
+    def _primary_torque_index(self):
+        """Return forcetorque row index for configured primary bending torque axis."""
+        axis = str(getattr(self, 'primary_bending_axis', getattr(self, 'bending_axis_sensor', 'zTorque'))).strip()
+        axis_l = axis.lower()
+        norm = {
+            'x': 'xTorque', 'xtorque': 'xTorque',
+            'y': 'yTorque', 'ytorque': 'yTorque',
+            'z': 'zTorque', 'ztorque': 'zTorque',
+        }.get(axis_l, axis)
+        lut = {'xTorque': 3, 'yTorque': 4, 'zTorque': 5}
+        if norm not in lut:
+            raise ValueError(f"Unsupported primary_bending_axis={axis!r}; expected xTorque/yTorque/zTorque (or x/y/z).")
+        return lut[norm]
+
+    def _estimate_inertial_profile(self, torque_primary, anglevel_deg_s):
+        """Fit torque = I*alpha + bias from a calibration run."""
+        tq = np.asarray(torque_primary, dtype=float).reshape(-1)
+        av = np.asarray(anglevel_deg_s, dtype=float).reshape(-1)
+        if tq.size < 3 or av.size < 3:
+            return None
+        n = min(tq.size, av.size)
+        tq = tq[:n]
+        av = av[:n]
+        alpha = np.gradient(av) * float(self.daq_ai_sample_rate_hz)
+        m = np.isfinite(tq) & np.isfinite(alpha)
+        if np.count_nonzero(m) < 3:
+            return None
+        X = np.column_stack([alpha[m], np.ones(np.count_nonzero(m))])
+        y = tq[m]
+        coef, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+        return {
+            'axis_sensor': str(getattr(self, 'bending_axis_sensor', 'zTorque')),
+            'I_est': float(coef[0]),
+            'bias_est': float(coef[1]),
+        }
+
+    def _specimen_moi_for_inertial_torque(self):
+        """Return specimen-only MOI estimate (g*mm^2) from active geometry model, else 0."""
+        for key in ('specimen_moi_profile', 'specimen_moi_frustum'):
+            v = getattr(self, key, None)
+            if v is not None and np.isfinite(v) and float(v) > 0:
+                return float(v)
+        return 0.0
+
+    def _compute_primary_torque_components(self, raw_primary_torque, anglevel_deg_s):
+        """
+        Compute raw/system/specimen/total/corrected primary torque vectors.
+
+        corrected = raw_primary - (system_inertial + specimen_inertial)
+        """
+        raw = np.asarray(raw_primary_torque, dtype=float).reshape(-1)
+        av = np.asarray(anglevel_deg_s, dtype=float).reshape(-1)
+        n = min(raw.size, av.size)
+        if n < 2:
+            z = np.zeros_like(raw)
+            return {'raw': raw, 'system': z.copy(), 'specimen': z.copy(), 'total': z.copy(), 'corrected': raw.copy()}
+
+        raw = raw[:n]
+        av = av[:n]
+        alpha = np.gradient(av) * float(self.daq_ai_sample_rate_hz)
+
+        system = np.zeros_like(raw)
+        use_cal = bool(getattr(self, 'use_inertial_calibration', False))
+        prof = getattr(self, 'inertial_calibration_profile', None)
+        if use_cal and isinstance(prof, dict):
+            system = float(prof.get('I_est', 0.0)) * alpha + float(prof.get('bias_est', 0.0))
+
+        specimen = np.zeros_like(raw)
+        use_specimen = bool(getattr(self, 'use_theoretical_inertial_correction', False))
+        if use_specimen and bool(getattr(self, 'use_frustum_inertial_model', True)):
+            i_spec = self._specimen_moi_for_inertial_torque()
+            if i_spec > 0:
+                specimen = i_spec * alpha
+
+        total = system + specimen
+        corrected = raw - total
+        return {'raw': raw, 'system': system, 'specimen': specimen, 'total': total, 'corrected': corrected}
+
+    def save_inertial_calibration_file(self, calibration_h5_path):
+        """Save inertial calibration profile as a standalone H5 file."""
+        prof = getattr(self, 'inertial_calibration_profile', None)
+        if not isinstance(prof, dict):
+            raise ValueError("No inertial_calibration_profile available to save.")
+        with h5py.File(calibration_h5_path, 'w') as f:
+            f.attrs['schema'] = 'bender_inertial_calibration_v1'
+            f.attrs['axis_sensor'] = str(prof.get('axis_sensor', getattr(self, 'bending_axis_sensor', 'zTorque')))
+            f.attrs['I_est'] = float(prof.get('I_est', 0.0))
+            f.attrs['bias_est'] = float(prof.get('bias_est', 0.0))
+            if hasattr(self, 'timestamp'):
+                f.attrs['timestamp'] = str(self.timestamp)
+        self.inertial_calibration_file = str(calibration_h5_path)
+
+    def load_inertial_calibration_file(self, calibration_h5_path):
+        """Load inertial calibration profile from H5 (non-destructive)."""
+        with h5py.File(calibration_h5_path, 'r') as f:
+            prof = {
+                'axis_sensor': str(f.attrs.get('axis_sensor', getattr(self, 'bending_axis_sensor', 'zTorque'))),
+                'I_est': float(f.attrs.get('I_est', 0.0)),
+                'bias_est': float(f.attrs.get('bias_est', 0.0)),
+            }
+        self.inertial_calibration_profile = prof
+        self.inertial_calibration_file = str(calibration_h5_path)
+        return prof
+
+    def _normalize_dispatch_aliases(self):
+        """
+        Copy legacy short attribute names onto canonical ``isometric_*`` / ``isovelocity_*`` names.
+
+        After this, dispatcher and validation use one consistent naming scheme; legacy names
+        remain on the instance for backward compatibility but are mirrored to canonical keys.
+        """
+        # --- isometric ---
+        if getattr(self, 'isometric_initial', None) is None and getattr(self, 'initial', None) is not None:
+            self.isometric_initial = self.initial
+        if getattr(self, 'isometric_final', None) is None and getattr(self, 'final', None) is not None:
+            self.isometric_final = self.final
+        if getattr(self, 'isometric_num_steps', None) is None and getattr(self, 'num_steps', None) is not None:
+            self.isometric_num_steps = self.num_steps
+        if getattr(self, 'isometric_mode', None) is None and getattr(self, 'mode', None) is not None:
+            self.isometric_mode = self.mode
+        if getattr(self, 'isometric_randomize', None) is None and hasattr(self, 'randomize'):
+            self.isometric_randomize = bool(self.randomize)
+        if getattr(self, 'isometric_random_seed', None) is None and getattr(self, 'random_seed', None) is not None:
+            self.isometric_random_seed = self.random_seed
+        sp_iso = dict(getattr(self, 'isometric_stim_params', {}) or {})
+        ov_iso = dict(getattr(self, 'isometric_stim_overrides', {}) or {})
+        if ov_iso:
+            sp_iso.update(ov_iso)
+            self.isometric_stim_params = sp_iso
+
+        # --- isovelocity ---
+        if getattr(self, 'isovelocity_min_vel', None) is None and getattr(self, 'min_vel', None) is not None:
+            self.isovelocity_min_vel = self.min_vel
+        if getattr(self, 'isovelocity_max_vel', None) is None and getattr(self, 'max_vel', None) is not None:
+            self.isovelocity_max_vel = self.max_vel
+        if getattr(self, 'isovelocity_starting_strain', None) is None and getattr(self, 'starting_strain', None) is not None:
+            self.isovelocity_starting_strain = self.starting_strain
+        if getattr(self, 'isovelocity_num_steps', None) is None and getattr(self, 'num_steps', None) is not None:
+            self.isovelocity_num_steps = self.num_steps
+        if getattr(self, 'isovelocity_randomize', None) is None and hasattr(self, 'randomize'):
+            self.isovelocity_randomize = bool(self.randomize)
+        if getattr(self, 'isovelocity_random_seed', None) is None and getattr(self, 'random_seed', None) is not None:
+            self.isovelocity_random_seed = self.random_seed
+        sp_iv = dict(getattr(self, 'isovelocity_stim_params', {}) or {})
+        ov_iv = dict(getattr(self, 'isovelocity_stim_overrides', {}) or {})
+        if ov_iv:
+            sp_iv.update(ov_iv)
+            self.isovelocity_stim_params = sp_iv
+
+    def _normalize_primary_bending_axis(self):
+        """Normalize primary axis to xTorque/yTorque/zTorque."""
+        axis = str(getattr(self, 'primary_bending_axis', getattr(self, 'bending_axis_sensor', 'zTorque'))).strip()
+        axis_l = axis.lower()
+        norm = {
+            'x': 'xTorque', 'xtorque': 'xTorque',
+            'y': 'yTorque', 'ytorque': 'yTorque',
+            'z': 'zTorque', 'ztorque': 'zTorque',
+        }.get(axis_l, axis)
+        self.primary_bending_axis = norm
+        return norm
+
+    def _apply_use_sono(self):
+        """Apply `use_sono` flag to channel lists from config defaults."""
+        use_sono = bool(getattr(self, 'use_sono', True))
+        if self.sg_channels and self.sg_names:
+            channels = list(self.sg_channels)
+            names = list(self.sg_names)
+            if use_sono:
+                channels += list(self.sono_channels)
+                names += list(self.sono_names)
+        else:
+            pairs = list(zip(self._cfg_input_channels, self._cfg_input_channel_names))
+            if not use_sono:
+                pairs = [(ch, nm) for ch, nm in pairs if not str(nm).lower().startswith('sono_')]
+            channels = [p[0] for p in pairs]
+            names = [p[1] for p in pairs]
+        self.input_channels = channels
+        self.input_channel_names = names
+
+    def _stim_params_with_lateral(self, base_dict):
+        """Merge top-level lateral/recruitment attributes into a stim_params dict for dispatch."""
+        sp = dict(base_dict or {})
+        if 'recruitment' not in sp:
+            if getattr(self, 'lateral_mode', None) is not None:
+                sp['recruitment'] = getattr(self, 'lateral_mode')
+            elif getattr(self, 'recruitment', None) is not None:
+                sp['recruitment'] = self.recruitment
+        for k in ('bilateral_mirror_motor', 'bilateral_sequential_left_frac'):
+            if k not in sp and getattr(self, k, None) is not None:
+                sp[k] = getattr(self, k)
+        return sp
+
     def run_experiment(self, test_type=None):
         if test_type is None:
             test_type = getattr(self, 'test_type', None) or 'dynamic'
+        self.test_type = test_type
+        requested_test_type = str(test_type)
+        motion_test_type = requested_test_type
+        if requested_test_type == 'calibration':
+            motion_test_type = str(getattr(self, 'calibration_base_test_type', 'dynamic'))
+            if motion_test_type in ('isometric', 'isovelocity', 'calibration'):
+                raise ValueError(
+                    "calibration_base_test_type must be one of dynamic/frequency_sweep/frequency_step/"
+                    "curvature_step/step_change."
+                )
 
         # --- THE CLEANING CREW ---
         self.aidata = None
@@ -237,11 +618,73 @@ class Bender:
         self.sono_right_mm = None
         self.angledata = None
         self.master_logger.clear()
+        self.trial_records = []
 
         # Now, if the DAQ fails, you won't accidentally save old data!
         # Set input and output names/channels
         self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
-        self.set_stim_channels(*self.stim_channels) 
+        self.set_stim_channels(*self.stim_channels)
+
+        if requested_test_type in ('isometric', 'isovelocity'):
+            self._normalize_dispatch_aliases()
+
+        # Unified dispatcher for dedicated step-protocols.
+        if requested_test_type == 'isometric':
+            initial = getattr(self, 'isometric_initial', None)
+            final = getattr(self, 'isometric_final', None)
+            num_steps = getattr(self, 'isometric_num_steps', None)
+            if initial is None or final is None or num_steps is None:
+                raise AttributeError(
+                    "isometric dispatch requires isometric_initial, isometric_final, and isometric_num_steps "
+                    "on the Bender instance (legacy names initial/final/num_steps are copied automatically)."
+                )
+            mode = getattr(self, 'isometric_mode', None) or 'strain'
+            randomize = bool(getattr(self, 'isometric_randomize', False))
+            random_seed = getattr(self, 'isometric_random_seed', None)
+            stim_params = self._stim_params_with_lateral(getattr(self, 'isometric_stim_params', {}) or {})
+            out = self.isometric(
+                initial,
+                final,
+                num_steps,
+                mode=mode,
+                randomize=randomize,
+                random_seed=random_seed,
+                stim_params=stim_params if len(stim_params) > 0 else None,
+            )
+            self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self.h5_protocol_metadata.update({'test_type': 'isometric'})
+            return out
+
+        if requested_test_type == 'isovelocity':
+            min_vel = getattr(self, 'isovelocity_min_vel', None)
+            max_vel = getattr(self, 'isovelocity_max_vel', None)
+            starting_strain = getattr(self, 'isovelocity_starting_strain', None)
+            num_steps = getattr(self, 'isovelocity_num_steps', None)
+            if min_vel is None or max_vel is None or starting_strain is None or num_steps is None:
+                raise AttributeError(
+                    "isovelocity dispatch requires isovelocity_min_vel, isovelocity_max_vel, "
+                    "isovelocity_starting_strain, and isovelocity_num_steps on the Bender instance "
+                    "(legacy names min_vel/max_vel/starting_strain/num_steps are copied automatically)."
+                )
+            starting_strain_mode = getattr(self, 'isovelocity_starting_strain_mode', None) or 'strain'
+            randomize = bool(getattr(self, 'isovelocity_randomize', False))
+            random_seed = getattr(self, 'isovelocity_random_seed', None)
+            stim_params = self._stim_params_with_lateral(getattr(self, 'isovelocity_stim_params', {}) or {})
+            out = self.isovelocity(
+                min_vel,
+                max_vel,
+                starting_strain,
+                num_steps,
+                starting_strain_mode=starting_strain_mode,
+                randomize=randomize,
+                random_seed=random_seed,
+                iso_duration_s=float(getattr(self, 'isovelocity_iso_duration_s', 0.2)),
+                pre_hold_s=float(getattr(self, 'isovelocity_pre_hold_s', 0.3)),
+                stim_params=stim_params if len(stim_params) > 0 else None,
+            )
+            self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self.h5_protocol_metadata.update({'test_type': 'isovelocity'})
+            return out
 
         # self.calibration is assumed to be loaded in the notebook using bender.loadCalibration(...)
 
@@ -253,7 +696,7 @@ class Bender:
         duration = None #Initialize, but will be set below
 
         # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
-        if test_type == 'dynamic':
+        if motion_test_type == 'dynamic':
             if self.period_by_cycle is None:
                 raise AttributeError("Dynamic test requires 'period_by_cycle' to be set via organize_cycles first.")
 
@@ -265,7 +708,7 @@ class Bender:
                 self.amp_by_cycle,
             )
 
-        elif test_type == 'frequency_sweep':
+        elif motion_test_type == 'frequency_sweep':
             if self.duration is None:
                 raise AttributeError("frequency_sweep requires 'self.duration' to be set in the notebook first.")
 
@@ -282,7 +725,7 @@ class Bender:
             )
             self.sweep_instantaneous_freq = sweep_freq
 
-        elif test_type == 'frequency_step':
+        elif motion_test_type == 'frequency_step':
             if self.duration is None:
                 raise AttributeError("frequency_step requires 'self.duration' to be set in the notebook first.")
 
@@ -297,7 +740,7 @@ class Bender:
                 nominal_curvature=getattr(self, 'step_nominal_curvature', None),
             )
 
-        elif test_type == 'curvature_step':
+        elif motion_test_type == 'curvature_step':
             if self.duration is None:
                 raise AttributeError("curvature_step requires 'self.duration' to be set in the notebook first.")
 
@@ -312,7 +755,7 @@ class Bender:
                 nominal_curvature=getattr(self, 'step_nominal_curvature', None),
             )
 
-        elif test_type == 'step_change':
+        elif motion_test_type == 'step_change':
             freqs = getattr(self, 'step_change_frequencies', None)
             curves = getattr(self, 'step_change_curves', None)
             cps = getattr(self, 'step_change_cycles_per_step', None)
@@ -333,7 +776,8 @@ class Bender:
         else:
             raise ValueError(
                 f"Unknown test type: {test_type!r} (use 'dynamic', 'frequency_sweep', "
-                f"'frequency_step', 'curvature_step', or 'step_change')"
+                f"'frequency_step', 'curvature_step', 'step_change', 'isometric', "
+                "'isovelocity', or 'calibration')"
             )
 
         # Access parameters for electrical stimuli stored in 'self' (set by organize_cycles)
@@ -373,7 +817,7 @@ class Bender:
         self.S1stimcmd = S1stimcmd
         self.S2stimcmd = S2stimcmd
 
-        self.master_logger.record(test_type=test_type)
+        self.master_logger.record(test_type=requested_test_type, motion_test_type=motion_test_type)
         self.h5_protocol_metadata = self.master_logger.as_dict()
 
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
@@ -385,7 +829,7 @@ class Bender:
                             
 
         # Print file save location
-        filename = self.increment_file_name(f'experiment_data_{test_type}_000.h5')
+        filename = self.increment_file_name(f'experiment_data_{requested_test_type}_000.h5')
         print(f"Data will be saved to: {filename}")
 
         # Run the experiment using 'self'
@@ -398,6 +842,48 @@ class Bender:
 
         if len(forcetorque_indices) == 6:
             self.forcetorque = self.apply_calibration_forcetorque(self.aidata[forcetorque_indices, :])
+            self.forcetorque_raw = np.array(self.forcetorque, copy=True)
+            self.forcetorque_corrected = None
+            ns = int(self.forcetorque.shape[1]) if np.ndim(self.forcetorque) == 2 else 0
+            self.inertial_torque_system_primary = np.zeros(ns, dtype=float)
+            self.inertial_torque_specimen_primary = np.zeros(ns, dtype=float)
+            self.inertial_torque_total_primary = np.zeros(ns, dtype=float)
+            self.primary_torque_raw = np.zeros(ns, dtype=float)
+            self.primary_torque_corrected = np.zeros(ns, dtype=float)
+            use_cal = bool(getattr(self, 'use_inertial_calibration', False))
+            cal_file = getattr(self, 'inertial_calibration_file', None)
+            if use_cal and getattr(self, 'inertial_calibration_profile', None) is None and cal_file and os.path.exists(cal_file):
+                try:
+                    self.load_inertial_calibration_file(cal_file)
+                except Exception as e:
+                    print(f"⚠️ Inertial calibration file could not be loaded: {e}")
+            prof = getattr(self, 'inertial_calibration_profile', None)
+            if requested_test_type != 'calibration':
+                idx_t = self._primary_torque_index()
+                comp = self._compute_primary_torque_components(self.forcetorque[idx_t, :], self.anglevel)
+                self.inertial_torque_system_primary = np.array(comp['system'], copy=True)
+                self.inertial_torque_specimen_primary = np.array(comp['specimen'], copy=True)
+                self.inertial_torque_total_primary = np.array(comp['total'], copy=True)
+                self.primary_torque_raw = np.array(comp['raw'], copy=True)
+                self.primary_torque_corrected = np.array(comp['corrected'], copy=True)
+                corr = np.array(self.forcetorque, copy=True)
+                corr[idx_t, :len(self.primary_torque_corrected)] = self.primary_torque_corrected
+                self.forcetorque_corrected = corr
+                self.h5_protocol_metadata.update({
+                    'system_inertial_from_profile': bool(use_cal and isinstance(prof, dict)),
+                    'specimen_inertial_from_geometry': bool(self._specimen_moi_for_inertial_torque() > 0),
+                    'theoretical_i_total_system_g_mm2': float(getattr(self, 'i_total_system', 0.0)),
+                })
+            if requested_test_type == 'calibration':
+                idx_t = self._primary_torque_index()
+                prof = self._estimate_inertial_profile(self.forcetorque[idx_t, :], self.anglevel)
+                if prof is not None:
+                    self.inertial_calibration_profile = prof
+                    self.h5_protocol_metadata.update({
+                        'inertial_axis_sensor': prof['axis_sensor'],
+                        'inertial_I_est': prof['I_est'],
+                        'inertial_bias_est': prof['bias_est'],
+                    })
         else:
             print("⚠️ Warning: Could not find all 6 SG channels for Force/Torque calibration.")
 
@@ -422,6 +908,23 @@ class Bender:
             self.stim_monitor = self.get_data_by_name('stim_monitor')
 
         self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        try:
+            self.make_cycle_tags()
+            cyc = np.array(getattr(self, 'cycle_index_history', np.array([])), copy=True)
+        except Exception:
+            cyc = np.array([], dtype=int)
+        entry = self._build_trial_record(
+            test_type=requested_test_type,
+            trial_index=0,
+            cycle_index=0,
+            extra={'cycle_index_by_sample': cyc},
+        )
+        self.trial_records = [entry]
+        self.h5_protocol_metadata.update({
+            'test_type': str(requested_test_type),
+            'n_trials': 1,
+            'motion_test_type': str(motion_test_type),
+        })
 
    
     def get_data_by_name(self, name):
@@ -432,9 +935,73 @@ class Bender:
         except (ValueError, AttributeError):
             return None
 
+    def convert_to_curvature(self, value, mode):
+        """Instance wrapper for :func:`convert_to_curvature` using ``self.dclamp`` / ``self.xsec_width``."""
+        return convert_to_curvature(
+            value,
+            mode,
+            dclamp_mm=getattr(self, 'dclamp', None),
+            xsec_width_mm=getattr(self, 'xsec_width', None),
+        )
 
+    def get_all_amps(self, target_value, mode='curvature', rate=None, rate_mode=None,
+                     dclamp_mm=None, xsec_width_mm=None):
+        """
+        Map target specimen inputs to curvature (1/m) and motor amplitudes (deg), matching
+        ``organize_cycles`` geometry.
+
+        Parameters
+        ----------
+        target_value : float or sequence
+            Interpreted per ``mode`` (see :func:`convert_to_curvature`).
+        mode : str
+            ``curvature``, ``strain`` (fraction), ``strain_pct``, or ``angle`` (deg).
+        rate : float or sequence, optional
+            Must be accompanied by ``rate_mode`` (no default): this is a **kinematic** rate
+            (ramp derivative), not peak cyclic rate. For cyclic peak strain rate at frequency
+            ``f``, compute ``peak_strain_rate_sinusoidal(strain, f)`` and pass with
+            ``rate_mode='strain_rate'``.
+        rate_mode : str, required if ``rate`` is given
+            One of ``curvature_rate``, ``strain_rate``, ``strain_pct_rate``, ``angle_vel``.
+        dclamp_mm, xsec_width_mm
+            Overrides; defaults from ``self``.
+
+        Returns
+        -------
+        dict
+            ``curvature_1_per_m``, ``amp_deg`` (arrays); if ``rate`` given, also
+            ``curvature_rate_1_per_m_s`` and ``angle_vel_deg_s``.
+        """
+        dc = float(dclamp_mm) if dclamp_mm is not None else getattr(self, 'dclamp', None)
+        xw = float(xsec_width_mm) if xsec_width_mm is not None else getattr(self, 'xsec_width', None)
+        if dc is None:
+            raise ValueError("get_all_amps requires dclamp (argument or self.dclamp from metadata).")
+        tv = np.atleast_1d(np.asarray(target_value, dtype=float)).reshape(-1)
+        kappa = convert_to_curvature(tv, mode, dclamp_mm=dc, xsec_width_mm=xw)
+        amps = np.rad2deg(kappa * (dc / 1000.0))
+        out = {
+            'curvature_1_per_m': kappa,
+            'amp_deg': amps,
+        }
+        if rate is not None:
+            if rate_mode is None:
+                raise ValueError(
+                    "get_all_amps(..., rate=...) requires rate_mode= "
+                    "('curvature_rate', 'strain_rate', 'strain_pct_rate', or 'angle_vel'). "
+                    "Position mode does not imply a unique rate: cyclic peak strain rate depends "
+                    "on frequency (use peak_strain_rate_sinusoidal(strain, f) with rate_mode='strain_rate')."
+                )
+            rm = rate_mode
+            rv = np.atleast_1d(np.asarray(rate, dtype=float)).reshape(-1)
+            if rv.size == 1 and kappa.size > 1:
+                rv = np.full_like(kappa, rv.flat[0])
+            kdot = convert_to_curvature(rv, rm, dclamp_mm=dc, xsec_width_mm=xw)
+            out['curvature_rate_1_per_m_s'] = kdot
+            out['angle_vel_deg_s'] = np.rad2deg(kdot * (dc / 1000.0))
+        return out
 
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate):
+        """Build per-cycle arrays. ``all_curves`` is κ (1/m); use :meth:`get_all_amps` to build it from strain/angle."""
         start = time.time()
         self.dclamp = float(dclamp)
         if not np.isfinite(cycles_per_step) or cycles_per_step <= 0:
@@ -750,6 +1317,231 @@ class Bender:
         
         return total_moi, total_mass
 
+    def _hardware_inertia_baseline(self, clamp_offset_mm):
+        """Return baseline rotating hardware inertia/mass terms in (g*mm^2, g)."""
+        RHO_PLA, RHO_STEEL, RHO_NEO = 0.001116, 0.008, 0.0075
+        CLAMP_DIM = np.array([50.0, 100.0, 20.0])  # W, H, D (mm)
+        M_BOLT = 12.0  # g total hardware per clamp
+        m_shaft = (np.pi * (9.525 / 2) ** 2 * 304.8) * RHO_STEEL
+        i_shaft = 0.5 * m_shaft * (9.525 / 2) ** 2
+        r_cm = float(clamp_offset_mm) + (CLAMP_DIM[2] / 2)
+        m_unit = (np.prod(CLAMP_DIM) * RHO_PLA) + (np.pi * 5 ** 2 * 3 * RHO_NEO) + M_BOLT
+        i_rotating_clamps = 2 * (m_unit * r_cm ** 2)
+        return i_shaft, m_shaft, i_rotating_clamps, (m_unit * 2), r_cm
+
+    def set_frustum_inertial_model(
+        self,
+        height_mm,
+        width_mm,
+        length_mm,
+        density_g_per_mm3,
+        *,
+        tip_scale=0.0,
+        clamp_offset_mm=20.0,
+        num_samples=100,
+    ):
+        """
+        Build a specimen inertia model as an elliptical frustum and fold it into total MOI.
+
+        The frustum is modeled with linearly varying semi-axes:
+        front = tip_scale * back, back = (width_mm/2, height_mm/2).
+        """
+        h = float(height_mm)
+        w = float(width_mm)
+        L = float(length_mm)
+        rho = float(density_g_per_mm3)
+        ts = float(tip_scale)
+        if h <= 0 or w <= 0 or L <= 0 or rho <= 0:
+            raise ValueError("Frustum inputs height/width/length/density must be > 0.")
+        if ts < 0 or ts > 1:
+            raise ValueError("tip_scale must be in [0, 1].")
+
+        back_h = h / 2.0
+        back_w = w / 2.0
+        front_h = ts * back_h
+        front_w = ts * back_w
+
+        i_spec, m_spec = self.calculate_moi_specimen(
+            rho_eff=rho,
+            obj_depth_length=L,
+            front_h_semi=front_h,
+            back_h_semi=back_h,
+            front_w_semi=front_w,
+            back_w_semi=back_w,
+            num_samples=int(num_samples),
+            axis_offset_x=0.0,
+            axis_offset_z=0.0,
+        )
+        i_shaft, m_shaft, i_clamps, m_clamps, r_cm = self._hardware_inertia_baseline(clamp_offset_mm)
+        self.i_total_system = float(i_shaft + i_clamps + i_spec)
+        self.total_mass = float(m_shaft + m_clamps + m_spec)
+        self.specimen_moi_frustum = float(i_spec)
+        self.specimen_mass_frustum = float(m_spec)
+        self.specimen_inertial_model = "elliptical_frustum"
+        self.frustum_inputs = {
+            'height_mm': h,
+            'width_mm': w,
+            'length_mm': L,
+            'density_g_per_mm3': rho,
+            'tip_scale': ts,
+            'clamp_offset_mm': float(clamp_offset_mm),
+        }
+        print(
+            f"Frustum model set: specimen mass={m_spec:.3f} g, "
+            f"specimen MOI={i_spec:.3f} g*mm^2, total MOI={self.i_total_system:.3f} g*mm^2"
+        )
+        return self.i_total_system
+
+    def _parse_profile_stations(self, stations):
+        """
+        Parse flexible station list for specimen cross-sections.
+
+        Expected each item to include at least:
+            {'height_mm': <float>, 'width_mm': <float>}
+        Optional:
+            {'position': <0..1>} or {'position_frac': <0..1>} and {'label': <str>}
+        If positions are omitted, they are assigned evenly from 0..1.
+        """
+        if not isinstance(stations, (list, tuple)) or len(stations) < 2:
+            raise ValueError("specimen_profile_stations must be a list with >= 2 station entries.")
+        parsed = []
+        for i, s in enumerate(stations):
+            if not isinstance(s, dict):
+                raise ValueError(f"Station #{i} must be a dict; got {type(s).__name__}.")
+            h = float(s.get('height_mm'))
+            w = float(s.get('width_mm'))
+            if h <= 0 or w <= 0:
+                raise ValueError(f"Station #{i}: height_mm and width_mm must be > 0.")
+            p = s.get('position_frac', s.get('position', None))
+            label = str(s.get('label', f'station_{i}'))
+            parsed.append({'height_mm': h, 'width_mm': w, 'position': p, 'label': label})
+        # Fill missing positions with even spacing
+        provided = [x['position'] is not None for x in parsed]
+        if not any(provided):
+            n = len(parsed)
+            for i, x in enumerate(parsed):
+                x['position'] = 0.0 if n == 1 else float(i) / float(n - 1)
+        else:
+            for i, x in enumerate(parsed):
+                if x['position'] is None:
+                    raise ValueError("Either provide position for all stations or for none.")
+                x['position'] = float(x['position'])
+                if x['position'] < 0 or x['position'] > 1:
+                    raise ValueError(f"Station #{i}: position must be in [0,1].")
+        # Sort by position
+        parsed = sorted(parsed, key=lambda d: d['position'])
+        if parsed[0]['position'] != 0.0 or parsed[-1]['position'] != 1.0:
+            # Normalize span so first/last map to 0/1 for convenience.
+            p0 = parsed[0]['position']
+            p1 = parsed[-1]['position']
+            if p1 <= p0:
+                raise ValueError("Station positions must span increasing values.")
+            for x in parsed:
+                x['position'] = (x['position'] - p0) / (p1 - p0)
+        return parsed
+
+    def make_profile_stations(
+        self,
+        proximal_height_mm,
+        proximal_width_mm,
+        distal_height_mm,
+        distal_width_mm,
+        *,
+        middle_height_mm=None,
+        middle_width_mm=None,
+        middle_position=0.5,
+    ):
+        """
+        Tiny helper to build proximal/middle/distal station dictionaries.
+
+        Middle station is optional; if omitted, returns two-station profile.
+        """
+        stations = [
+            {
+                'label': 'proximal',
+                'position': 0.0,
+                'height_mm': float(proximal_height_mm),
+                'width_mm': float(proximal_width_mm),
+            },
+            {
+                'label': 'distal',
+                'position': 1.0,
+                'height_mm': float(distal_height_mm),
+                'width_mm': float(distal_width_mm),
+            },
+        ]
+        if middle_height_mm is not None and middle_width_mm is not None:
+            stations.insert(
+                1,
+                {
+                    'label': 'middle',
+                    'position': float(middle_position),
+                    'height_mm': float(middle_height_mm),
+                    'width_mm': float(middle_width_mm),
+                },
+            )
+        return stations
+
+    def set_profiled_specimen_inertial_model(
+        self,
+        stations,
+        length_mm,
+        density_g_per_mm3,
+        *,
+        clamp_offset_mm=20.0,
+        num_samples=120,
+    ):
+        """
+        Build specimen inertia model from an arbitrary profile of width/height stations.
+
+        This generalizes proximal/middle/distal inputs to any number of stations.
+        """
+        L = float(length_mm)
+        rho = float(density_g_per_mm3)
+        if L <= 0 or rho <= 0:
+            raise ValueError("length_mm and density_g_per_mm3 must be > 0.")
+        st = self._parse_profile_stations(stations)
+        pos = np.array([s['position'] for s in st], dtype=float)
+        rx = np.array([s['width_mm'] / 2.0 for s in st], dtype=float)
+        ry = np.array([s['height_mm'] / 2.0 for s in st], dtype=float)
+
+        z = np.linspace(0.0, L, int(num_samples))
+        f = z / L
+        rx_z = np.interp(f, pos, rx)
+        ry_z = np.interp(f, pos, ry)
+
+        # 2D X-Z integration, same style as calculate_moi_specimen.
+        max_w = float(np.max(rx_z))
+        x = np.linspace(-max_w, max_w, int(num_samples))
+        X, Z = np.meshgrid(x, z)
+        RX = np.interp(Z / L, pos, rx)
+        RY = np.interp(Z / L, pos, ry)
+        h_sq = 1.0 - (X ** 2 / np.maximum(RX ** 2, 1e-12))
+        H = 2.0 * RY * np.sqrt(np.maximum(h_sq, 0.0))
+        dx = x[1] - x[0]
+        dz = z[1] - z[0]
+        mass_matrix = rho * H * dx * dz
+        r_sq = (X ** 2) + (Z ** 2)
+        m_spec = float(np.sum(mass_matrix))
+        i_spec = float(np.sum(mass_matrix * r_sq))
+
+        i_shaft, m_shaft, i_clamps, m_clamps, _ = self._hardware_inertia_baseline(clamp_offset_mm)
+        self.i_total_system = float(i_shaft + i_clamps + i_spec)
+        self.total_mass = float(m_shaft + m_clamps + m_spec)
+        self.specimen_moi_profile = i_spec
+        self.specimen_mass_profile = m_spec
+        self.specimen_inertial_model = "profiled_stations"
+        self.specimen_profile_stations = st
+        self.specimen_profile_length_mm = L
+        self.specimen_profile_density_g_per_mm3 = rho
+        self.specimen_profile_num_samples = int(num_samples)
+        self.specimen_profile_clamp_offset_mm = float(clamp_offset_mm)
+        print(
+            f"Profiled model set: specimen mass={m_spec:.3f} g, specimen MOI={i_spec:.3f} g*mm^2, "
+            f"total MOI={self.i_total_system:.3f} g*mm^2"
+        )
+        return self.i_total_system
+
     def run(self, device_name):
         input_channels = ['/'.join((device_name, c1)) for c1 in self.input_channels]
         S1stim_chan = '/'.join((device_name, self.S1stim_chan))
@@ -846,7 +1638,1068 @@ class Bender:
 
         return(self.aidata)
 
-#
+    def _normalize_recruitment(self, name):
+        """
+        Canonical recruitment modes for isometric / isovelocity.
+
+        - left_unilateral / left: only the stim channel mapped to specimen left (config S1side/S2side).
+        - right_unilateral / right: only right.
+        - bilateral_simultaneous: left + right channels carry the same pulse train when active.
+        - bilateral_sequential: in time order, left channel then right (same motor posture unless mirror).
+        """
+        if name is None:
+            return 'bilateral_simultaneous'
+        s = str(name).strip().lower().replace('-', '_').replace(' ', '_')
+        aliases = {
+            'bilateral_simultaneous': 'bilateral_simultaneous',
+            'bilateral_both': 'bilateral_simultaneous',
+            'both': 'bilateral_simultaneous',
+            'simultaneous': 'bilateral_simultaneous',
+            'bilateral_sequential': 'bilateral_sequential',
+            'bilateral_left_then_right': 'bilateral_sequential',
+            'sequential': 'bilateral_sequential',
+            'left_then_right': 'bilateral_sequential',
+            'left_unilateral': 'left_unilateral',
+            'left': 'left_unilateral',
+            'unilateral_left': 'left_unilateral',
+            'right_unilateral': 'right_unilateral',
+            'right': 'right_unilateral',
+            'unilateral_right': 'right_unilateral',
+        }
+        if s in aliases:
+            return aliases[s]
+        if s in ('bilateral_sequential', 'bilateral_simultaneous', 'left_unilateral', 'right_unilateral'):
+            return s
+        raise ValueError(
+            f"Unknown recruitment/lateral_mode {name!r}; use left, right, bilateral_sequential, "
+            "bilateral_simultaneous."
+        )
+
+    def lateral_index_from_side_name(self, side):
+        """Map ``'left'`` / ``'right'`` to specimen lateral index (from config)."""
+        s = str(side).strip().lower()
+        if s == 'left':
+            return int(self.specimen_side_index_left)
+        if s == 'right':
+            return int(self.specimen_side_index_right)
+        raise ValueError(f"side must be 'left' or 'right', not {side!r}")
+
+    def side_name_from_lateral_index(self, lateral_index):
+        """Map a specimen lateral index to ``'left'`` or ``'right'``."""
+        li = int(lateral_index)
+        if li == int(self.specimen_side_index_left):
+            return 'left'
+        if li == int(self.specimen_side_index_right):
+            return 'right'
+        raise ValueError(
+            f"lateral_index {li!r} is not specimen_side_index_left/right "
+            f"({self.specimen_side_index_left}, {self.specimen_side_index_right})"
+        )
+
+    def recruitment_unilateral_lateral_index(self, recruitment_normalized):
+        """
+        If ``recruitment_normalized`` is unilateral, return recruited lateral index; else ``None``.
+        Expects output of :meth:`Bender._normalize_recruitment`.
+        """
+        if recruitment_normalized == 'left_unilateral':
+            return int(self.specimen_side_index_left)
+        if recruitment_normalized == 'right_unilateral':
+            return int(self.specimen_side_index_right)
+        return None
+
+    def motor_positive_bend_lateral_index(self):
+        """
+        Specimen lateral index toward which **positive** commanded motor angle bends
+        (the side named in ``positive_motor_direction``, index from config anchor).
+        """
+        pos = str(getattr(self, 'positive_motor_direction', 'left')).lower()
+        if pos == 'left':
+            return int(self.specimen_side_index_left)
+        if pos == 'right':
+            return int(self.specimen_side_index_right)
+        return int(self.specimen_side_index_left)
+
+    def motor_command_sign_for_bend_toward_index(self, lateral_index):
+        """
+        Return ``+1`` or ``-1`` to multiply a **positive** bend magnitude (angle, velocity)
+        so that the resulting motion bends **toward** the specimen side named by ``lateral_index``
+        (must equal ``specimen_side_index_left`` or ``specimen_side_index_right``).
+
+        Relates encoder/motor sign convention (``positive_motor_direction``) to the specimen
+        lateral frame without changing hardware geometry.
+        """
+        li = int(lateral_index)
+        if li == 0:
+            return 1.0
+        pos = str(getattr(self, 'positive_motor_direction', 'left')).lower()
+        if pos not in ('left', 'right'):
+            return 1.0
+        toward_left_side = li == int(self.specimen_side_index_left)
+        motor_positive_is_left = pos == 'left'
+        return 1.0 if toward_left_side == motor_positive_is_left else -1.0
+
+    def _motor_sign_for_specimen_side(self, side):
+        """Backward-compatible wrapper for :meth:`motor_command_sign_for_bend_toward_index`."""
+        return self.motor_command_sign_for_bend_toward_index(self.lateral_index_from_side_name(side))
+
+    def specimen_lateral_frame_summary(self):
+        """Compact dict for metadata / debugging: indices + config wiring."""
+        return {
+            'specimen_lateral_index_on_positive_motor_side': int(
+                getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
+            ),
+            'specimen_side_index_left': int(self.specimen_side_index_left),
+            'specimen_side_index_right': int(self.specimen_side_index_right),
+            'positive_motor_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
+            'positive_motor_direction': str(getattr(self, 'positive_motor_direction', '')),
+            'S1side': str(getattr(self, 'S1side', '')),
+            'S2side': str(getattr(self, 'S2side', '')),
+        }
+
+    def unilateral_posture_lateral_index(self, recruitment=None):
+        """
+        If ``recruitment`` is left/right unilateral (after normalization), return that side's
+        lateral index; else ``None``. Pass ``recruitment=None`` to use ``self.recruitment``.
+        """
+        r = self._normalize_recruitment(
+            recruitment if recruitment is not None else getattr(self, 'recruitment', None)
+        )
+        return self.recruitment_unilateral_lateral_index(r)
+
+    def strain_display_sign(self):
+        """±1 scale for geometric strain in plots; see ``strain_shortening_positive_display_sign``."""
+        s = float(getattr(self, 'strain_shortening_positive_display_sign', 1.0))
+        return -1.0 if s < 0 else 1.0
+
+    def strain_yaxis_title_pct(self, recruitment=None):
+        """
+        Y-axis label for ε = κ·(w/2) previews, tagged with recruitment / posture side when known.
+        """
+        rec = self._normalize_recruitment(
+            recruitment if recruitment is not None else getattr(self, 'recruitment', None)
+        )
+        base = 'ε_geom = κ·w/2 (%)'
+        tag = {
+            'left_unilateral': 'posture toward LEFT',
+            'right_unilateral': 'posture toward RIGHT',
+            'bilateral_sequential': 'bilateral sequential (L/R stim phases)',
+            'bilateral_simultaneous': 'bilateral simultaneous',
+        }.get(rec, '')
+        if tag:
+            return f'{base} — {tag}'
+        return base
+
+    def strain_geometry_plot_context(self, recruitment=None):
+        """
+        Short text for figure titles/annotations: recruitment, motor sign, and fiber strain caveat.
+        """
+        rec = self._normalize_recruitment(
+            recruitment if recruitment is not None else getattr(self, 'recruitment', None)
+        )
+        pos = str(getattr(self, 'positive_motor_direction', 'left')).lower()
+        side_label = {
+            'left_unilateral': 'LEFT unilateral (command bends toward LEFT)',
+            'right_unilateral': 'RIGHT unilateral (command bends toward RIGHT)',
+            'bilateral_sequential': 'bilateral sequential (split stim L then R; mirror motor optional)',
+            'bilateral_simultaneous': 'bilateral simultaneous (both stim channels)',
+        }.get(rec, str(rec))
+        flip = self.strain_display_sign()
+        flip_note = (
+            ' Display sign flipped (strain_shortening_positive_display_sign<0).'
+            if flip < 0
+            else ''
+        )
+        mp_idx = int(self.motor_positive_bend_lateral_index())
+        uidx = self.unilateral_posture_lateral_index(rec)
+        u_note = f' Unilateral posture lateral index={uidx}.' if uidx is not None else ''
+        return (
+            f'{side_label}. Lateral axis: LEFT={self.specimen_side_index_left}, '
+            f'RIGHT={self.specimen_side_index_right}; '
+            f'+motor bends toward index {mp_idx} ({pos.upper()}).{u_note} '
+            f'ε_geom = κ·w/2 from θ/L; opposite surfaces ± same |ε| (shorten vs lengthen).{flip_note}'
+        )
+
+    def _pulse_carrier_volts(self, t, active_mask, stim_pulse_rate_hz, stim_voltage):
+        """50% duty square carrier at stim_pulse_rate_hz, gated by active_mask (same as legacy isometric stim)."""
+        pr = float(stim_pulse_rate_hz)
+        v = float(stim_voltage)
+        pulse = (np.mod(t * pr, 1.0) <= 0.5).astype(np.float64) * v
+        m = active_mask & np.isfinite(t)
+        return np.where(m, pulse, 0.0)
+
+    def _deposit_stim_on_side(self, pulse_vec, side_name, s1, s2):
+        """Add pulse_vec to S1 and/or S2 depending on config S1side / S2side."""
+        sn = str(side_name).lower()
+        if str(self.S1side).lower() == sn:
+            s1[:] += np.asarray(pulse_vec, dtype=float).reshape(-1)
+        if str(self.S2side).lower() == sn:
+            s2[:] += np.asarray(pulse_vec, dtype=float).reshape(-1)
+
+    def _route_recruitment_stim(self, pulse, recruitment, sequential_left_frac=0.5):
+        """
+        Route a single per-sample pulse train onto S1/S2 using recruitment mode.
+        ``pulse`` is length n; returns (s1, s2).
+        """
+        n = int(np.asarray(pulse).size)
+        s1 = np.zeros(n, dtype=float)
+        s2 = np.zeros(n, dtype=float)
+        rec = self._normalize_recruitment(recruitment)
+        p = np.asarray(pulse, dtype=float).reshape(-1)
+        active = np.abs(p) > 1e-18
+        if not np.any(active):
+            return s1, s2
+        if rec == 'left_unilateral':
+            self._deposit_stim_on_side(p, 'left', s1, s2)
+            return s1, s2
+        if rec == 'right_unilateral':
+            self._deposit_stim_on_side(p, 'right', s1, s2)
+            return s1, s2
+        if rec == 'bilateral_simultaneous':
+            self._deposit_stim_on_side(p, 'left', s1, s2)
+            self._deposit_stim_on_side(p, 'right', s1, s2)
+            return s1, s2
+        if rec == 'bilateral_sequential':
+            idx = np.where(active)[0]
+            frac = float(sequential_left_frac)
+            frac = min(0.999, max(0.001, frac))
+            split = int(round(frac * idx.size))
+            split = max(1, min(idx.size - 1, split))
+            left_m = np.zeros(n, dtype=bool)
+            right_m = np.zeros(n, dtype=bool)
+            left_m[idx[:split]] = True
+            right_m[idx[split:]] = True
+            pl = np.where(left_m, p, 0.0)
+            pr = np.where(right_m, p, 0.0)
+            self._deposit_stim_on_side(pl, 'left', s1, s2)
+            self._deposit_stim_on_side(pr, 'right', s1, s2)
+            return s1, s2
+        return s1, s2
+
+    def _isometric_pulse_stim(self, t, active_mask, stim_pulse_rate_hz, stim_voltage):
+        """Same carrier shape as make_stimuli (50% duty square at stim_pulse_rate_hz)."""
+        pr = float(stim_pulse_rate_hz)
+        v = float(stim_voltage)
+        pulse = (np.mod(t * pr, 1.0) <= 0.5).astype(np.float64) * v
+        m = active_mask & np.isfinite(t)
+        s = np.where(m, pulse, 0.0)
+        return s, s.copy()
+
+    def _timeline_mirror_two_holds(self, prev_deg, mag_deg, ramp_s, hold_s_total, daq_hz):
+        """
+        Ramp prev->T1, hold T1, ramp T1->T2, hold T2 with |T1|=|T2|=|mag_deg| and signs for left/right bend.
+        Each hold duration is hold_s_total/2. Used for bilateral_sequential + bilateral_mirror_motor.
+        """
+        h = float(hold_s_total) * 0.5
+        T1 = self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_left) * abs(float(mag_deg))
+        T2 = self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_right) * abs(float(mag_deg))
+        t1, a1, w1 = self._timeline_ramp_hold(float(prev_deg), T1, float(ramp_s), h, daq_hz)
+        t2, a2, w2 = self._timeline_ramp_hold(T1, T2, float(ramp_s), h, daq_hz)
+        off = float(t1[-1])
+        t2s = t2[1:] + off
+        a2s = a2[1:]
+        w2s = w2[1:]
+        t = np.concatenate([t1, t2s])
+        angle = np.concatenate([a1, a2s])
+        anglevel = np.concatenate([w1, w2s])
+        t_hold1_0 = float(ramp_s)
+        t_hold1_1 = float(ramp_s) + h
+        t_hold2_0 = off + float(ramp_s)
+        t_hold2_1 = off + float(ramp_s) + h
+        return t, angle, anglevel, (t_hold1_0, t_hold1_1), (t_hold2_0, t_hold2_1)
+
+    def _timeline_ramp_hold(self, angle_start_deg, angle_end_deg, ramp_s, hold_s, daq_hz):
+        """Piecewise-linear ramp then hold; returns (t, angle, anglevel) at AI rate."""
+        dt = 1.0 / float(daq_hz)
+        ramp_s = float(ramp_s)
+        hold_s = float(hold_s)
+        a0, a1 = float(angle_start_deg), float(angle_end_deg)
+        if ramp_s <= 0.0 or abs(a1 - a0) < 1e-12:
+            t_r = np.array([0.0])
+            ang_r = np.array([a1])
+        else:
+            n_r = max(2, int(round(ramp_s / dt)) + 1)
+            t_r = np.linspace(0.0, ramp_s, n_r)
+            u = np.linspace(0.0, 1.0, n_r)
+            ang_r = a0 + (a1 - a0) * u
+        n_h = max(2, int(round(hold_s / dt)) + 1)
+        if hold_s <= 0.0:
+            t_h = np.array([])
+            ang_h = np.array([])
+        else:
+            t_h = ramp_s + np.linspace(0.0, hold_s, n_h)[1:]
+            ang_h = np.full(t_h.size, a1, dtype=float)
+        t = np.concatenate([t_r, t_h])
+        angle = np.concatenate([ang_r, ang_h])
+        if t.size < 2:
+            raise ValueError("_timeline_ramp_hold: timeline too short; increase ramp_s, hold_s, or daq rate.")
+        anglevel = np.gradient(angle, t, edge_order=1)
+        return t, angle, anglevel
+
+    def _run_force_length_steps(
+        self,
+        targets_deg,
+        *,
+        ramp_duration_s=2.0,
+        hold_duration_s=5.0,
+        settle_before_stim_s=0.5,
+        stim_duration_s=None,
+        is_stim=True,
+        stim_pulse_rate=None,
+        stim_voltage=5.0,
+        device_name=None,
+        recruitment=None,
+        bilateral_mirror_motor=False,
+        bilateral_sequential_left_frac=0.5,
+    ):
+        """Execute ramp–hold–stim–acquire for each target angle in ``targets_deg`` (degrees)."""
+        targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
+        num_steps = int(targets_deg.size)
+        if num_steps < 1:
+            raise ValueError("targets_deg must contain at least one sample.")
+        dev = device_name if device_name is not None else getattr(self, 'device_name', None)
+        if dev is None:
+            raise ValueError("_run_force_length_steps requires device_name or self.device_name.")
+        spr = float(stim_pulse_rate) if stim_pulse_rate is not None else float(
+            getattr(self, 'stim_pulse_rate', 75.0)
+        )
+        daq_hz = float(self.daq_ai_sample_rate_hz)
+        results = []
+        rec = self._normalize_recruitment(
+            recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
+        )
+        mirror = bool(bilateral_mirror_motor) and rec == 'bilateral_sequential'
+        seq_frac = float(
+            bilateral_sequential_left_frac
+            if bilateral_sequential_left_frac is not None
+            else getattr(self, 'bilateral_sequential_left_frac', 0.5)
+        )
+        self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
+        self.set_stim_channels(*self.stim_channels)
+
+        for i in range(num_steps):
+            target = float(targets_deg[i])
+            prev = float(targets_deg[i - 1]) if i > 0 else float(targets_deg[0])
+            if mirror:
+                t, angle, anglevel, h1, h2 = self._timeline_mirror_two_holds(
+                    prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz
+                )
+                active_l = (t >= h1[0] + float(settle_before_stim_s)) & (t < h1[1])
+                active_r = (t >= h2[0] + float(settle_before_stim_s)) & (t < h2[1])
+                if stim_duration_s is not None:
+                    active_l &= t < (h1[0] + float(settle_before_stim_s) + float(stim_duration_s))
+                    active_r &= t < (h2[0] + float(settle_before_stim_s) + float(stim_duration_s))
+                if is_stim and (np.any(active_l) or np.any(active_r)):
+                    p_l = self._pulse_carrier_volts(t, active_l, spr, stim_voltage)
+                    p_r = self._pulse_carrier_volts(t, active_r, spr, stim_voltage)
+                    s1 = np.zeros_like(t)
+                    s2 = np.zeros_like(t)
+                    self._deposit_stim_on_side(p_l, 'left', s1, s2)
+                    self._deposit_stim_on_side(p_r, 'right', s1, s2)
+                else:
+                    s1 = np.zeros_like(t)
+                    s2 = np.zeros_like(t)
+                t_stim0 = float(h1[0] + float(settle_before_stim_s))
+                t_stim1 = float(h2[1])
+            else:
+                t, angle, anglevel = self._timeline_ramp_hold(
+                    prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz
+                )
+                t_stim0 = float(ramp_duration_s) + float(settle_before_stim_s)
+                if stim_duration_s is None:
+                    t_stim1 = float(ramp_duration_s) + float(hold_duration_s)
+                else:
+                    t_stim1 = t_stim0 + float(stim_duration_s)
+                t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
+                active = (t >= t_stim0) & (t < t_stim1)
+                if is_stim and np.any(active):
+                    pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
+                    s1, s2 = self._route_recruitment_stim(pulse, rec, sequential_left_frac=seq_frac)
+                else:
+                    s1 = np.zeros_like(t)
+                    s2 = np.zeros_like(t)
+
+            self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
+            self.record_stim_signal(s1, s2)
+            self.make_motor_stepper_pulses(
+                daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
+                motor_gear_ratio=self.motor_gear_ratio,
+                motor_full_steps_per_rev=self.motor_full_steps_per_rev,
+            )
+            self.aidata = self.run(device_name=dev)
+
+            entry = {
+                'test_type': 'isometric',
+                'step_index': i,
+                'trial_index': i,
+                'cycle_index': i,
+                'recruitment': rec,
+                'unilateral_posture_lateral_index': self.recruitment_unilateral_lateral_index(rec),
+                'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
+                'bilateral_mirror_motor': bool(mirror),
+                'target_deg': target,
+                'ramp_from_deg': prev,
+                't': np.array(t, copy=True),
+                'angle_cmd': np.array(angle, copy=True),
+                'anglevel_cmd': np.array(anglevel, copy=True),
+                'tnorm': np.zeros_like(t),
+                'S1stimcmd': np.array(s1, copy=True),
+                'S2stimcmd': np.array(s2, copy=True),
+                'aidata': np.array(self.aidata, copy=True),
+                'angle_measured': np.array(self.angle_measured, copy=True),
+                'stim_t0': t_stim0,
+                'stim_t1': t_stim1,
+                'forcetorque': None,
+                'mean_xforce_stim': None,
+            }
+            sg_names = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
+            try:
+                idx = [self.input_channel_names.index(n) for n in sg_names if n in self.input_channel_names]
+                if len(idx) == 6:
+                    ft = self.apply_calibration_forcetorque(self.aidata[idx, :])
+                    entry['forcetorque'] = ft
+                    entry['forcetorque_raw'] = np.array(ft, copy=True)
+                    idx_t = self._primary_torque_index()
+                    comp = self._compute_primary_torque_components(ft[idx_t, :], anglevel)
+                    ft_corr = np.array(ft, copy=True)
+                    ft_corr[idx_t, :len(comp['corrected'])] = comp['corrected']
+                    entry['forcetorque_corrected'] = ft_corr
+                    entry['inertial_torque_system_primary'] = np.array(comp['system'], copy=True)
+                    entry['inertial_torque_specimen_primary'] = np.array(comp['specimen'], copy=True)
+                    entry['inertial_torque_total_primary'] = np.array(comp['total'], copy=True)
+                    entry['primary_torque_raw'] = np.array(comp['raw'], copy=True)
+                    entry['primary_torque_corrected'] = np.array(comp['corrected'], copy=True)
+                    m = active & np.isfinite(t)
+                    if np.any(m):
+                        entry['mean_xforce_stim'] = float(np.mean(ft[0, m]))
+            except (ValueError, AttributeError):
+                pass
+            results.append(entry)
+
+        self.force_length_results = results
+        self.test_type = 'isometric'
+        self.trial_records = list(results)
+        self.h5_protocol_metadata.update({
+            'test_type': 'isometric',
+            'n_trials': int(len(results)),
+        })
+        return results
+
+    def run_force_length_series(
+        self,
+        initial_length,
+        max_dist,
+        num_steps,
+        *,
+        randomize=False,
+        random_seed=None,
+        ramp_duration_s=2.0,
+        hold_duration_s=5.0,
+        settle_before_stim_s=0.5,
+        stim_duration_s=None,
+        is_stim=True,
+        stim_pulse_rate=None,
+        stim_voltage=5.0,
+        device_name=None,
+    ):
+        """
+        Force–length / isometric-style protocol in **commanded motor angle (degrees)**.
+
+        For each target between ``initial_length`` and ``max_dist``, the motor ramps, holds,
+        stimulates (same carrier as :meth:`make_stimuli`), and acquires via :meth:`run`.
+        For specimen units (strain, curvature), use :meth:`test_force_length` instead.
+        """
+        num_steps = int(num_steps)
+        if num_steps < 1:
+            raise ValueError("num_steps must be >= 1.")
+        positions = np.linspace(float(initial_length), float(max_dist), num_steps)
+        if bool(randomize) and positions.size > 1:
+            rng = np.random.default_rng(None if random_seed is None else int(random_seed))
+            rng.shuffle(positions)
+        return self._run_force_length_steps(
+            positions,
+            ramp_duration_s=ramp_duration_s,
+            hold_duration_s=hold_duration_s,
+            settle_before_stim_s=settle_before_stim_s,
+            stim_duration_s=stim_duration_s,
+            is_stim=is_stim,
+            stim_pulse_rate=stim_pulse_rate,
+            stim_voltage=stim_voltage,
+            device_name=device_name,
+        )
+
+    def isometric(
+        self,
+        initial,
+        final,
+        num_steps,
+        mode='strain',
+        *,
+        randomize=False,
+        random_seed=None,
+        stim_params=None,
+        **kwargs,
+    ):
+        """
+        Force–length steps where ``initial`` / ``final`` are in ``mode`` units (see :func:`convert_to_curvature`).
+
+        Each step converts the target to curvature then to motor degrees (``dclamp``), then
+        ramps, stimulates, and records force like :meth:`run_force_length_series`.
+
+        Parameters
+        ----------
+        initial, final : float
+            Endpoints for ``np.linspace(initial, final, num_steps)`` in ``mode`` units.
+        num_steps : int
+        mode : str
+            ``strain`` (fraction), ``strain_pct``, ``angle`` (deg), or ``curvature`` (1/m).
+        randomize : bool
+            If True, randomize the sequence order after generating the linspace targets.
+        random_seed : int or None
+            Optional seed for deterministic randomization when ``randomize=True``.
+        stim_params : dict or None
+            Optional keys: ``ramp_duration_s``, ``hold_duration_s``, ``settle_before_stim_s``,
+            ``stim_duration_s``, ``is_stim``, ``stim_pulse_rate``, ``stim_voltage``, ``device_name``.
+        **kwargs
+            Merged into ``stim_params`` (stim_params takes precedence).
+
+        Returns
+        -------
+        list of dict
+            Same structure as :meth:`run_force_length_series`, plus ``target_value_native``,
+            ``curvature_1_per_m`` per step.
+        """
+        sp = {
+            'ramp_duration_s': 2.0,
+            'hold_duration_s': 5.0,
+            'settle_before_stim_s': 0.5,
+            'stim_duration_s': None,
+            'is_stim': True,
+            'stim_pulse_rate': None,
+            'stim_voltage': 5.0,
+            'device_name': None,
+        }
+        if stim_params:
+            sp.update(stim_params)
+        sp.update(kwargs)
+        vals = np.linspace(float(initial), float(final), int(num_steps))
+        seq_idx = np.arange(vals.size, dtype=int)
+        if bool(randomize) and vals.size > 1:
+            rng = np.random.default_rng(None if random_seed is None else int(random_seed))
+            rng.shuffle(seq_idx)
+            vals = vals[seq_idx]
+        dc = getattr(self, 'dclamp', None)
+        xw = getattr(self, 'xsec_width', None)
+        if dc is None:
+            raise ValueError("isometric requires self.dclamp (metadata).")
+        kappa = convert_to_curvature(vals, mode, dclamp_mm=dc, xsec_width_mm=xw)
+        targets_deg = np.rad2deg(kappa * (float(dc) / 1000.0))
+        rec = self._normalize_recruitment(
+            sp.get('recruitment', sp.get('lateral_mode', getattr(self, 'recruitment', 'bilateral_simultaneous')))
+        )
+        uidx = self.recruitment_unilateral_lateral_index(rec)
+        if uidx is not None:
+            targets_deg = targets_deg * self.motor_command_sign_for_bend_toward_index(uidx)
+        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
+        seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5)))
+        out = self._run_force_length_steps(
+            targets_deg,
+            ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
+            hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
+            settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
+            stim_duration_s=sp.get('stim_duration_s', None),
+            is_stim=bool(sp.get('is_stim', True)),
+            stim_pulse_rate=sp.get('stim_pulse_rate', None),
+            stim_voltage=float(sp.get('stim_voltage', 5.0)),
+            device_name=sp.get('device_name', None),
+            recruitment=rec,
+            bilateral_mirror_motor=mirror_bm,
+            bilateral_sequential_left_frac=seq_frac,
+        )
+        for i, e in enumerate(out):
+            e['target_value_native'] = float(vals[i])
+            e['curvature_1_per_m'] = float(kappa[i])
+            e['sequence_index'] = int(seq_idx[i])
+        self.h5_protocol_metadata.update({
+            'recruitment': rec,
+            'bilateral_mirror_motor': mirror_bm,
+            'bilateral_sequential_left_frac': seq_frac,
+            'specimen_side_index_left': int(self.specimen_side_index_left),
+            'specimen_side_index_right': int(self.specimen_side_index_right),
+            'specimen_lateral_index_on_positive_motor_side': int(
+                getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
+            ),
+            'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
+            'unilateral_posture_lateral_index': uidx,
+        })
+        return out
+
+    def test_force_length(self, initial, final, num_steps, mode='strain', stim_params=None, **kwargs):
+        """Backward-compatible alias for :meth:`isometric`."""
+        return self.isometric(
+            initial,
+            final,
+            num_steps,
+            mode=mode,
+            stim_params=stim_params,
+            **kwargs,
+        )
+
+    def _timeline_prehold_isovelocity(self, theta_start_deg, vel_deg_per_s, pre_hold_s, iso_duration_s, daq_hz):
+        """Hold at fixed angle, then bend at constant ``vel_deg_per_s`` for ``iso_duration_s``."""
+        dt = 1.0 / float(daq_hz)
+        th0 = float(theta_start_deg)
+        v = float(vel_deg_per_s)
+        ph = float(pre_hold_s)
+        iso = float(iso_duration_s)
+        if not np.isfinite(iso) or iso <= 0:
+            raise ValueError("iso_duration_s must be finite and > 0.")
+        if ph < 0:
+            raise ValueError("pre_hold_s must be non-negative.")
+        if ph > 0:
+            n1 = max(2, int(round(ph * daq_hz)) + 1)
+            t1 = np.linspace(0.0, ph, n1)
+            a1 = np.full(n1, th0)
+            w1 = np.zeros(n1)
+        else:
+            t1 = np.array([0.0])
+            a1 = np.array([th0])
+            w1 = np.array([0.0])
+        n2 = max(2, int(round(iso * daq_hz)) + 1)
+        t_edge = ph
+        t2 = np.linspace(t_edge, t_edge + iso, n2)[1:]
+        if t2.size < 1:
+            t2 = np.array([t_edge + iso])
+        a2 = th0 + v * (t2 - t_edge)
+        w2 = np.full(t2.size, v)
+        t = np.concatenate([t1, t2])
+        angle = np.concatenate([a1, a2])
+        anglevel = np.concatenate([w1, w2])
+        if t.size < 2:
+            raise ValueError("_timeline_prehold_isovelocity: timeline too short; increase durations or daq rate.")
+        return t, angle, anglevel, float(t_edge)
+
+    def _isovelocity_one_block(
+        self,
+        theta_start_deg,
+        vel_deg_per_s,
+        *,
+        pre_hold_s,
+        iso_duration_s,
+        settle_before_stim_s,
+        pre_iso_stim_duration_s,
+        stim_duration_s,
+        is_stim,
+        spr,
+        stim_voltage,
+        daq_hz,
+        recruitment,
+        sequential_left_frac,
+        mirror_stim_side,
+    ):
+        """
+        Build one isovelocity timeline + stim commands.
+
+        ``mirror_stim_side``: None -> use ``recruitment`` routing; ``'left'`` / ``'right'`` -> that side only
+        (for bilateral sequential + bilateral_mirror_motor two-segment runs).
+        """
+        t, angle, anglevel, t_iso0 = self._timeline_prehold_isovelocity(
+            float(theta_start_deg), float(vel_deg_per_s), float(pre_hold_s), float(iso_duration_s), daq_hz
+        )
+        pre_iso_stim_s = float(pre_iso_stim_duration_s)
+        if pre_iso_stim_s < 0:
+            raise ValueError("pre_iso_stim_duration_s must be non-negative.")
+        t_pre0 = max(0.0, t_iso0 - pre_iso_stim_s)
+        t_pre1 = t_iso0
+        t_stim0 = t_iso0 + float(settle_before_stim_s)
+        if stim_duration_s is None:
+            t_stim1 = t_iso0 + float(iso_duration_s)
+        else:
+            t_stim1 = t_stim0 + float(stim_duration_s)
+        t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
+        active_pre = (t >= t_pre0) & (t < t_pre1) if pre_iso_stim_s > 0 else np.zeros_like(t, dtype=bool)
+        active_iso = (t >= t_stim0) & (t < t_stim1)
+        active = active_pre | active_iso
+        if is_stim and np.any(active):
+            pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
+            if mirror_stim_side == 'left':
+                s1 = np.zeros_like(t)
+                s2 = np.zeros_like(t)
+                self._deposit_stim_on_side(pulse, 'left', s1, s2)
+            elif mirror_stim_side == 'right':
+                s1 = np.zeros_like(t)
+                s2 = np.zeros_like(t)
+                self._deposit_stim_on_side(pulse, 'right', s1, s2)
+            else:
+                s1, s2 = self._route_recruitment_stim(pulse, recruitment, sequential_left_frac=sequential_left_frac)
+        else:
+            s1 = np.zeros_like(t)
+            s2 = np.zeros_like(t)
+        return {
+            't': t,
+            'angle': angle,
+            'anglevel': anglevel,
+            't_iso0': t_iso0,
+            't_pre0': t_pre0,
+            't_pre1': t_pre1,
+            't_stim0': t_stim0,
+            't_stim1': t_stim1,
+            'iso_t1': t_iso0 + float(iso_duration_s),
+            's1': s1,
+            's2': s2,
+            'active': active,
+        }
+
+    def _run_isovelocity_steps(
+        self,
+        theta_start_deg,
+        velocities_deg_per_s,
+        *,
+        pre_hold_s=0.3,
+        iso_duration_s=0.2,
+        settle_before_stim_s=0.02,
+        pre_iso_stim_duration_s=0.0,
+        stim_duration_s=None,
+        is_stim=True,
+        stim_pulse_rate=None,
+        stim_voltage=5.0,
+        device_name=None,
+        recruitment=None,
+        bilateral_mirror_motor=False,
+        bilateral_sequential_left_frac=0.5,
+    ):
+        """Acquire one DAQ segment per commanded constant angular velocity (deg/s)."""
+        vels = np.atleast_1d(np.asarray(velocities_deg_per_s, dtype=float)).reshape(-1)
+        n = int(vels.size)
+        if n < 1:
+            raise ValueError("velocities_deg_per_s must contain at least one value.")
+        dev = device_name if device_name is not None else getattr(self, 'device_name', None)
+        if dev is None:
+            raise ValueError("_run_isovelocity_steps requires device_name or self.device_name.")
+        spr = float(stim_pulse_rate) if stim_pulse_rate is not None else float(
+            getattr(self, 'stim_pulse_rate', 75.0)
+        )
+        daq_hz = float(self.daq_ai_sample_rate_hz)
+        results = []
+        rec = self._normalize_recruitment(
+            recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
+        )
+        mirror = bool(bilateral_mirror_motor) and rec == 'bilateral_sequential'
+        seq_frac = float(
+            bilateral_sequential_left_frac
+            if bilateral_sequential_left_frac is not None
+            else getattr(self, 'bilateral_sequential_left_frac', 0.5)
+        )
+        self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
+        self.set_stim_channels(*self.stim_channels)
+        th0_fixed = float(theta_start_deg)
+
+        for i in range(n):
+            v_mag = abs(float(vels[i]))
+            th0 = th0_fixed
+            if mirror:
+                v1 = v_mag * self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_left)
+                v2 = v_mag * self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_right)
+                d1 = self._isovelocity_one_block(
+                    th0, v1,
+                    pre_hold_s=pre_hold_s, iso_duration_s=iso_duration_s,
+                    settle_before_stim_s=settle_before_stim_s,
+                    pre_iso_stim_duration_s=pre_iso_stim_duration_s,
+                    stim_duration_s=stim_duration_s, is_stim=is_stim,
+                    spr=spr, stim_voltage=stim_voltage, daq_hz=daq_hz,
+                    recruitment=rec, sequential_left_frac=seq_frac,
+                    mirror_stim_side='left',
+                )
+                th_mid = float(d1['angle'][-1])
+                d2 = self._isovelocity_one_block(
+                    th_mid, v2,
+                    pre_hold_s=pre_hold_s, iso_duration_s=iso_duration_s,
+                    settle_before_stim_s=settle_before_stim_s,
+                    pre_iso_stim_duration_s=pre_iso_stim_duration_s,
+                    stim_duration_s=stim_duration_s, is_stim=is_stim,
+                    spr=spr, stim_voltage=stim_voltage, daq_hz=daq_hz,
+                    recruitment=rec, sequential_left_frac=seq_frac,
+                    mirror_stim_side='right',
+                )
+                off = float(d1['t'][-1])
+                t = np.concatenate([d1['t'], d2['t'][1:] + off])
+                angle = np.concatenate([d1['angle'], d2['angle'][1:]])
+                anglevel = np.concatenate([d1['anglevel'], d2['anglevel'][1:]])
+                s1 = np.concatenate([d1['s1'], d2['s1'][1:]])
+                s2 = np.concatenate([d1['s2'], d2['s2'][1:]])
+                t_iso0 = d1['t_iso0']
+                t_pre0 = d1['t_pre0']
+                t_pre1 = d1['t_pre1']
+                t_stim0 = d1['t_stim0']
+                t_stim1 = d2['t_stim1'] + off
+                active = np.concatenate([d1['active'], d2['active'][1:]])
+                v_report = float(vels[i])
+                iso_t1_end = d2['iso_t1'] + off
+            else:
+                v_sign = float(vels[i])
+                uidx = self.recruitment_unilateral_lateral_index(rec)
+                if uidx is not None:
+                    v_sign = v_mag * self.motor_command_sign_for_bend_toward_index(uidx)
+                d0 = self._isovelocity_one_block(
+                    th0, v_sign,
+                    pre_hold_s=pre_hold_s, iso_duration_s=iso_duration_s,
+                    settle_before_stim_s=settle_before_stim_s,
+                    pre_iso_stim_duration_s=pre_iso_stim_duration_s,
+                    stim_duration_s=stim_duration_s, is_stim=is_stim,
+                    spr=spr, stim_voltage=stim_voltage, daq_hz=daq_hz,
+                    recruitment=rec, sequential_left_frac=seq_frac,
+                    mirror_stim_side=None,
+                )
+                t = d0['t']
+                angle = d0['angle']
+                anglevel = d0['anglevel']
+                t_iso0 = d0['t_iso0']
+                t_pre0 = d0['t_pre0']
+                t_pre1 = d0['t_pre1']
+                t_stim0 = d0['t_stim0']
+                t_stim1 = d0['t_stim1']
+                s1, s2 = d0['s1'], d0['s2']
+                active = d0['active']
+                v_report = float(v_sign)
+                iso_t1_end = d0['iso_t1']
+
+            self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
+            self.record_stim_signal(s1, s2)
+            self.make_motor_stepper_pulses(
+                daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
+                motor_gear_ratio=self.motor_gear_ratio,
+                motor_full_steps_per_rev=self.motor_full_steps_per_rev,
+            )
+            self.aidata = self.run(device_name=dev)
+
+            entry = {
+                'test_type': 'isovelocity',
+                'step_index': i,
+                'trial_index': i,
+                'cycle_index': i,
+                'recruitment': rec,
+                'unilateral_posture_lateral_index': self.recruitment_unilateral_lateral_index(rec),
+                'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
+                'bilateral_mirror_motor': bool(mirror),
+                'velocity_deg_s': v_report,
+                'theta_start_deg': th0_fixed,
+                't': np.array(t, copy=True),
+                'angle_cmd': np.array(angle, copy=True),
+                'anglevel_cmd': np.array(anglevel, copy=True),
+                'tnorm': np.zeros_like(t),
+                'S1stimcmd': np.array(s1, copy=True),
+                'S2stimcmd': np.array(s2, copy=True),
+                'aidata': np.array(self.aidata, copy=True),
+                'angle_measured': np.array(self.angle_measured, copy=True),
+                'pre_stim_t0': t_pre0,
+                'pre_stim_t1': t_pre1,
+                'stim_t0': t_stim0,
+                'stim_t1': t_stim1,
+                'iso_t0': t_iso0,
+                'iso_t1': float(iso_t1_end),
+                'forcetorque': None,
+                'mean_xforce_stim': None,
+            }
+            if mirror:
+                entry['velocity_seg1_deg_s'] = float(
+                    v_mag * self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_left)
+                )
+                entry['velocity_seg2_deg_s'] = float(
+                    v_mag * self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_right)
+                )
+            sg_names = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
+            try:
+                idx = [self.input_channel_names.index(n) for n in sg_names if n in self.input_channel_names]
+                if len(idx) == 6:
+                    ft = self.apply_calibration_forcetorque(self.aidata[idx, :])
+                    entry['forcetorque'] = ft
+                    entry['forcetorque_raw'] = np.array(ft, copy=True)
+                    idx_t = self._primary_torque_index()
+                    comp = self._compute_primary_torque_components(ft[idx_t, :], anglevel)
+                    ft_corr = np.array(ft, copy=True)
+                    ft_corr[idx_t, :len(comp['corrected'])] = comp['corrected']
+                    entry['forcetorque_corrected'] = ft_corr
+                    entry['inertial_torque_system_primary'] = np.array(comp['system'], copy=True)
+                    entry['inertial_torque_specimen_primary'] = np.array(comp['specimen'], copy=True)
+                    entry['inertial_torque_total_primary'] = np.array(comp['total'], copy=True)
+                    entry['primary_torque_raw'] = np.array(comp['raw'], copy=True)
+                    entry['primary_torque_corrected'] = np.array(comp['corrected'], copy=True)
+                    m = active & np.isfinite(t)
+                    if np.any(m):
+                        entry['mean_xforce_stim'] = float(np.mean(ft[0, m]))
+            except (ValueError, AttributeError):
+                pass
+            results.append(entry)
+
+        self.isovelocity_results = results
+        self.test_type = 'isovelocity'
+        self.trial_records = list(results)
+        self.h5_protocol_metadata.update({
+            'test_type': 'isovelocity',
+            'n_trials': int(len(results)),
+        })
+        return results
+
+    def isovelocity(
+        self,
+        min_vel,
+        max_vel,
+        starting_strain,
+        num_steps,
+        *,
+        starting_strain_mode='strain',
+        randomize=False,
+        random_seed=None,
+        iso_duration_s=0.2,
+        pre_hold_s=0.3,
+        stim_params=None,
+        **kwargs,
+    ):
+        """
+        Isovelocity sweep: hold at a strain-defined angle, then command constant angular velocity
+        (deg/s) for a short interval, with optional stimulation during the iso segment.
+
+        Velocities are ``np.linspace(min_vel, max_vel, num_steps)`` in **deg/s** (same units as
+        ``anglevel`` / motor command). Each trial starts again from the same starting angle.
+
+        Parameters
+        ----------
+        min_vel, max_vel : float
+            Angular velocity range (deg/s).
+        starting_strain : float
+            Interpreted with ``starting_strain_mode`` (``strain`` fraction, ``strain_pct``, etc.).
+        num_steps : int
+        starting_strain_mode : str
+            Passed to :func:`convert_to_curvature` for the initial posture.
+        randomize : bool
+            If True, randomize the order of the generated velocity steps.
+        random_seed : int or None
+            Optional seed for deterministic randomization when ``randomize=True``.
+        iso_duration_s : float
+            Duration of the constant-velocity bend (seconds).
+        pre_hold_s : float
+            Quiet hold at the starting angle before the iso segment (seconds).
+        stim_params : dict or None
+            Optional: ``settle_before_stim_s``, ``stim_duration_s``, ``is_stim``,
+            ``pre_iso_stim_duration_s``, ``stim_pulse_rate``, ``stim_voltage``,
+            ``device_name``, ``iso_duration_s``, ``pre_hold_s``.
+        **kwargs
+            Merged into ``stim_params`` (``stim_params`` wins on duplicate keys).
+
+        Returns
+        -------
+        list of dict
+            Per-step results (see :meth:`_run_isovelocity_steps`); each includes ``velocity_deg_s``,
+            ``starting_strain``, ``curvature_1_per_m`` at start.
+        """
+        sp = {
+            'iso_duration_s': iso_duration_s,
+            'pre_hold_s': pre_hold_s,
+            'settle_before_stim_s': 0.02,
+            'pre_iso_stim_duration_s': 0.0,
+            'stim_duration_s': None,
+            'is_stim': True,
+            'stim_pulse_rate': None,
+            'stim_voltage': 5.0,
+            'device_name': None,
+        }
+        if stim_params:
+            sp.update(stim_params)
+        sp.update(kwargs)
+
+        dc = getattr(self, 'dclamp', None)
+        xw = getattr(self, 'xsec_width', None)
+        if dc is None:
+            raise ValueError("isovelocity requires self.dclamp (metadata).")
+        k0 = convert_to_curvature(
+            float(starting_strain),
+            starting_strain_mode,
+            dclamp_mm=float(dc),
+            xsec_width_mm=xw,
+        )
+        k0 = float(np.asarray(k0).reshape(-1)[0])
+        theta0 = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
+        rec_iso = self._normalize_recruitment(
+            sp.get('recruitment', sp.get('lateral_mode', getattr(self, 'recruitment', 'bilateral_simultaneous')))
+        )
+        uidx0 = self.recruitment_unilateral_lateral_index(rec_iso)
+        if uidx0 is not None:
+            theta0 = theta0 * self.motor_command_sign_for_bend_toward_index(uidx0)
+
+        vels = np.linspace(float(min_vel), float(max_vel), int(num_steps))
+        seq_idx = np.arange(vels.size, dtype=int)
+        if bool(randomize) and vels.size > 1:
+            rng = np.random.default_rng(None if random_seed is None else int(random_seed))
+            rng.shuffle(seq_idx)
+            vels = vels[seq_idx]
+        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
+        seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5)))
+        out = self._run_isovelocity_steps(
+            theta0,
+            vels,
+            pre_hold_s=float(sp['pre_hold_s']),
+            iso_duration_s=float(sp['iso_duration_s']),
+            settle_before_stim_s=float(sp['settle_before_stim_s']),
+            pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
+            stim_duration_s=sp.get('stim_duration_s', None),
+            is_stim=bool(sp.get('is_stim', True)),
+            stim_pulse_rate=sp.get('stim_pulse_rate', None),
+            stim_voltage=float(sp.get('stim_voltage', 5.0)),
+            device_name=sp.get('device_name', None),
+            recruitment=rec_iso,
+            bilateral_mirror_motor=mirror_bm,
+            bilateral_sequential_left_frac=seq_frac,
+        )
+        for e in out:
+            e['starting_strain'] = float(starting_strain)
+            e['starting_strain_mode'] = starting_strain_mode
+            e['curvature_1_per_m'] = k0
+        for i, e in enumerate(out):
+            e['sequence_index'] = int(seq_idx[i])
+        uidx_meta = self.recruitment_unilateral_lateral_index(rec_iso)
+        self.h5_protocol_metadata.update({
+            'recruitment': rec_iso,
+            'bilateral_mirror_motor': mirror_bm,
+            'bilateral_sequential_left_frac': seq_frac,
+            'specimen_side_index_left': int(self.specimen_side_index_left),
+            'specimen_side_index_right': int(self.specimen_side_index_right),
+            'specimen_lateral_index_on_positive_motor_side': int(
+                getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
+            ),
+            'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
+            'unilateral_posture_lateral_index': uidx_meta,
+        })
+        return out
+
+    def test_isovelocity(
+        self,
+        min_vel,
+        max_vel,
+        starting_strain,
+        num_steps,
+        *,
+        starting_strain_mode='strain',
+        iso_duration_s=0.2,
+        pre_hold_s=0.3,
+        stim_params=None,
+        **kwargs,
+    ):
+        """Backward-compatible alias for :meth:`isovelocity`."""
+        return self.isovelocity(
+            min_vel,
+            max_vel,
+            starting_strain,
+            num_steps,
+            starting_strain_mode=starting_strain_mode,
+            iso_duration_s=iso_duration_s,
+            pre_hold_s=pre_hold_s,
+            stim_params=stim_params,
+            **kwargs,
+        )
+
+    def run_isometric_series(self, *args, **kwargs):
+        """Alias for :meth:`run_force_length_series`."""
+        return self.run_force_length_series(*args, **kwargs)
+
     def _uniform_cycles_from_duration(self, duration, f0, amp_deg):
         """Build period/freq/amp arrays so ``make_cycles_dynamic`` runs uniform f and amplitude for ~``duration`` s."""
         dur = float(duration)
@@ -1384,7 +3237,10 @@ class Bender:
         that matches the motor's rotation.
         """
         # Grab the raw data from the channel the user specified
-        raw_torque = raw_data_dict[self.bending_axis_sensor]
+        axis = str(getattr(self, 'primary_bending_axis', getattr(self, 'bending_axis_sensor', 'zTorque'))).strip()
+        axis_l = axis.lower()
+        key = {'x': 'xTorque', 'xtorque': 'xTorque', 'y': 'yTorque', 'ytorque': 'yTorque', 'z': 'zTorque', 'ztorque': 'zTorque'}.get(axis_l, axis)
+        raw_torque = raw_data_dict[key]
         
         # alpha = angular acceleration
         alpha = np.gradient(self.anglevel) * self.daq_ai_sample_rate_hz
@@ -1419,9 +3275,216 @@ class Bender:
     
     def update_metadata(self, **kwargs):
         """Saves any passed-in variables directly to the bender object."""
+        # Optional high-level payload: protocol_params dict.
+        # This lets notebook/GUI pass one object and keep UI fields simple.
+        protocol_params = kwargs.pop('protocol_params', None)
+        if isinstance(protocol_params, dict):
+            pp = dict(protocol_params)
+            # Common aliases for protocol name
+            if 'test_type' in pp and 'test_type' not in kwargs:
+                kwargs['test_type'] = pp.pop('test_type')
+            if 'type' in pp and 'test_type' not in kwargs:
+                kwargs['test_type'] = pp.pop('type')
+
+            tt = str(kwargs.get('test_type', getattr(self, 'test_type', ''))).lower()
+            if tt == 'isometric':
+                alias_map = {
+                    'initial': 'isometric_initial',
+                    'final': 'isometric_final',
+                    'num_steps': 'isometric_num_steps',
+                    'mode': 'isometric_mode',
+                    'randomize': 'isometric_randomize',
+                    'random_seed': 'isometric_random_seed',
+                    'stim_params': 'isometric_stim_params',
+                    'recruitment': 'recruitment',
+                    'lateral_mode': 'lateral_mode',
+                    'bilateral_mirror_motor': 'bilateral_mirror_motor',
+                    'bilateral_sequential_left_frac': 'bilateral_sequential_left_frac',
+                }
+            elif tt == 'isovelocity':
+                alias_map = {
+                    'min_vel': 'isovelocity_min_vel',
+                    'max_vel': 'isovelocity_max_vel',
+                    'starting_strain': 'isovelocity_starting_strain',
+                    'starting_strain_mode': 'isovelocity_starting_strain_mode',
+                    'num_steps': 'isovelocity_num_steps',
+                    'randomize': 'isovelocity_randomize',
+                    'random_seed': 'isovelocity_random_seed',
+                    'iso_duration_s': 'isovelocity_iso_duration_s',
+                    'pre_hold_s': 'isovelocity_pre_hold_s',
+                    'stim_params': 'isovelocity_stim_params',
+                    'recruitment': 'recruitment',
+                    'lateral_mode': 'lateral_mode',
+                    'bilateral_mirror_motor': 'bilateral_mirror_motor',
+                    'bilateral_sequential_left_frac': 'bilateral_sequential_left_frac',
+                }
+            elif tt == 'calibration':
+                alias_map = {
+                    'base_test_type': 'calibration_base_test_type',
+                }
+            else:
+                alias_map = {}
+
+            for k, v in pp.items():
+                dest = alias_map.get(k, k)
+                if dest not in kwargs:
+                    kwargs[dest] = v
+
         for key, value in kwargs.items():
             setattr(self, key, value)
             print(f"  Stored: {key} = {value}")
+
+        # Apply flag/alias normalization so notebooks and GUI only provide simple inputs.
+        if 'use_sono' in kwargs:
+            self.use_sono = bool(self.use_sono)
+            self._apply_use_sono()
+            print(f"  Auto-applied use_sono={self.use_sono}; channels={self.input_channel_names}")
+
+        if 'primary_bending_axis' in kwargs or 'bending_axis_sensor' in kwargs:
+            norm_axis = self._normalize_primary_bending_axis()
+            print(f"  Auto-normalized primary_bending_axis -> {norm_axis}")
+
+        if any(k in kwargs for k in (
+            'isometric_initial', 'isometric_final', 'isometric_num_steps', 'initial', 'final', 'num_steps',
+            'isovelocity_min_vel', 'isovelocity_max_vel', 'isovelocity_starting_strain', 'min_vel', 'max_vel', 'starting_strain'
+        )):
+            self._normalize_dispatch_aliases()
+
+        # Optional auto-build of specimen inertia model from profiled stations (preferred).
+        profile_keys = {
+            'specimen_profile_stations', 'specimen_profile_length_mm', 'specimen_profile_density_g_per_mm3',
+        }
+        if profile_keys.intersection(kwargs.keys()):
+            auto_flag = bool(getattr(self, 'use_frustum_inertial_model', True))
+            if auto_flag:
+                self.set_profiled_specimen_inertial_model(
+                    stations=getattr(self, 'specimen_profile_stations'),
+                    length_mm=getattr(self, 'specimen_profile_length_mm'),
+                    density_g_per_mm3=getattr(self, 'specimen_profile_density_g_per_mm3'),
+                    clamp_offset_mm=float(getattr(self, 'specimen_profile_clamp_offset_mm', 20.0)),
+                    num_samples=int(getattr(self, 'specimen_profile_num_samples', 120)),
+                )
+                print("  Auto-built profiled specimen inertial model from setup inputs.")
+
+        # Backward-compatible frustum auto-build.
+        frustum_keys = {
+            'frustum_height_mm', 'frustum_width_mm', 'frustum_length_mm',
+            'frustum_density_g_per_mm3',
+        }
+        if frustum_keys.intersection(kwargs.keys()) and not profile_keys.intersection(kwargs.keys()):
+            auto_flag = bool(getattr(self, 'use_frustum_inertial_model', True))
+            if auto_flag:
+                self.set_frustum_inertial_model(
+                    height_mm=getattr(self, 'frustum_height_mm'),
+                    width_mm=getattr(self, 'frustum_width_mm'),
+                    length_mm=getattr(self, 'frustum_length_mm'),
+                    density_g_per_mm3=getattr(self, 'frustum_density_g_per_mm3'),
+                    tip_scale=float(getattr(self, 'frustum_tip_scale', 0.0)),
+                    clamp_offset_mm=float(getattr(self, 'frustum_clamp_offset_mm', 20.0)),
+                    num_samples=int(getattr(self, 'frustum_num_samples', 100)),
+                )
+                print("  Auto-built frustum inertial model from setup inputs.")
+
+        # UX helper: if user provides curve input values + units, auto-populate all_curves.
+        # This keeps notebook inputs simple (values + mode) while centralizing conversion logic.
+        if 'all_amps' in kwargs and 'curve_input_values' not in kwargs:
+            self.curve_input_values = kwargs.get('all_amps')
+        if 'all_amps_mode' in kwargs and 'curve_input_mode' not in kwargs:
+            self.curve_input_mode = kwargs.get('all_amps_mode')
+
+        if 'all_curves' not in kwargs and (
+            'curve_input_values' in kwargs or 'curve_input_mode' in kwargs
+            or 'all_amps' in kwargs or 'all_amps_mode' in kwargs
+        ):
+            vals = getattr(self, 'curve_input_values', None)
+            mode = getattr(self, 'curve_input_mode', None)
+            if vals is not None and mode is not None:
+                conv = self.get_all_amps(vals, mode=mode)
+                self.all_curves = np.asarray(conv['curvature_1_per_m'], dtype=float).tolist()
+                print(f"  Auto-converted all_amps ({mode}) -> all_curves = {self.all_curves}")
+
+    def get_dispatch_schema(self):
+        """Return GUI-friendly schema for run_experiment dispatcher fields."""
+        return {
+            'test_types': [
+                'dynamic', 'frequency_sweep', 'frequency_step', 'curvature_step',
+                'step_change', 'isometric', 'isovelocity', 'calibration',
+            ],
+            'common_optional': [
+                'use_sono', 'use_inertial_calibration', 'inertial_calibration_file',
+                'post_trial_notes', 'primary_bending_axis', 'protocol_params',
+                'all_amps', 'all_amps_mode', 'curve_input_values', 'curve_input_mode',
+                'use_frustum_inertial_model', 'use_theoretical_inertial_correction',
+                'specimen_profile_stations', 'specimen_profile_length_mm',
+                'specimen_profile_density_g_per_mm3', 'specimen_profile_clamp_offset_mm',
+                'specimen_profile_num_samples',
+                'frustum_height_mm', 'frustum_width_mm', 'frustum_length_mm',
+                'frustum_density_g_per_mm3', 'frustum_tip_scale',
+                'frustum_clamp_offset_mm', 'frustum_num_samples',
+            ],
+            'isometric_required': ['isometric_initial', 'isometric_final', 'isometric_num_steps'],
+            'isometric_optional': [
+                'isometric_mode', 'isometric_randomize', 'isometric_random_seed',
+                'isometric_stim_params', 'isometric_stim_overrides',
+                'recruitment', 'lateral_mode', 'bilateral_mirror_motor', 'bilateral_sequential_left_frac',
+            ],
+            'isovelocity_required': [
+                'isovelocity_min_vel', 'isovelocity_max_vel',
+                'isovelocity_starting_strain', 'isovelocity_num_steps',
+            ],
+            'isovelocity_optional': [
+                'isovelocity_starting_strain_mode', 'isovelocity_randomize',
+                'isovelocity_random_seed', 'isovelocity_iso_duration_s',
+                'isovelocity_pre_hold_s', 'isovelocity_stim_params',
+                'isovelocity_stim_overrides',
+                'recruitment', 'lateral_mode', 'bilateral_mirror_motor', 'bilateral_sequential_left_frac',
+            ],
+            'calibration_required': ['calibration_base_test_type'],
+            'calibration_optional': ['inertial_calibration_file'],
+            'legacy_aliases_mirrored_to_canonical': {
+                'isometric': {
+                    'initial': 'isometric_initial',
+                    'final': 'isometric_final',
+                    'num_steps': 'isometric_num_steps',
+                    'mode': 'isometric_mode',
+                    'randomize': 'isometric_randomize',
+                    'random_seed': 'isometric_random_seed',
+                },
+                'isovelocity': {
+                    'min_vel': 'isovelocity_min_vel',
+                    'max_vel': 'isovelocity_max_vel',
+                    'starting_strain': 'isovelocity_starting_strain',
+                    'num_steps': 'isovelocity_num_steps',
+                    'randomize': 'isovelocity_randomize',
+                    'random_seed': 'isovelocity_random_seed',
+                },
+            },
+        }
+
+    def validate_dispatch_setup(self, test_type=None):
+        """
+        Validate whether required dispatcher fields are present for `test_type`.
+        Returns dict: {'ok': bool, 'missing': [..], 'test_type': str}.
+        """
+        tt = str(test_type or getattr(self, 'test_type', 'dynamic'))
+        if tt in ('isometric', 'isovelocity'):
+            self._normalize_dispatch_aliases()
+        missing = []
+        if tt == 'isometric':
+            for k in ['isometric_initial', 'isometric_final', 'isometric_num_steps']:
+                if getattr(self, k, None) is None:
+                    missing.append(k)
+        elif tt == 'isovelocity':
+            for k in [
+                'isovelocity_min_vel', 'isovelocity_max_vel',
+                'isovelocity_starting_strain', 'isovelocity_num_steps',
+            ]:
+                if getattr(self, k, None) is None:
+                    missing.append(k)
+        elif tt == 'calibration':
+            if getattr(self, 'calibration_base_test_type', None) is None:
+                missing.append('calibration_base_test_type')
+        return {'ok': len(missing) == 0, 'missing': missing, 'test_type': tt}
 
     def make_cycle_tags(self):
    
