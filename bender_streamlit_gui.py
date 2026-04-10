@@ -18,6 +18,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 from typing import Optional
 
 import h5py
@@ -81,8 +82,139 @@ from bender_protocol_templates import (  # noqa: E402
     snapshot_bender_procedure,
     template_display_label,
 )
+from bender_h5_explore import (  # noqa: E402
+    align_xy,
+    build_series_catalog_legacy,
+    build_series_catalog_v2,
+    detect_h5_schema,
+    list_v2_trials,
+)
 
 _BND_LS_ACTION_MARK = '<div class="bnd-ls-action" aria-hidden="true"></div>'
+
+
+def _render_display_preferences_sidebar() -> None:
+    """Sidebar: contrast and text size (persists in session; applies via `_inject_accessibility_theme`)."""
+    st.session_state.setdefault('gui_ui_theme', 'Default')
+    st.session_state.setdefault('gui_ui_large_text', False)
+    st.markdown('### Display')
+    st.radio(
+        'Contrast',
+        options=['Default', 'High contrast'],
+        key='gui_ui_theme',
+        horizontal=True,
+        help='High contrast uses black text on white, stronger borders, and clearer focus rings.',
+    )
+    st.checkbox(
+        'Larger text',
+        key='gui_ui_large_text',
+        help='Slightly increases base font size in the main panel and sidebar.',
+    )
+
+
+def _inject_accessibility_theme() -> None:
+    """Skip link, optional high-contrast and large-text overrides (`:has` markers must be in DOM)."""
+    hc = str(st.session_state.get('gui_ui_theme', 'Default') or '') == 'High contrast'
+    lt = bool(st.session_state.get('gui_ui_large_text'))
+    markers = []
+    if hc:
+        markers.append('<div class="bnd-a11y-hc" aria-hidden="true"></div>')
+    if lt:
+        markers.append('<div class="bnd-a11y-large-text" aria-hidden="true"></div>')
+    marker_html = ''.join(markers)
+    st.markdown(
+        f'''
+<a href="#bnd-main-content" class="bnd-skip-link">Skip to main content</a>
+{marker_html}
+<style>
+.bnd-skip-link {{
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100000;
+  padding: 0.5rem 1rem;
+  background: #000000;
+  color: #ffffff !important;
+  font-weight: 600;
+  text-decoration: underline;
+  border-radius: 4px;
+}}
+.bnd-skip-link:focus {{
+  left: 0.75rem;
+  top: 0.75rem;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  outline: 3px solid #fbbf24;
+  outline-offset: 2px;
+}}
+/* Focus visibility (all themes) */
+section[data-testid="stMain"] button:focus-visible,
+section[data-testid="stMain"] a:focus-visible,
+[data-testid="stSidebar"] button:focus-visible,
+[data-testid="stSidebar"] a:focus-visible {{
+  outline: 3px solid #2563eb !important;
+  outline-offset: 2px !important;
+}}
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] button:focus-visible,
+body:has(.bnd-a11y-hc) [data-testid="stSidebar"] button:focus-visible {{
+  outline: 3px solid #000000 !important;
+  outline-offset: 2px !important;
+}}
+/* —— High contrast (light): near-black on white, strong edges —— */
+body:has(.bnd-a11y-hc) .stApp {{
+  background-color: #ffffff !important;
+}}
+body:has(.bnd-a11y-hc) [data-testid="stSidebar"] {{
+  background-color: #f5f5f5 !important;
+  border-right: 3px solid #000000 !important;
+}}
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] .block-container {{
+  background-color: #ffffff !important;
+}}
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] p,
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] li,
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] h1,
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] h2,
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] h3,
+body:has(.bnd-a11y-hc) [data-testid="stMarkdownContainer"] p,
+body:has(.bnd-a11y-hc) [data-testid="stMarkdownContainer"] span,
+body:has(.bnd-a11y-hc) [data-testid="stCaption"],
+body:has(.bnd-a11y-hc) [data-testid="stWidgetLabel"] p {{
+  color: #0a0a0a !important;
+}}
+body:has(.bnd-a11y-hc) [data-testid="stSidebar"] p,
+body:has(.bnd-a11y-hc) [data-testid="stSidebar"] span,
+body:has(.bnd-a11y-hc) [data-testid="stSidebar"] label {{
+  color: #0a0a0a !important;
+}}
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {{
+  border: 2px solid #000000 !important;
+  background: #ffffff !important;
+}}
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] div[data-testid="stAlert"] {{
+  border: 2px solid #000000 !important;
+}}
+body:has(.bnd-a11y-hc) input,
+body:has(.bnd-a11y-hc) textarea {{
+  border: 2px solid #000000 !important;
+  background-color: #ffffff !important;
+  color: #0a0a0a !important;
+}}
+body:has(.bnd-a11y-hc) [data-baseweb="select"] > div {{
+  border: 2px solid #000000 !important;
+}}
+/* —— Larger text —— */
+body:has(.bnd-a11y-large-text) section[data-testid="stMain"] .block-container {{
+  font-size: 1.125rem !important;
+}}
+body:has(.bnd-a11y-large-text) [data-testid="stSidebar"] {{
+  font-size: 1.0625rem !important;
+}}
+</style>
+''',
+        unsafe_allow_html=True,
+    )
 
 
 def _inject_load_save_button_theme() -> None:
@@ -127,6 +259,14 @@ section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
 section[data-testid="stMain"] div[data-testid="stAlert"] {
     border: 1px solid #cbd5e1 !important;
     border-radius: 8px !important;
+}
+/* High contrast wins over the panel/alert rules above (same stylesheet order). */
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+}
+body:has(.bnd-a11y-hc) section[data-testid="stMain"] div[data-testid="stAlert"] {
+    border: 2px solid #000000 !important;
 }
 </style>
 """,
@@ -1809,6 +1949,10 @@ def _show_sec7_and_8() -> bool:
 
 def _render_landing_page() -> None:
     st.markdown(
+        '<div id="bnd-main-content" tabindex="-1"></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
         '<div class="bnd-landing-page" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
@@ -1888,8 +2032,229 @@ body:has(.bnd-landing-page) section[data-testid="stMain"] button[kind="secondary
             st.session_state['gui_stepwise_step'] = 0
             st.rerun()
 
+    st.divider()
+    st.subheader('H5 data explorer')
+    st.caption(
+        'Open exported experiment files (schema v2 or legacy) and plot any pair of 1D series — e.g. **time vs torque** '
+        'or **curvature vs torque** — without loading the full experiment workflow.'
+    )
+    if st.button('Open H5 data explorer', key='land_h5_explorer', use_container_width=True):
+        st.session_state['gui_app_route'] = 'h5_explorer'
+        st.rerun()
+
+
+def _cb_h5_explorer_trial_changed() -> None:
+    st.session_state.pop('gui_h5_explore_catalog', None)
+    st.session_state.pop('gui_h5_explore_notes', None)
+
+
+def _render_h5_explorer() -> None:
+    """Standalone HDF5 viewer: path or upload, trial pick (v2), X/Y series, Plotly chart."""
+    st.subheader('H5 data explorer')
+    st.caption('Paths are read on this machine (Streamlit server). Use a full path to your `.h5` file, or upload a copy.')
+
+    st.session_state.setdefault('gui_h5_explore_path', '')
+    st.session_state.setdefault('gui_h5_explore_trial', '')
+    st.session_state.setdefault('gui_h5_explore_x', 'Time (s)')
+    st.session_state.setdefault('gui_h5_explore_y', 'Primary torque corrected (N·m)')
+
+    with st.container(border=True):
+        path_in = st.text_input(
+            'Path to `.h5` file',
+            key='gui_h5_explore_path',
+            placeholder=r'Example: C:\Data\experiment_001.h5',
+            help='File must exist on the computer running Streamlit.',
+        )
+        up = st.file_uploader('Or upload an `.h5` file', type=['h5'], key='gui_h5_explore_upload')
+        if up is not None:
+            try:
+                suf = os.path.splitext(up.name)[1] or '.h5'
+                fd, tmp_path = tempfile.mkstemp(suffix=suf, prefix='crittergripper_h5_')
+                os.close(fd)
+                with open(tmp_path, 'wb') as wf:
+                    wf.write(up.getbuffer())
+                st.session_state['gui_h5_explore_upload_path'] = tmp_path
+                st.caption(f'Uploaded copy → `{tmp_path}`')
+            except Exception as e:
+                st.error(f'Could not save upload: {e}')
+
+        if st.button('Load file & refresh series', key='gui_h5_explore_load', type='primary'):
+            pin = str(st.session_state.get('gui_h5_explore_path') or '').strip()
+            upl = str(st.session_state.get('gui_h5_explore_upload_path') or '').strip()
+            chosen = ''
+            if pin and os.path.isfile(pin):
+                chosen = os.path.normpath(pin)
+                st.session_state.pop('gui_h5_explore_upload_path', None)
+            elif upl and os.path.isfile(upl):
+                chosen = upl
+            if chosen:
+                st.session_state['gui_h5_explore_loaded_path'] = chosen
+            else:
+                st.session_state.pop('gui_h5_explore_loaded_path', None)
+            st.session_state.pop('gui_h5_explore_catalog', None)
+            st.session_state.pop('gui_h5_explore_notes', None)
+            st.session_state.pop('gui_h5_explore_schema', None)
+            st.rerun()
+
+    loaded = str(st.session_state.get('gui_h5_explore_loaded_path') or '').strip()
+    if not loaded or not os.path.isfile(loaded):
+        if loaded:
+            st.warning('File not found. Check the path or upload again, then **Load file & refresh series**.')
+        st.info('Load an `.h5` file to list series and plot.')
+        return
+
+    if st.session_state.get('gui_h5_explore_schema') is None or st.session_state.get('gui_h5_explore_catalog') is None:
+        schema = detect_h5_schema(loaded)
+        st.session_state['gui_h5_explore_schema'] = schema
+        notes: list = []
+        if schema == 'v2':
+            trials = list_v2_trials(loaded)
+            if not trials:
+                st.error('Schema v2 file has no `02_TimeSeries/trial_*` groups.')
+                return
+            tid = str(st.session_state.get('gui_h5_explore_trial') or trials[0])
+            if tid not in trials:
+                tid = trials[0]
+            st.session_state['gui_h5_explore_trial'] = tid
+            cat, n2 = build_series_catalog_v2(loaded, tid)
+            notes.extend(n2)
+        elif schema == 'legacy':
+            st.session_state['gui_h5_explore_trial'] = ''
+            cat, n2 = build_series_catalog_legacy(loaded)
+            notes.extend(n2)
+        else:
+            st.error('Could not read this file as CritterGripper schema v2 or legacy HDF5.')
+            return
+        st.session_state['gui_h5_explore_catalog'] = cat
+        st.session_state['gui_h5_explore_notes'] = notes
+
+    schema = str(st.session_state.get('gui_h5_explore_schema') or '')
+    cat: dict = dict(st.session_state.get('gui_h5_explore_catalog') or {})
+    notes = list(st.session_state.get('gui_h5_explore_notes') or [])
+    if not cat:
+        st.warning('No plottable 1D series found in this file.')
+        return
+
+    st.success(f'Loaded `{os.path.basename(loaded)}` — **{schema}** schema, **{len(cat)}** series.')
+
+    with st.expander('File notes', expanded=False):
+        if notes:
+            for line in notes:
+                st.caption(line)
+        else:
+            st.caption('No loader warnings.')
+
+    if schema == 'v2':
+        trials = list_v2_trials(loaded)
+        if trials:
+            if st.session_state.get('gui_h5_explore_trial') not in trials:
+                st.session_state['gui_h5_explore_trial'] = trials[0]
+            st.selectbox(
+                'Trial group (`02_TimeSeries/…`)',
+                options=trials,
+                key='gui_h5_explore_trial',
+                on_change=_cb_h5_explorer_trial_changed,
+                help='Each group is one exported segment. Changing trial reloads available series.',
+            )
+
+    keys = sorted(cat.keys())
+    if st.session_state.get('gui_h5_explore_x') not in keys:
+        st.session_state['gui_h5_explore_x'] = keys[0]
+    if st.session_state.get('gui_h5_explore_y') not in keys:
+        for pref in (
+            'Primary torque corrected (N·m)',
+            'Tz (N·m)',
+            'z Torque (N·m)',
+            'x Torque (N·m)',
+        ):
+            if pref in keys:
+                st.session_state['gui_h5_explore_y'] = pref
+                break
+        else:
+            st.session_state['gui_h5_explore_y'] = keys[min(1, len(keys) - 1)]
+
+    c1, c2 = st.columns(2)
+    with c1:
+        x_key = st.selectbox('X axis', options=keys, key='gui_h5_explore_x')
+    with c2:
+        y_key = st.selectbox('Y axis', options=keys, key='gui_h5_explore_y')
+
+    st.caption('Quick presets (sets X and Y in the dropdowns above on next run):')
+    pr1, pr2, pr3 = st.columns(3)
+    with pr1:
+        if st.button('Time → torque (primary)', key='gui_h5_preset_tt'):
+            st.session_state['gui_h5_explore_x'] = 'Time (s)' if 'Time (s)' in keys else keys[0]
+            if 'Primary torque corrected (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'Primary torque corrected (N·m)'
+            elif 'Tz (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'Tz (N·m)'
+            elif 'z Torque (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'z Torque (N·m)'
+            st.rerun()
+    with pr2:
+        if st.button('Curvature → torque', key='gui_h5_preset_ct'):
+            if 'Curvature κ (1/m) from angle' in keys:
+                st.session_state['gui_h5_explore_x'] = 'Curvature κ (1/m) from angle'
+            elif 'Angle measured (deg)' in keys:
+                st.session_state['gui_h5_explore_x'] = 'Angle measured (deg)'
+            elif 'Encoder / angle (deg)' in keys:
+                st.session_state['gui_h5_explore_x'] = 'Encoder / angle (deg)'
+            if 'Primary torque corrected (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'Primary torque corrected (N·m)'
+            elif 'Tz (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'Tz (N·m)'
+            elif 'z Torque (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'z Torque (N·m)'
+            st.rerun()
+    with pr3:
+        if st.button('Time → Tz', key='gui_h5_preset_tz'):
+            st.session_state['gui_h5_explore_x'] = 'Time (s)' if 'Time (s)' in keys else keys[0]
+            if 'Tz (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'Tz (N·m)'
+            elif 'z Torque (N·m)' in keys:
+                st.session_state['gui_h5_explore_y'] = 'z Torque (N·m)'
+            st.rerun()
+
+    try:
+        x_data, y_data, n = align_xy(cat, x_key, y_key)
+    except KeyError as e:
+        st.error(str(e))
+        return
+
+    if n <= 0:
+        st.warning('Selected series are empty or length mismatch produced zero samples.')
+        return
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x_data,
+            y=y_data,
+            mode='lines',
+            name=y_key,
+            line=dict(width=1.2),
+        )
+    )
+    fig.update_layout(
+        title=f'{y_key} vs {x_key} (n={n})',
+        xaxis_title=x_key,
+        yaxis_title=y_key,
+        margin=dict(l=48, r=24, t=48, b=48),
+        hovermode='x unified',
+        height=520,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander('Series lengths', expanded=False):
+        rows = [{'Series': k, 'Length': int(v.size)} for k, v in sorted(cat.items(), key=lambda kv: kv[0])]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
 
 def _render_app_chrome() -> None:
+    st.markdown(
+        '<div id="bnd-main-content" tabindex="-1"></div>',
+        unsafe_allow_html=True,
+    )
     if _nav_route() == 'stepwise':
         st.markdown('<div class="bnd-stepwise-active" aria-hidden="true"></div>', unsafe_allow_html=True)
         _inject_stepwise_compact_layout_css()
@@ -1927,6 +2292,8 @@ def _render_app_chrome() -> None:
             st.caption('Full workflow — all sections below are visible.')
         elif _mode == 'templates':
             st.caption('Template mode — checklist at top controls which sections appear.')
+        elif _mode == 'h5_explorer':
+            st.caption('H5 data explorer — plot saved trial series (no experiment workflow).')
     with h2:
         if os.path.isfile(_LOGO_PATH):
             try:
@@ -2206,6 +2573,19 @@ def _template_procedure_gate() -> None:
 
 
 def main():
+    st.set_page_config(
+        page_title='CritterGripper',
+        layout='wide',
+        initial_sidebar_state='expanded',
+        menu_items={
+            'Get Help': None,
+            'Report a bug': None,
+            'About': 'CritterGripper — Streamlit UI for Bender experiments.',
+        },
+    )
+    with st.sidebar:
+        _render_display_preferences_sidebar()
+    _inject_accessibility_theme()
     _ensure_gui_data_path_session_keys()
     if 'gui_post_notes' not in st.session_state:
         st.session_state['gui_post_notes'] = ''
@@ -2226,6 +2606,10 @@ def main():
 
     _render_app_chrome()
     _render_sidebar()
+
+    if _nav_route() == 'h5_explorer':
+        _render_h5_explorer()
+        return
 
     if _nav_route() == 'templates':
         st.session_state.pop('gui_tpl_need_procedure', None)
