@@ -1,0 +1,13 @@
+# Stable URL for browser bookmarks: http://localhost:8501
+# Run from project folder: streamlit run bender_streamlit_gui.py
+# Or double-click Run-CritterGripper-GUI.bat (Windows)
+
+[server]
+port = 8501
+address = "localhost"
+headless = false
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
