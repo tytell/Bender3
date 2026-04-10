@@ -310,6 +310,9 @@ class Bender:
         self.h5_protocol_metadata = {}
         self.h5_schema_version = "2.0"
         self.post_trial_notes = ""
+        # GUI-friendly aliases for geometry naming
+        self.test_segment_length_mm = None  # alias for dclamp
+        self.test_segment_position_mm = None  # alias for dbend (metadata only)
         # Optional inertial-calibration linkage; safe defaults keep legacy runs working.
         self.inertial_calibration_file = None
         self.use_inertial_calibration = False
@@ -332,6 +335,8 @@ class Bender:
         # Multiply geometric strain (κ·w/2) in plots/post-hoc by this after sono validation if
         # you want “positive = shortening on the recruited side” (typically ±1).
         self.strain_shortening_positive_display_sign = 1.0
+        # Pause (s) after each isometric step finishes before the next ramp/stim (0 = back-to-back).
+        self.isometric_inter_step_interval_s = 0.0
 
         # Standard 2D shapes for NI-DAQmx (Channels, Samples)
         self.stimcmdhi = np.zeros((2, 2))
@@ -474,7 +479,7 @@ class Bender:
 
         specimen = np.zeros_like(raw)
         use_specimen = bool(getattr(self, 'use_theoretical_inertial_correction', False))
-        if use_specimen and bool(getattr(self, 'use_frustum_inertial_model', True)):
+        if use_specimen:
             i_spec = self._specimen_moi_for_inertial_torque()
             if i_spec > 0:
                 specimen = i_spec * alpha
@@ -554,6 +559,31 @@ class Bender:
             sp_iv.update(ov_iv)
             self.isovelocity_stim_params = sp_iv
 
+    def _sync_dclamp_test_segment_aliases(self):
+        """
+        Keep ``dclamp`` and ``test_segment_length_mm`` in sync when only one is set.
+
+        GUI and configs may populate only the newer name; isometric/isovelocity need a
+        finite clamp spacing in mm.
+        """
+        dc = getattr(self, 'dclamp', None)
+        ts = getattr(self, 'test_segment_length_mm', None)
+        if dc is not None and ts is None:
+            self.test_segment_length_mm = float(dc)
+        elif ts is not None and dc is None:
+            self.dclamp = float(ts)
+
+    def _effective_dclamp_mm(self):
+        """Clamp spacing (mm) from ``dclamp`` or alias ``test_segment_length_mm``."""
+        self._sync_dclamp_test_segment_aliases()
+        dc = getattr(self, 'dclamp', None)
+        if dc is not None:
+            return float(dc)
+        ts = getattr(self, 'test_segment_length_mm', None)
+        if ts is not None:
+            return float(ts)
+        return None
+
     def _normalize_primary_bending_axis(self):
         """Normalize primary axis to xTorque/yTorque/zTorque."""
         axis = str(getattr(self, 'primary_bending_axis', getattr(self, 'bending_axis_sensor', 'zTorque'))).strip()
@@ -588,8 +618,9 @@ class Bender:
         """Merge top-level lateral/recruitment attributes into a stim_params dict for dispatch."""
         sp = dict(base_dict or {})
         if 'recruitment' not in sp:
-            if getattr(self, 'lateral_mode', None) is not None:
-                sp['recruitment'] = getattr(self, 'lateral_mode')
+            lat = getattr(self, 'lateral_mode', None)
+            if lat is not None and str(lat).strip() != '':
+                sp['recruitment'] = lat
             elif getattr(self, 'recruitment', None) is not None:
                 sp['recruitment'] = self.recruitment
         for k in ('bilateral_mirror_motor', 'bilateral_sequential_left_frac'):
@@ -598,6 +629,7 @@ class Bender:
         return sp
 
     def run_experiment(self, test_type=None):
+        self._sync_dclamp_test_segment_aliases()
         if test_type is None:
             test_type = getattr(self, 'test_type', None) or 'dynamic'
         self.test_type = test_type
@@ -937,10 +969,15 @@ class Bender:
 
     def convert_to_curvature(self, value, mode):
         """Instance wrapper for :func:`convert_to_curvature` using ``self.dclamp`` / ``self.xsec_width``."""
+        dc = getattr(self, 'dclamp', None)
+        if dc is None:
+            dc = getattr(self, 'test_segment_length_mm', None)
+        if dc is not None:
+            dc = float(dc)
         return convert_to_curvature(
             value,
             mode,
-            dclamp_mm=getattr(self, 'dclamp', None),
+            dclamp_mm=dc,
             xsec_width_mm=getattr(self, 'xsec_width', None),
         )
 
@@ -973,6 +1010,8 @@ class Bender:
             ``curvature_rate_1_per_m_s`` and ``angle_vel_deg_s``.
         """
         dc = float(dclamp_mm) if dclamp_mm is not None else getattr(self, 'dclamp', None)
+        if dc is None:
+            dc = getattr(self, 'test_segment_length_mm', None)
         xw = float(xsec_width_mm) if xsec_width_mm is not None else getattr(self, 'xsec_width', None)
         if dc is None:
             raise ValueError("get_all_amps requires dclamp (argument or self.dclamp from metadata).")
@@ -1136,7 +1175,14 @@ class Bender:
             raise ValueError(
                 f"record_motor_signal: invalid spacing dt = t[1]-t[0] = {dt!r} (need finite dt > 0)."
             )
-        self.daq_ai_sample_rate_hz = round(1.0 / dt)
+        # Must match uniform timeline spacing. Do not use round(1/dt): for dt >= 2 s, 1/dt <= 0.5 and
+        # round() can return 0 (e.g. round(0.5)==0), which breaks DAQmx (SampClk_Rate 0.0).
+        hz = float(1.0 / dt)
+        if not np.isfinite(hz) or hz <= 0:
+            raise ValueError(
+                f"record_motor_signal: inferred AI sample rate 1/dt = {hz!r} Hz is invalid (dt = {dt!r} s)."
+            )
+        self.daq_ai_sample_rate_hz = hz
 
         self.t = t_arr
         self.angle = np.asarray(angle, dtype=float)
@@ -1543,6 +1589,18 @@ class Bender:
         return self.i_total_system
 
     def run(self, device_name):
+        ai_hz = float(self.daq_ai_sample_rate_hz)
+        ao_hz = float(self.daq_ao_do_sample_rate_hz)
+        if not np.isfinite(ai_hz) or ai_hz <= 0:
+            raise ValueError(
+                f"DAQ AI sample rate daq_ai_sample_rate_hz must be finite and > 0; got {self.daq_ai_sample_rate_hz!r}. "
+                "This often follows record_motor_signal from the motion timeline: check uniform dt between t[0] and t[1]."
+            )
+        if not np.isfinite(ao_hz) or ao_hz <= 0:
+            raise ValueError(
+                f"DAQ AO/DO sample rate daq_ao_do_sample_rate_hz must be finite and > 0; got {self.daq_ao_do_sample_rate_hz!r}."
+            )
+
         input_channels = ['/'.join((device_name, c1)) for c1 in self.input_channels]
         S1stim_chan = '/'.join((device_name, self.S1stim_chan))
         S2stim_chan = '/'.join((device_name, self.S2stim_chan))
@@ -1551,7 +1609,14 @@ class Bender:
 
         with Task() as analog_in, Task() as analog_out, \
                 Task() as digital_out, Task() as angle_in:
-                       # set up the input channels
+            def _stop_run_tasks():
+                for tsk in (analog_in, angle_in, analog_out, digital_out):
+                    try:
+                        tsk.stop()
+                    except Exception:
+                        pass
+
+            # set up the input channels
             for c1, name1 in zip(input_channels, self.input_channel_names):
                 # Check for 'sono' to set RSE mode, otherwise use Differential
                 if 'sono' in name1.lower():
@@ -1620,21 +1685,39 @@ class Bender:
 
             # start everthing
             # make sure to start the output first, because it'll wait until the input starts
-            digital_out.start()
-            analog_out.start()
-            angle_in.start()
-            analog_in.start()
-            
-            # wait until we're done, record the time
-            analog_in.wait_until_done(self.t[-1]+10)
-            self.endTime = datetime.now()
-            
-            # and read the data
-            reader.read_many_sample(self.aidata)
-            angle_reader.read_many_sample_double(self.angledata)
+            try:
+                digital_out.start()
+                analog_out.start()
+                angle_in.start()
+                analog_in.start()
 
+                # FINITE AI acquires exactly len(t) samples at ai_hz → nominal duration n/ai_hz.
+                # Using only t[-1]+10 is fragile (t[0]≠0, clock vs timeline mismatch, long isometric holds)
+                # and triggers NI -200560 ("Wait Until Done ... timeout") when margin is too small.
+                n_samples = int(len(self.t))
+                nominal_duration_s = n_samples / ai_hz
+                t_np = np.asarray(self.t, dtype=float)
+                if n_samples > 1 and np.all(np.isfinite(t_np[[0, -1]])):
+                    timeline_span_s = float(t_np[-1] - t_np[0])
+                    if (not np.isfinite(timeline_span_s)) or timeline_span_s <= 0:
+                        timeline_span_s = nominal_duration_s
+                else:
+                    timeline_span_s = nominal_duration_s
+                base_duration_s = max(nominal_duration_s, timeline_span_s)
+                margin_s = max(30.0, 0.25 * base_duration_s)
+                wait_timeout_s = float(base_duration_s + margin_s)
+                wait_timeout_s = max(wait_timeout_s, 45.0)
 
-            self.angle_measured = self.angledata  # This makes bender.angle_measured available
+                analog_in.wait_until_done(wait_timeout_s)
+                self.endTime = datetime.now()
+
+                reader.read_many_sample(self.aidata)
+                angle_reader.read_many_sample_double(self.angledata)
+                self.angle_measured = self.angledata
+            except Exception:
+                _stop_run_tasks()
+                time.sleep(0.05)
+                raise
 
         return(self.aidata)
 
@@ -1650,6 +1733,8 @@ class Bender:
         if name is None:
             return 'bilateral_simultaneous'
         s = str(name).strip().lower().replace('-', '_').replace(' ', '_')
+        if not s:
+            return 'bilateral_simultaneous'
         aliases = {
             'bilateral_simultaneous': 'bilateral_simultaneous',
             'bilateral_both': 'bilateral_simultaneous',
@@ -1662,6 +1747,7 @@ class Bender:
             'left_unilateral': 'left_unilateral',
             'left': 'left_unilateral',
             'unilateral_left': 'left_unilateral',
+            'unilateral': 'left_unilateral',
             'right_unilateral': 'right_unilateral',
             'right': 'right_unilateral',
             'unilateral_right': 'right_unilateral',
@@ -1943,6 +2029,7 @@ class Bender:
         hold_duration_s=5.0,
         settle_before_stim_s=0.5,
         stim_duration_s=None,
+        inter_step_interval_s=0.0,
         is_stim=True,
         stim_pulse_rate=None,
         stim_voltage=5.0,
@@ -1976,7 +2063,13 @@ class Bender:
         self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
         self.set_stim_channels(*self.stim_channels)
 
+        gap_s = float(inter_step_interval_s)
+        if not np.isfinite(gap_s) or gap_s < 0:
+            raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
+
         for i in range(num_steps):
+            if i > 0 and gap_s > 0:
+                time.sleep(gap_s)
             target = float(targets_deg[i])
             prev = float(targets_deg[i - 1]) if i > 0 else float(targets_deg[0])
             if mirror:
@@ -2081,6 +2174,7 @@ class Bender:
         self.h5_protocol_metadata.update({
             'test_type': 'isometric',
             'n_trials': int(len(results)),
+            'isometric_inter_step_interval_s': float(gap_s),
         })
         return results
 
@@ -2100,6 +2194,7 @@ class Bender:
         stim_pulse_rate=None,
         stim_voltage=5.0,
         device_name=None,
+        inter_step_interval_s=0.0,
     ):
         """
         Force–length / isometric-style protocol in **commanded motor angle (degrees)**.
@@ -2121,6 +2216,7 @@ class Bender:
             hold_duration_s=hold_duration_s,
             settle_before_stim_s=settle_before_stim_s,
             stim_duration_s=stim_duration_s,
+            inter_step_interval_s=float(inter_step_interval_s),
             is_stim=is_stim,
             stim_pulse_rate=stim_pulse_rate,
             stim_voltage=stim_voltage,
@@ -2158,7 +2254,11 @@ class Bender:
             Optional seed for deterministic randomization when ``randomize=True``.
         stim_params : dict or None
             Optional keys: ``ramp_duration_s``, ``hold_duration_s``, ``settle_before_stim_s``,
-            ``stim_duration_s``, ``is_stim``, ``stim_pulse_rate``, ``stim_voltage``, ``device_name``.
+            ``stim_duration_s``, ``inter_step_interval_s`` (seconds of idle time after each step
+            before the next begins; 0 = no pause), ``is_stim``, ``stim_pulse_rate``,
+            ``stim_voltage``, ``device_name``.
+            If ``inter_step_interval_s`` is omitted, :attr:`isometric_inter_step_interval_s` on
+            the instance is used (default 0).
         **kwargs
             Merged into ``stim_params`` (stim_params takes precedence).
 
@@ -2173,6 +2273,7 @@ class Bender:
             'hold_duration_s': 5.0,
             'settle_before_stim_s': 0.5,
             'stim_duration_s': None,
+            'inter_step_interval_s': None,
             'is_stim': True,
             'stim_pulse_rate': None,
             'stim_voltage': 5.0,
@@ -2181,16 +2282,20 @@ class Bender:
         if stim_params:
             sp.update(stim_params)
         sp.update(kwargs)
+        if sp.get('inter_step_interval_s', None) is None:
+            sp['inter_step_interval_s'] = float(getattr(self, 'isometric_inter_step_interval_s', 0.0) or 0.0)
         vals = np.linspace(float(initial), float(final), int(num_steps))
         seq_idx = np.arange(vals.size, dtype=int)
         if bool(randomize) and vals.size > 1:
             rng = np.random.default_rng(None if random_seed is None else int(random_seed))
             rng.shuffle(seq_idx)
             vals = vals[seq_idx]
-        dc = getattr(self, 'dclamp', None)
+        dc = self._effective_dclamp_mm()
         xw = getattr(self, 'xsec_width', None)
         if dc is None:
-            raise ValueError("isometric requires self.dclamp (metadata).")
+            raise ValueError(
+                "isometric requires clamp spacing (mm): set `dclamp` or `test_segment_length_mm` on the Bender instance."
+            )
         kappa = convert_to_curvature(vals, mode, dclamp_mm=dc, xsec_width_mm=xw)
         targets_deg = np.rad2deg(kappa * (float(dc) / 1000.0))
         rec = self._normalize_recruitment(
@@ -2207,6 +2312,7 @@ class Bender:
             hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
             settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
             stim_duration_s=sp.get('stim_duration_s', None),
+            inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
             is_stim=bool(sp.get('is_stim', True)),
             stim_pulse_rate=sp.get('stim_pulse_rate', None),
             stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -2606,10 +2712,12 @@ class Bender:
             sp.update(stim_params)
         sp.update(kwargs)
 
-        dc = getattr(self, 'dclamp', None)
+        dc = self._effective_dclamp_mm()
         xw = getattr(self, 'xsec_width', None)
         if dc is None:
-            raise ValueError("isovelocity requires self.dclamp (metadata).")
+            raise ValueError(
+                "isovelocity requires clamp spacing (mm): set `dclamp` or `test_segment_length_mm` on the Bender instance."
+            )
         k0 = convert_to_curvature(
             float(starting_strain),
             starting_strain_mode,
@@ -3295,6 +3403,8 @@ class Bender:
                     'mode': 'isometric_mode',
                     'randomize': 'isometric_randomize',
                     'random_seed': 'isometric_random_seed',
+                    'time_between_steps_s': 'isometric_inter_step_interval_s',
+                    'inter_step_interval_s': 'isometric_inter_step_interval_s',
                     'stim_params': 'isometric_stim_params',
                     'recruitment': 'recruitment',
                     'lateral_mode': 'lateral_mode',
@@ -3425,6 +3535,7 @@ class Bender:
             'isometric_required': ['isometric_initial', 'isometric_final', 'isometric_num_steps'],
             'isometric_optional': [
                 'isometric_mode', 'isometric_randomize', 'isometric_random_seed',
+                'isometric_inter_step_interval_s',
                 'isometric_stim_params', 'isometric_stim_overrides',
                 'recruitment', 'lateral_mode', 'bilateral_mirror_motor', 'bilateral_sequential_left_frac',
             ],
@@ -3474,6 +3585,8 @@ class Bender:
             for k in ['isometric_initial', 'isometric_final', 'isometric_num_steps']:
                 if getattr(self, k, None) is None:
                     missing.append(k)
+            if self._effective_dclamp_mm() is None:
+                missing.append('test_segment_length_mm (or dclamp, mm)')
         elif tt == 'isovelocity':
             for k in [
                 'isovelocity_min_vel', 'isovelocity_max_vel',
@@ -3481,6 +3594,8 @@ class Bender:
             ]:
                 if getattr(self, k, None) is None:
                     missing.append(k)
+            if self._effective_dclamp_mm() is None:
+                missing.append('test_segment_length_mm (or dclamp, mm)')
         elif tt == 'calibration':
             if getattr(self, 'calibration_base_test_type', None) is None:
                 missing.append('calibration_base_test_type')

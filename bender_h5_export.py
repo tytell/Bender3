@@ -25,6 +25,27 @@ def _read_existing_post_trial_notes(h5_path: str) -> str:
         return ''
 
 
+def unique_filepath(path: str) -> str:
+    """
+    If ``path`` is already an existing file, return the first unused name
+    ``stem_001.ext``, ``stem_002.ext``, … in the same directory so exports never
+    overwrite data on disk.
+    """
+    if not path:
+        return path
+    p = os.path.normpath(path)
+    if not os.path.isfile(p):
+        return p
+    directory, filename = os.path.split(p)
+    stem, ext = os.path.splitext(filename)
+    n = 1
+    while True:
+        cand = os.path.join(directory, f'{stem}_{n:03d}{ext}')
+        if not os.path.isfile(cand):
+            return cand
+        n += 1
+
+
 def _append_post_trial_notes_to_file_notes(previous: str, addition: str) -> str:
     """
     Build the full ``post-trial notes`` string for the HDF5 root / metadata attrs.
@@ -64,10 +85,12 @@ def export_primary_h5(
     outputfile
         Full path for the new file; default ``bender.outputfile``.
     append_post_trial_notes
-        If ``True`` (default) and ``outputfile`` already exists, read its current
-        ``post-trial notes`` attribute and **append** this call's text as a new
-        timestamped block. If ``False``, stored notes are replaced by this call's
-        text only. Empty new text leaves prior notes unchanged when appending.
+        If ``True`` (default), read any existing ``post-trial notes`` from the
+        file that will be written (or, when the chosen path is already taken and
+        a ``_001`` / ``_002`` … name is used, from the conflicting path) and
+        **append** this call's text as a new timestamped block. If ``False``,
+        stored notes are replaced by this call's text only. Empty new text leaves
+        prior notes unchanged when appending.
 
     Returns
     -------
@@ -79,11 +102,21 @@ def export_primary_h5(
     if not out_path:
         raise ValueError("export_primary_h5 requires bender.outputfile or outputfile=...")
 
+    final_path = unique_filepath(out_path)
+
     test_type = str(getattr(bender, 'test_type', 'unknown') or 'unknown')
     h5_schema_version = str(getattr(bender, 'h5_schema_version', '2.0'))
     if append_post_trial_notes:
         incoming = '' if post_trial_notes is None else str(post_trial_notes).strip()
-        previous = _read_existing_post_trial_notes(out_path) if os.path.isfile(out_path) else ''
+        previous = ''
+        if os.path.isfile(final_path):
+            previous = _read_existing_post_trial_notes(final_path)
+        if (
+            not previous
+            and os.path.normpath(final_path) != os.path.normpath(out_path)
+            and os.path.isfile(out_path)
+        ):
+            previous = _read_existing_post_trial_notes(out_path)
         notes = _append_post_trial_notes_to_file_notes(previous, incoming)
     else:
         if post_trial_notes is not None:
@@ -92,6 +125,7 @@ def export_primary_h5(
             notes = str(getattr(bender, 'post_trial_notes', '') or '').strip()
 
     setattr(bender, 'post_trial_notes', notes)
+    setattr(bender, 'outputfile', final_path)
 
     cal_file = str(getattr(bender, 'inertial_calibration_file', '') or '')
     use_cal = bool(getattr(bender, 'use_inertial_calibration', False))
@@ -127,7 +161,7 @@ def export_primary_h5(
             'primary_torque_corrected': np.asarray(getattr(bender, 'primary_torque_corrected', np.array([]))),
         }]
 
-    with h5py.File(out_path, 'w') as f:
+    with h5py.File(final_path, 'w') as f:
         f.attrs['schema_version'] = h5_schema_version
         f.attrs['test_type'] = test_type
         f.attrs['post-trial notes'] = notes
@@ -323,7 +357,7 @@ def export_primary_h5(
 
     msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})'
     return {
-        'outputfile': out_path,
+        'outputfile': final_path,
         'n_trials': len(trial_records),
         'test_type': test_type,
         'schema_version': h5_schema_version,
@@ -491,9 +525,14 @@ def save_universal_qc_figure(
     fig, idx = build_universal_qc_figure(bender, qc_trial_index=qc_trial_index)
     proc = str(getattr(bender, 'test_type', 'unknown'))
     h5p = str(getattr(bender, 'outputfile', 'bender_output.h5'))
-    base = base_path or h5p.replace('.h5', f'_{proc}_trial{idx:03d}_qc')
-    png_path = f'{base}.png'
-    html_path = f'{base}.html'
+    if base_path:
+        base = base_path
+    elif h5p.lower().endswith('.h5'):
+        base = h5p[:-3] + f'_{proc}_trial{idx:03d}_qc'
+    else:
+        base = h5p + f'_{proc}_trial{idx:03d}_qc'
+    png_path = unique_filepath(f'{base}.png')
+    html_path = unique_filepath(f'{base}.html')
     try:
         fig.write_image(png_path, engine='kaleido', scale=2)
         return png_path, None

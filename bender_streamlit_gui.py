@@ -1,31 +1,84 @@
 """
-Browser-based prototype GUI for Bender dispatch parameters.
+CritterGripper — Streamlit UI for Bender experiment dispatch.
 
 Run from the project directory:
     streamlit run bender_streamlit_gui.py
 
-Select ``test_type`` first; edit fields, use **Save parameters** to copy them onto the
-``Bender`` instance, **Check required fields** to validate, **Refresh preview** for a
-table/plot of commanded motion (no DAQ), then **Run experiment** when hardware is ready.
+Select ``test_type`` first; edit fields, use **Apply** to copy them onto the
+``Bender`` instance, optionally **save / load protocol templates** (procedure only) and
+**save / load biometrics templates** in **section 2**, **Check required fields** to validate,
+**Refresh preview** for a table/plot of commanded motion (no DAQ), then **Run experiment**
+when hardware is ready.
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
+from typing import Optional
 
+import h5py
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 # Project root on path for `bender_functions` and config modules
 _ROOT = os.path.dirname(os.path.abspath(__file__))
+_LOGO_PATH = os.path.join(_ROOT, 'assets', 'jimenez_biomechanics_logo.png')
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from bender_functions import Bender  # noqa: E402
 from bender_gui_preview import build_protocol_preview  # noqa: E402
+from bender_biometrics_templates import (  # noqa: E402
+    apply_biometrics_template_to_session,
+    biometrics_template_display_label,
+    default_biometrics_templates_dir,
+    list_biometrics_template_files,
+    load_biometrics_template,
+    save_biometrics_template,
+    sanitize_biometrics_filename_stem,
+)
+from bender_protocol_templates import (  # noqa: E402
+    apply_template_to_session_state,
+    build_procedure_dict_from_updates,
+    default_templates_dir,
+    list_template_files,
+    load_protocol_template,
+    save_protocol_template,
+    sanitize_template_filename_stem,
+    snapshot_bender_procedure,
+    template_display_label,
+)
+
+
+def _shared_experiment_dir() -> str:
+    """Protocol & biometrics JSON files use the same folder as **Data folder** (section 1) when it exists."""
+    d = str(st.session_state.get('gui_data_folder') or '').strip()
+    if d:
+        norm = os.path.normpath(d)
+        if os.path.isdir(norm):
+            return norm
+    return os.path.normpath(default_templates_dir(_ROOT))
+
+
+def _protocol_template_option_label(p: Optional[str]):
+    if p is None:
+        return '— Choose a template —'
+    return f'{template_display_label(p)}  ·  {os.path.basename(p)}'
+
+
+def _biometrics_template_option_label(p: Optional[str]):
+    if p is None:
+        return '— Choose a biometrics file —'
+    return biometrics_template_display_label(p)
 from bender_h5_export import export_primary_h5, save_universal_qc_figure  # noqa: E402
+from bender_h5_plot_helpers import (  # noqa: E402
+    align_xy,
+    h5_custom_plot_summary,
+    list_h5_plot_variables,
+    read_h5_series,
+)
 
 MOTION_TYPES = frozenset(
     {'dynamic', 'frequency_sweep', 'frequency_step', 'curvature_step', 'step_change'}
@@ -35,8 +88,12 @@ MOTION_TYPES = frozenset(
 MOTION_GUI_FIELDS = [
     ('duration', 'float', 'Duration (s)'),
     ('all_freqs', 'list_float', 'Frequencies Hz (comma-separated, e.g. 1, 5)'),
-    ('all_amps', 'list_float', 'Amplitudes (comma-separated; meaning from all_amps_mode)'),
-    ('all_amps_mode', 'select', 'Amplitude interpretation'),
+    (
+        'all_amps',
+        'list_float',
+        'Amplitudes (comma-separated; see all_amps_mode: strain=decimal ε, strain_pct=percent)',
+    ),
+    ('all_amps_mode', 'select', 'Amplitude interpretation (strain vs strain_pct, etc.)'),
     ('cycles_per_step', 'int', 'Cycles per step'),
     ('n_end_cycles', 'int', 'End cycles'),
     ('randomize', 'bool', 'Randomize order'),
@@ -109,12 +166,133 @@ def _motion_parameter_rows(test_type: str):
 
 ALL_AMPS_MODE_OPTIONS = ('strain', 'strain_pct', 'curvature', 'angle')
 
+ISOMETRIC_STIM_JSON_HELP = (
+    'Optional JSON for **each isometric step** (merged onto defaults). Common keys: **ramp_duration_s**, '
+    '**hold_duration_s**, **settle_before_stim_s** (quiet time at target angle before stim), '
+    '**stim_duration_s** (use null to stim through the rest of the hold), **inter_step_interval_s** '
+    '(idle time between steps; 0 = back-to-back), **is_stim**, **stim_pulse_rate** (Hz), **stim_voltage** (V), '
+    '**device_name** (null = use your NI config). Example: {"ramp_duration_s": 2, "hold_duration_s": 5, "stim_pulse_rate": 75}'
+)
+ISOMETRIC_STIM_OVERRIDES_HELP = (
+    'Rare. JSON merged into stim **routing** (not timing): e.g. **recruitment**, **lateral_mode**, '
+    '**bilateral_mirror_motor**, **bilateral_sequential_left_frac**. Leave `{}` unless you need overrides.'
+)
+ISOVELOCITY_STIM_JSON_HELP = (
+    'Optional JSON merged onto isovelocity defaults: **settle_before_stim_s**, **stim_duration_s** (null = rest of iso), '
+    '**pre_iso_stim_duration_s**, **is_stim**, **stim_pulse_rate**, **stim_voltage**, **device_name**, '
+    'and optionally **iso_duration_s** / **pre_hold_s** to override the main fields.'
+)
+ISOVELOCITY_STIM_OVERRIDES_HELP = ISOMETRIC_STIM_OVERRIDES_HELP
+
+RANDOM_SEED_HELP = (
+    'Only used when **randomize order** is checked. Enter an integer for a **reproducible** shuffle (same order '
+    'every run); leave empty for a **different** random order each time.'
+)
+
+RECRUITMENT_FIELD_HELP = (
+    'How stimulation and/or motor commands are routed across left vs right: simultaneous, sequential halves of a '
+    'step, or unilateral (one side).'
+)
+
+ISOVELOCITY_WIDGET_LABEL = {
+    'isovelocity_min_vel': 'Minimum angular velocity (deg/s)',
+    'isovelocity_max_vel': 'Maximum angular velocity (deg/s)',
+    'isovelocity_starting_strain': 'Starting posture (strain / curvature / angle)',
+    'isovelocity_num_steps': 'Number of velocity steps',
+    'isovelocity_starting_strain_mode': 'Unit for starting posture value',
+    'isovelocity_randomize': 'Randomize order of velocity steps',
+    'isovelocity_random_seed': 'Random seed (optional)',
+    'isovelocity_iso_duration_s': 'Constant-velocity bend duration (s)',
+    'isovelocity_pre_hold_s': 'Pre-hold at starting angle (s)',
+}
+
+ISOVELOCITY_FIELD_HELP = {
+    'isovelocity_min_vel': 'Lower end of the angular velocity sweep (deg/s). Steps are spaced linearly between min and max.',
+    'isovelocity_max_vel': 'Upper end of the angular velocity sweep (deg/s).',
+    'isovelocity_starting_strain': 'Initial posture before each velocity step; interpreted with **starting strain mode** (e.g. decimal ε vs motor angle).',
+    'isovelocity_num_steps': 'How many commanded angular velocities between min and max (inclusive). Each is a separate trial from the same start posture.',
+    'isovelocity_starting_strain_mode': 'Whether **starting posture** is decimal ε, percent strain, curvature κ, or motor angle (deg).',
+    'isovelocity_randomize': 'Shuffle the order of velocity steps. Use **random seed** if you want the same order every time.',
+    'isovelocity_random_seed': RANDOM_SEED_HELP,
+    'isovelocity_iso_duration_s': 'After the quiet **pre-hold**, how long (seconds) the motor holds **constant angular velocity** before the step ends. This is not the pre-hold time—that is **pre-hold**.',
+    'isovelocity_pre_hold_s': 'Time (s) at the starting posture before each trial’s constant-velocity segment begins.',
+    'recruitment': RECRUITMENT_FIELD_HELP,
+    'lateral_mode': (
+        'Expert only. Leave **blank** unless you need a custom stim-router label. Normal left/right/bilateral behavior '
+        'is set with **recruitment** above; this field overrides that name inside merged stim JSON.'
+    ),
+    'bilateral_mirror_motor': (
+        'When **recruitment** is **bilateral sequential**, mirror the commanded bend between the first and second '
+        'half of each step (left vs right). Does **not** turn on bilateral testing by itself—choose **recruitment** for '
+        'which sides are used.'
+    ),
+    'bilateral_sequential_left_frac': 'Share of each step spent on the **left** side before the right (0–1).',
+}
+
+ISOMETRIC_FIELD_HELP = {
+    'isometric_initial': 'First target in the sweep; units follow **isometric mode** (strain, curvature, or angle).',
+    'isometric_final': 'Last target in the sweep (same units as initial).',
+    'isometric_num_steps': 'Number of steps between initial and final (endpoints included).',
+    'isometric_mode': 'How **initial** / **final** are interpreted: decimal ε, percent strain, κ, or motor angle.',
+    'isometric_randomize': 'Shuffle step order. Use **random seed** for a fixed order across runs.',
+    'isometric_random_seed': RANDOM_SEED_HELP,
+    'isometric_inter_step_interval_s': 'Idle time after each step’s acquisition before the next ramp (0 = back-to-back).',
+    'recruitment': RECRUITMENT_FIELD_HELP,
+    'lateral_mode': (
+        'Expert only. Leave **blank** unless you need a custom stim-router label. **Recruitment** sets routine '
+        'left/right/bilateral behavior; this overrides the router name in merged stim params.'
+    ),
+    'bilateral_mirror_motor': (
+        'When **recruitment** is **bilateral sequential**, mirror the hold/ramp between left and right halves of each '
+        'step. Which sides are active is still set by **recruitment**, not this checkbox alone.'
+    ),
+    'bilateral_sequential_left_frac': 'Share of each step on the **left** side before the right (0–1).',
+}
+
+MOTION_FIELD_HELP = {
+    'random_seed': RANDOM_SEED_HELP,
+    'duration': 'Total motion timeline length (s) for protocols that use a single continuous run.',
+    'all_freqs': 'Comma-separated list of frequencies (Hz) for each step or segment.',
+    'all_amps': 'Comma-separated amplitudes; meaning depends on **amplitude interpretation** (strain vs angle, etc.).',
+    'all_amps_mode': 'How each entry in **amplitudes** is converted to curvature / motor angle.',
+    'cycles_per_step': 'Oscillation cycles at each frequency step before advancing.',
+    'n_end_cycles': 'Extra cycles at the last frequency at the end of the run.',
+    'randomize': 'Shuffle the order of frequency/amplitude steps when applicable.',
+    'stim_cycles_in_step': 'Which cycle indices (1-based) within each step receive stimulation.',
+    'is_stim': 'Enable patterned stimulation during the motion.',
+    'stim_pulse_rate': 'Carrier pulse rate for stimulation (Hz).',
+    'S1volts': 'Stimulus channel 1 amplitude (V).',
+    'S2volts': 'Stimulus channel 2 amplitude (V).',
+    'amplitude_frequency_exponent': 'For frequency sweep: exponent α so amplitude ∝ f^α relative to the sweep start.',
+    'step_change_frequencies': 'Comma-separated frequencies for each step-change segment.',
+    'step_change_curves': 'Comma-separated curvature / amplitude targets per segment.',
+    'step_change_cycles_per_step': 'Comma-separated integers: cycles per step-change segment.',
+}
+
+
+def _format_strain_or_amp_mode(opt: str) -> str:
+    """User-facing labels: make decimal vs percent strain explicit."""
+    o = str(opt)
+    if o == 'strain':
+        return 'strain — decimal ε (0.05 = 5%)'
+    if o == 'strain_pct':
+        return 'strain_pct — percent scale (5 = 5%)'
+    if o == 'curvature':
+        return 'curvature — κ (1/m)'
+    if o == 'angle':
+        return 'angle — motor (deg)'
+    return o
+
+
 RECRUITMENT_OPTIONS = (
     'bilateral_simultaneous',
     'bilateral_sequential',
     'left',
     'right',
 )
+
+BILATERAL_MIRROR_LABEL = 'Perform test on both sides (bilateral)'
+LATERAL_MODE_LABEL = 'Stim routing override (optional; experts only)'
 
 
 def _parse_float_list(s: str):
@@ -153,7 +331,7 @@ def _get_session_value(b: Bender, name: str, default=None):
     return default
 
 
-def _render_field(b: Bender, name: str, kind: str, label: str):
+def _render_field(b: Bender, name: str, kind: str, label: str, *, help_text: Optional[str] = None):
     """
     Render one widget; return value to setattr, or None to skip.
 
@@ -163,22 +341,23 @@ def _render_field(b: Bender, name: str, kind: str, label: str):
     """
     sk = _widget_key(name)
     cur = _get_session_value(b, name)
+    h = help_text if help_text else None
 
     if kind == 'float':
         if sk not in st.session_state:
             st.session_state[sk] = float(cur) if cur is not None else 0.0
-        return float(st.number_input(label, key=sk, format='%.6g'))
+        return float(st.number_input(label, key=sk, format='%.6g', help=h))
 
     if kind == 'int':
         if sk not in st.session_state:
             st.session_state[sk] = int(cur) if cur is not None else 0
-        return int(st.number_input(label, key=sk, step=1))
+        return int(st.number_input(label, key=sk, step=1, help=h))
 
     if kind == 'optional_int':
         use_key = f'{sk}_use'
         if use_key not in st.session_state:
             st.session_state[use_key] = cur is not None
-        use = st.checkbox(f'{label} (use custom)', key=use_key)
+        use = st.checkbox(f'{label} (use custom)', key=use_key, help=h)
         if not use:
             return None
         if sk not in st.session_state:
@@ -188,12 +367,12 @@ def _render_field(b: Bender, name: str, kind: str, label: str):
     if kind == 'bool':
         if sk not in st.session_state:
             st.session_state[sk] = bool(cur) if cur is not None else False
-        return bool(st.checkbox(label, key=sk))
+        return bool(st.checkbox(label, key=sk, help=h))
 
     if kind == 'str':
         if sk not in st.session_state:
             st.session_state[sk] = str(cur or '')
-        return str(st.text_input(label, key=sk))
+        return str(st.text_input(label, key=sk, help=h))
 
     if kind == 'select':
         opts = list(ALL_AMPS_MODE_OPTIONS)
@@ -202,7 +381,7 @@ def _render_field(b: Bender, name: str, kind: str, label: str):
             dv = 'strain'
         if sk not in st.session_state:
             st.session_state[sk] = dv
-        return str(st.selectbox(label, opts, key=sk))
+        return str(st.selectbox(label, opts, key=sk, format_func=_format_strain_or_amp_mode, help=h))
 
     if kind == 'list_float':
         if sk not in st.session_state:
@@ -213,7 +392,7 @@ def _render_field(b: Bender, name: str, kind: str, label: str):
                     st.session_state[sk] = ''
             else:
                 st.session_state[sk] = ''
-        s = str(st.text_input(label, key=sk))
+        s = str(st.text_input(label, key=sk, help=h))
         return _parse_float_list(s)
 
     if kind == 'list_int':
@@ -225,13 +404,14 @@ def _render_field(b: Bender, name: str, kind: str, label: str):
                     st.session_state[sk] = ''
             else:
                 st.session_state[sk] = ''
-        s = str(st.text_input(label, key=sk))
+        s = str(st.text_input(label, key=sk, help=h))
         return _parse_int_list(s)
 
     if kind == 'json_dict':
         if sk not in st.session_state:
             st.session_state[sk] = json.dumps(cur, indent=2) if isinstance(cur, dict) else '{}'
-        s = str(st.text_area(label, height=120, key=sk))
+        jh = help_text if help_text is not None else f'JSON object for `{name}` (see protocol docs).'
+        s = str(st.text_area(label, height=120, key=sk, help=jh))
         try:
             return json.loads(s)
         except json.JSONDecodeError:
@@ -248,27 +428,312 @@ def _clear_fld_session_keys():
             del st.session_state[k]
 
 
+def _friendly_error_message(err: Exception, *, action: str) -> str:
+    """Convert technical exceptions into plain-language UI messages."""
+    msg = str(err or '').strip()
+    low = msg.lower()
+    if 'export_primary_h5 requires bender.outputfile or outputfile' in low:
+        return (
+            'Your data file (.h5) did not save. Set **Data folder** and **Data file name** in **section 1** '
+            '(they combine into the full `.h5` path).'
+        )
+    if 'kaleido' in low and action == 'save_qc':
+        return 'Your Post-Experiment QC figure did not save as PNG because Kaleido is missing. Install Kaleido or use HTML fallback.'
+    if action == 'save_h5':
+        return f'Your data file (.h5) did not save. {msg}' if msg else 'Your data file (.h5) did not save.'
+    if action == 'save_qc':
+        return f'Your Post-Experiment QC figure did not save. {msg}' if msg else 'Your Post-Experiment QC figure did not save.'
+    if action == 'run_experiment':
+        if '-200077' in msg or 'sampclk_rate' in low or 'daqmx_sampclk_rate' in low:
+            return (
+                'The experiment did not run: NI-DAQmx rejected the sample clock rate (often 0 Hz). '
+                'That usually came from motion timeline dt = t[1]-t[0] being so large that 1/dt rounded to 0 — '
+                'fixed in current code — or from daq_ai_sample_rate_hz / daq_ao_do_sample_rate_hz being zero in config. '
+                f'Details: {msg}'
+            )
+        if '-200560' in msg or 'wait until done' in low:
+            return (
+                'The experiment did not run: the DAQ did not finish within the wait timeout (NI -200560). '
+                'The code now sets timeout from acquisition length plus a larger margin (long isometric ramps/holds). '
+                'If this persists, check USB/cabling, Task Manager load, and that AI/AO/encoder tasks start cleanly; '
+                f'details: {msg}'
+            )
+        if '-50103' in msg or 'resource reserved' in low or 'specified resource is reserved' in low:
+            return (
+                'The experiment did not run: NI-DAQmx reports the device or a line is still reserved (often -50103). '
+                'Another program may be using the same USB DAQ (NI MAX test panels, LabVIEW, a hung Python process, '
+                'or a second Streamlit tab). Close those, wait a few seconds, or reset/replug the device; if it '
+                f'persists, restart the NI background services or reboot. Details: {msg}'
+            )
+        return f'The experiment did not run. {msg}' if msg else 'The experiment did not run.'
+    return f'Something went wrong. {msg}' if msg else 'Something went wrong.'
+
+
+def _show_friendly_error(err: Exception, *, action: str):
+    st.error(_friendly_error_message(err, action=action))
+    with st.expander('Technical details'):
+        st.exception(err)
+
+
+def _needs_missing_calibration_confirmation(b: Bender) -> bool:
+    """True when inertial-calibration use is requested but file path is absent or missing."""
+    use_cal = bool(getattr(b, 'use_inertial_calibration', False))
+    cal_file = str(getattr(b, 'inertial_calibration_file', '') or '').strip()
+    if not use_cal:
+        return False
+    return (not cal_file) or (not os.path.isfile(cal_file))
+
+
+def _append_note_to_h5_file(h5_path: str, note_text: str):
+    """Append a dated note block to an existing .h5 file's post-trial notes attrs."""
+    note = str(note_text or '').strip()
+    if not note:
+        raise ValueError('Please enter a note first.')
+    if not os.path.isfile(h5_path):
+        raise ValueError(f'File not found: {h5_path}')
+    ts = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+    with h5py.File(h5_path, 'r+') as f:
+        prev = str(f.attrs.get('post-trial notes', '') or '').strip()
+        merged = note if not prev else f"{prev}\n\n--- Post-Experiment QC note ({ts}) ---\n{note}"
+        f.attrs['post-trial notes'] = merged
+        if '01_Metadata' in f:
+            f['01_Metadata'].attrs['post-trial notes'] = merged
+
+
+def _candidate_review_files(data_file_path: str):
+    """Files in the data directory likely useful for review (h5/images/html)."""
+    p = str(data_file_path or '').strip()
+    if not p:
+        return []
+    d = os.path.dirname(p) or '.'
+    if not os.path.isdir(d):
+        return []
+    exts = {'.h5', '.png', '.jpg', '.jpeg', '.webp', '.html'}
+    out = []
+    for n in sorted(os.listdir(d)):
+        fp = os.path.join(d, n)
+        if os.path.isfile(fp) and os.path.splitext(n.lower())[1] in exts:
+            out.append(fp)
+    return out
+
+
+def _ensure_review_file_selection(files: list) -> None:
+    if not files:
+        return
+    sel = st.session_state.get('gui_review_selected')
+    if sel not in files:
+        st.session_state['gui_review_selected'] = files[0]
+
+
+def _read_qc_trial_index(b: Bender) -> int:
+    """Which in-memory `trial_records` entry the QC figure uses (after Run / export)."""
+    tr = list(getattr(b, 'trial_records', []) or [])
+    n = len(tr)
+    if n <= 1:
+        return 0
+    try:
+        ix = int(st.session_state.get('gui_qc_trial_index'))
+    except (TypeError, ValueError):
+        ix = n - 1
+    return int(max(0, min(ix, n - 1)))
+
+
+def _qc_figure_base_path(b: Bender, selected_path: str, trial_idx: int) -> Optional[str]:
+    """Output stem for `save_universal_qc_figure` when tying the QC file name to a chosen `.h5`."""
+    p = str(selected_path or '').strip()
+    if not p.lower().endswith('.h5'):
+        return None
+    proc = str(getattr(b, 'test_type', 'unknown'))
+    stem = p[:-3]
+    return stem + f'_{proc}_trial{int(trial_idx):03d}_qc'
+
+
+def _compose_output_h5_path() -> str:
+    """Full `.h5` path from **section 1** **Data folder** + **Data file name**."""
+    folder = str(st.session_state.get('gui_data_folder') or '').strip()
+    fn = str(st.session_state.get('gui_data_filename') or '').strip()
+    if not fn:
+        return ''
+    if not fn.lower().endswith('.h5'):
+        fn = fn + '.h5'
+    if folder:
+        return os.path.normpath(os.path.join(folder, fn))
+    return os.path.normpath(fn)
+
+
+def _output_path_anchor_for_review(b: Optional[Bender] = None) -> str:
+    """Path used to locate the data directory (composed section 1 path, else ``b.outputfile``)."""
+    p = _compose_output_h5_path().strip()
+    if p:
+        return p
+    inst = b if b is not None else st.session_state.get('bender')
+    if inst is not None:
+        return str(getattr(inst, 'outputfile', '') or '').strip()
+    return ''
+
+
+def _normalize_config_module_name(raw: str) -> str:
+    """Strip whitespace and optional ``.py`` suffix for ``importlib.import_module``."""
+    s = str(raw or '').strip()
+    if s.lower().endswith('.py'):
+        s = s[:-3].strip()
+    return s
+
+
+def _flush_pending_load_config_session():
+    """Apply deferred session updates before widgets bind to these keys (Streamlit restriction)."""
+    if 'gui_pending_genus_species' in st.session_state:
+        st.session_state['gui_genus_species'] = st.session_state.pop('gui_pending_genus_species')
+    if 'gui_pending_specimen_id' in st.session_state:
+        st.session_state['gui_specimen_id'] = st.session_state.pop('gui_pending_specimen_id')
+    if 'gui_pending_data_folder' in st.session_state:
+        st.session_state['gui_data_folder'] = st.session_state.pop('gui_pending_data_folder')
+    if 'gui_pending_data_filename' in st.session_state:
+        st.session_state['gui_data_filename'] = st.session_state.pop('gui_pending_data_filename')
+    if 'gui_pending_post_notes' in st.session_state:
+        st.session_state['gui_post_notes'] = st.session_state.pop('gui_pending_post_notes')
+
+
+def _ensure_gui_data_path_session_keys():
+    """Seed folder/filename from legacy single-field ``gui_outputfile`` if needed."""
+    if 'gui_data_folder' in st.session_state and 'gui_data_filename' in st.session_state:
+        return
+    leg = str(st.session_state.get('gui_outputfile', '') or '').strip()
+    if leg:
+        norm = os.path.normpath(leg)
+        st.session_state['gui_data_folder'] = os.path.dirname(norm) or ''
+        st.session_state['gui_data_filename'] = os.path.basename(norm)
+    else:
+        st.session_state['gui_data_folder'] = ''
+        st.session_state['gui_data_filename'] = ''
+
+
+def _sync_genus_species_to_bender(b: Bender) -> None:
+    """Store genus-species and specimen ID in ``h5_protocol_metadata`` for HDF5 export."""
+    gs = str(st.session_state.get('gui_genus_species') or '').strip()
+    sid = str(st.session_state.get('gui_specimen_id') or '').strip()
+    meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
+    meta['genus_species'] = gs
+    meta['specimen_id'] = sid
+    b.h5_protocol_metadata = meta
+
+
 def _apply_pair(b: Bender, name: str, value):
     if value is None and name == 'random_seed':
         setattr(b, name, None)
         return
     if value is None:
         return
+    if name == 'lateral_mode' and isinstance(value, str) and not value.strip():
+        setattr(b, 'lateral_mode', None)
+        return
     setattr(b, name, value)
 
 
 def _apply_form_updates(b: Bender, updates: dict, tt: str):
+    if tt == 'calibration':
+        emb = st.session_state.get('gui_calibration_embedded_base')
+        if isinstance(emb, dict):
+            proc = emb.get('procedure')
+            if isinstance(proc, dict):
+                for k, v in proc.items():
+                    _apply_pair(b, k, v)
     for k, v in updates.items():
         _apply_pair(b, k, v)
     b.test_type = tt
 
 
+def _apply_procedure_form_to_bender(b: Bender, updates: dict, tt: str) -> None:
+    """Sync biometrics flags, copy procedure fields onto ``b``, and mirror any QC note text from session."""
+    _sync_biometric_flags_from_session(b)
+    _apply_form_updates(b, updates, tt)
+    _sync_genus_species_to_bender(b)
+    _pn = str(st.session_state.get('gui_post_notes') or '').strip()
+    if _pn:
+        b.post_trial_notes = _pn
+
+
+def _consume_pending_protocol_template(valid_test_types: list) -> None:
+    """Apply a template queued by **Load template** (runs before procedure widgets render)."""
+    path = st.session_state.pop('gui_pending_protocol_template_path', None)
+    if not path:
+        return
+    try:
+        data = load_protocol_template(path)
+        ok, msg = apply_template_to_session_state(
+            st.session_state,
+            data,
+            widget_key=_widget_key,
+            valid_test_types=list(valid_test_types),
+        )
+        st.session_state['gui_protocol_load_feedback'] = (ok, msg)
+    except OSError as e:
+        st.session_state['gui_protocol_load_feedback'] = (False, f'Could not read template: {e}')
+    except json.JSONDecodeError as e:
+        st.session_state['gui_protocol_load_feedback'] = (False, f'Invalid JSON: {e}')
+    except Exception as e:
+        st.session_state['gui_protocol_load_feedback'] = (False, f'{type(e).__name__}: {e}')
+
+
+def _consume_pending_biometrics_template() -> None:
+    path = st.session_state.pop('gui_pending_biometrics_path', None)
+    if not path:
+        return
+    try:
+        data = load_biometrics_template(path)
+        ok, msg = apply_biometrics_template_to_session(st.session_state, data)
+        st.session_state['gui_biometrics_load_feedback'] = (ok, msg)
+    except OSError as e:
+        st.session_state['gui_biometrics_load_feedback'] = (False, f'Could not read file: {e}')
+    except json.JSONDecodeError as e:
+        st.session_state['gui_biometrics_load_feedback'] = (False, f'Invalid JSON: {e}')
+    except Exception as e:
+        st.session_state['gui_biometrics_load_feedback'] = (False, f'{type(e).__name__}: {e}')
+
+
+def _apply_all_biometrics_to_bender(b: Bender) -> None:
+    """Copy geometry, profile, and inertial flags from section 2 session state onto ``b``."""
+    _sync_biometric_flags_from_session(b)
+    b.dclamp = float(st.session_state['bio_dclamp'])
+    b.test_segment_length_mm = float(st.session_state['bio_dclamp'])
+    b.dbend = float(st.session_state['bio_dbend'])
+    b.test_segment_position_mm = float(st.session_state['bio_dbend'])
+    b.xsec_width = float(st.session_state['bio_xsec'])
+    b.temp_C_room = float(st.session_state['bio_temp_room'])
+    b.temp_C_tank = float(st.session_state['bio_temp_tank'])
+    stations = b.make_profile_stations(
+        st.session_state['bio_prof_ph'],
+        st.session_state['bio_prof_pw'],
+        st.session_state['bio_prof_dh'],
+        st.session_state['bio_prof_dw'],
+    )
+    b.set_profiled_specimen_inertial_model(
+        stations,
+        st.session_state['bio_prof_L'],
+        st.session_state['bio_prof_rho'],
+        clamp_offset_mm=float(st.session_state['bio_prof_clamp']),
+        num_samples=int(st.session_state['bio_prof_samples']),
+    )
+
+
 def _sync_biometric_flags_from_session(b: Bender):
-    """Keep inertia flags aligned when the biometrics panel is collapsed."""
+    """Copy biometrics panel session state onto ``b`` (flags + specimen geometry aliases)."""
     if 'bio_use_theoretical_inertial' in st.session_state:
         b.use_theoretical_inertial_correction = bool(st.session_state['bio_use_theoretical_inertial'])
-    if 'bio_use_frustum' in st.session_state:
-        b.use_frustum_inertial_model = bool(st.session_state['bio_use_frustum'])
+    if 'bio_dclamp' in st.session_state:
+        v = float(st.session_state['bio_dclamp'])
+        b.dclamp = v
+        b.test_segment_length_mm = v
+    if 'bio_dbend' in st.session_state:
+        v = float(st.session_state['bio_dbend'])
+        b.dbend = v
+        b.test_segment_position_mm = v
+    if 'bio_xsec' in st.session_state:
+        b.xsec_width = float(st.session_state['bio_xsec'])
+    if 'bio_temp_room' in st.session_state:
+        b.temp_C_room = float(st.session_state['bio_temp_room'])
+    if 'bio_temp_tank' in st.session_state:
+        b.temp_C_tank = float(st.session_state['bio_temp_tank'])
 
 
 def _init_biometrics_session_state(b: Bender, *, force: bool = False):
@@ -282,15 +747,9 @@ def _init_biometrics_session_state(b: Bender, *, force: bool = False):
     xw = getattr(b, 'xsec_width', None)
     _put('bio_dclamp', float(dc) if dc is not None else 10.0)
     _put('bio_xsec', float(xw) if xw is not None else 8.0)
-    fi = getattr(b, 'frustum_inputs', None) or {}
-    _put('bio_f_height', float(fi.get('height_mm', 4.0)))
-    _put('bio_f_width', float(fi.get('width_mm', 6.0)))
-    _put('bio_f_length', float(fi.get('length_mm', 25.0)))
-    _put('bio_f_rho', float(fi.get('density_g_per_mm3', 1.03e-3)))
-    _put('bio_f_tip', float(fi.get('tip_scale', 0.85)))
-    _put('bio_f_clamp_off', float(fi.get('clamp_offset_mm', 20.0)))
-    _put('bio_f_samples', 100)
-    _put('bio_use_frustum', bool(getattr(b, 'use_frustum_inertial_model', True)))
+    _put('bio_dbend', float(getattr(b, 'dbend', 0.0) or 0.0))
+    _put('bio_temp_room', float(getattr(b, 'temp_C_room', 22.0) or 22.0))
+    _put('bio_temp_tank', float(getattr(b, 'temp_C_tank', 22.0) or 22.0))
     _put(
         'bio_use_theoretical_inertial',
         bool(getattr(b, 'use_theoretical_inertial_correction', False)),
@@ -307,128 +766,281 @@ def _init_biometrics_session_state(b: Bender, *, force: bool = False):
 
 
 def main():
-    if 'gui_outputfile' not in st.session_state:
-        st.session_state['gui_outputfile'] = ''
+    _ensure_gui_data_path_session_keys()
     if 'gui_post_notes' not in st.session_state:
         st.session_state['gui_post_notes'] = ''
+    if 'gui_genus_species' not in st.session_state:
+        st.session_state['gui_genus_species'] = ''
+    if 'gui_specimen_id' not in st.session_state:
+        st.session_state['gui_specimen_id'] = ''
+    _flush_pending_load_config_session()
+    _consume_pending_biometrics_template()
 
-    st.title('Bender dispatch (prototype)')
+    _h_left, _h_right = st.columns([4, 1])
+    with _h_left:
+        st.title('The CritterGripper App')
+    with _h_right:
+        if os.path.isfile(_LOGO_PATH):
+            try:
+                st.image(_LOGO_PATH, use_container_width=True)
+            except TypeError:
+                # Older Streamlit: no use_container_width on st.image
+                try:
+                    st.image(_LOGO_PATH, use_column_width=True)
+                except TypeError:
+                    st.image(_LOGO_PATH, width=200)
     st.caption(
-        'Work top to bottom: **1 specimen geometry** → **2 experiment** → **3 preview** → **QC note** (optional) '
-        '→ **4 run** → **5 export**. Use **Save parameters** before preview or run when you change procedure fields.'
+        'Work top to bottom: **1 config & data paths** → **2 geometry, species & biometrics** → **3 experiment** → '
+        '**4 preview** → **5 run** → **6 save data** → **7 visualize data** → **8 add note**.'
     )
 
-    with st.sidebar:
-        cfg_mod = st.text_input('Config module (no .py)', value='jimenez_bender_config_A')
-        if st.button('Load config & build experiment object', type='primary'):
-            try:
-                st.session_state['bender'] = Bender(cfg_mod)
-                st.session_state['cfg_mod'] = cfg_mod
-                b0 = st.session_state['bender']
-                st.session_state['gui_outputfile'] = str(getattr(b0, 'outputfile', '') or '')
-                st.session_state['gui_post_notes'] = str(getattr(b0, 'post_trial_notes', '') or '')
-                _init_biometrics_session_state(b0, force=True)
-                _clear_fld_session_keys()
-                st.success(f'Loaded {cfg_mod}')
-            except Exception as e:
-                st.error(str(e))
-                st.session_state.pop('bender', None)
-
-        st.divider()
-        st.subheader('Output / export')
+    st.subheader('1 · Config & data file paths')
+    st.session_state.setdefault('gui_cfg_mod', str(st.session_state.get('cfg_mod') or 'jimenez_bender_config_A'))
+    c_cfg, c_btn = st.columns([3, 1])
+    with c_cfg:
         st.text_input(
-            'Data File (.h5)',
-            key='gui_outputfile',
-            help='Full path for the saved experiment file. Example: C:\\Data\\run001.h5',
+            'Config module (no .py)',
+            key='gui_cfg_mod',
+            help='Python module name in this project (e.g. your hardware / channel config).',
         )
-        st.number_input(
-            'QC plot: trial index',
-            min_value=0,
-            value=0,
-            step=1,
-            key='gui_qc_trial_index',
-            help=(
-                'After acquisition, each run stores one or more entries in `trial_records`. '
-                'This index picks **which trial** the universal QC figure uses (0 = first trial). '
-                'Typical motion runs have a single trial → leave at **0**. '
-                'Multi-step protocols (e.g. many isometric steps) may append several trials → increase the index '
-                'to QC a specific step.'
-            ),
+    with c_btn:
+        if st.button('Load config', type='primary', key='gui_btn_load_config', use_container_width=True):
+            _cm = _normalize_config_module_name(str(st.session_state.get('gui_cfg_mod') or ''))
+            if not _cm:
+                st.error('Enter a config module name.')
+            else:
+                if _ROOT not in sys.path:
+                    sys.path.insert(0, _ROOT)
+                try:
+                    st.session_state['bender'] = Bender(_cm)
+                    st.session_state['cfg_mod'] = _cm
+                    b0 = st.session_state['bender']
+                    outp0 = str(getattr(b0, 'outputfile', '') or '').strip()
+                    if outp0:
+                        n0 = os.path.normpath(outp0)
+                        st.session_state['gui_pending_data_folder'] = os.path.dirname(n0) or ''
+                        st.session_state['gui_pending_data_filename'] = os.path.basename(n0)
+                    else:
+                        st.session_state['gui_pending_data_folder'] = ''
+                        st.session_state['gui_pending_data_filename'] = ''
+                    _meta0 = getattr(b0, 'h5_protocol_metadata', {}) or {}
+                    st.session_state['gui_pending_genus_species'] = str(_meta0.get('genus_species', '') or '')
+                    st.session_state['gui_pending_specimen_id'] = str(_meta0.get('specimen_id', '') or '')
+                    st.session_state['gui_pending_post_notes'] = str(getattr(b0, 'post_trial_notes', '') or '')
+                    _init_biometrics_session_state(b0, force=True)
+                    _clear_fld_session_keys()
+                    st.success(f'Loaded `{_cm}`')
+                    st.rerun()
+                except ImportError as e:
+                    st.session_state.pop('bender', None)
+                    st.error(
+                        f'Could not import config module `{_cm}`.\n\n'
+                        f'- Enter the **module name only** (no `.py`), e.g. `jimenez_bender_config_A`.\n'
+                        f'- The file must be importable from the app folder: `{_ROOT}`\n'
+                        f'- Current working directory: `{os.getcwd()}`\n\n'
+                        f'Detail: {e}'
+                    )
+                except Exception as e:
+                    st.session_state.pop('bender', None)
+                    st.error(f'{type(e).__name__}: {e}')
+
+    st.session_state.setdefault('gui_sec1_hide', False)
+    if st.session_state.get('gui_sec1_hide'):
+        st.caption('Data paths hidden. Uncheck **Hide section** below to edit folder and file name.')
+    else:
+        st.markdown('**Data folder** (directory only — not the file name)')
+        st.text_input(
+            'Data folder path',
+            key='gui_data_folder',
+            placeholder=r'Example: C:\Users\me\Data\Experiments',
+            help='Folder only. Run/export, protocol templates, and biometrics JSON files use this directory.',
         )
-        st.checkbox('After run: save data file (.h5)', value=True, key='gui_save_h5')
-        st.checkbox('After run: save QC figure (PNG or HTML)', value=True, key='gui_save_qc')
-        st.caption('PNG needs **kaleido** (`pip install kaleido`). Otherwise an HTML QC file is written.')
+        st.markdown('**Data file name** (base name only; combined with the folder above)')
+        st.text_input(
+            'Data file name (.h5)',
+            key='gui_data_filename',
+            placeholder='my_experiment.h5',
+            help='File name only (with or without `.h5`). Full path = folder + this name.',
+        )
+        full_out = _compose_output_h5_path()
+        if full_out:
+            st.caption(f'**Full save path (target):** `{full_out}`')
+        else:
+            st.caption('Set a **Data file name** to form the full `.h5` path.')
+        st.caption(
+            'If that exact file already exists, the app saves as **`basename_001.h5`**, **`basename_002.h5`**, … '
+            '(before the `.h5`) so nothing is overwritten.'
+        )
+        anchor = _output_path_anchor_for_review()
+        qc_files = _candidate_review_files(anchor) if anchor else []
+        if qc_files:
+            st.caption(
+                f'**{len(qc_files)} file(s)** in the data folder. Pick one in **section 8** for plots, QC naming, and notes.'
+            )
+        else:
+            st.caption('No `.h5` / image / HTML files in this folder yet — run or save to create some.')
+        st.caption('Notes and file selection for QC plots are in **section 8 · Add note**.')
+        if st.session_state.get('bender') is not None:
+            if st.button('Apply', key='gui_sec1_apply_paths', help='Copy the composed `.h5` path onto the experiment object.'):
+                _b1 = st.session_state['bender']
+                outp = _compose_output_h5_path().strip()
+                if outp:
+                    _b1.outputfile = outp
+                    st.toast('Data paths applied.')
+                else:
+                    st.error('Set **Data file name** first.')
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_sec1_hide',
+        help='Collapse data folder and file name after you finish editing.',
+    )
 
     if 'bender' not in st.session_state:
-        st.info('Use the sidebar to load a Bender config module.')
-        return
+        st.info('Click **Load config** in **section 1** to build the experiment object and continue.')
+        st.stop()
 
     b: Bender = st.session_state['bender']
     _init_biometrics_session_state(b, force=False)
     _sync_biometric_flags_from_session(b)
+    _ensure_review_file_selection(
+        _candidate_review_files(_output_path_anchor_for_review(b)) if _output_path_anchor_for_review(b) else []
+    )
     schema = b.get_dispatch_schema()
     test_types = list(schema['test_types'])
+    _consume_pending_protocol_template(test_types)
 
-    st.subheader('1 · Specimen geometry & biometrics')
-    st.session_state.setdefault('gui_bio_hide', False)
-    hide_bio = st.checkbox(
-        'Hide biometrics & geometry (values stay on the experiment object; uncheck to edit again)',
-        key='gui_bio_hide',
+    st.subheader('2 · Specimen geometry & biometrics')
+
+    st.markdown('**Biometrics templates**')
+    st.caption(
+        'Save or reload geometry, profile, species, specimen ID, and inertial-correction flag as JSON in your **Data folder** '
+        '(**section 1**). After **Load biometrics**, click **Apply** under **Bending geometry** and **Profiled specimen**.'
     )
-    if hide_bio:
+    _df_check = str(st.session_state.get('gui_data_folder') or '').strip()
+    _bio_tpl_dir = _shared_experiment_dir()
+    if not (_df_check and os.path.isdir(os.path.normpath(_df_check))):
         st.caption(
-            'Section hidden. Uncheck **Hide biometrics & geometry** to edit **d_clamp**, **xsec_width**, '
-            'frustum, or profiled specimen inputs.'
+            f'**Data folder** is not set or not found on disk—listing template JSON files from `{_bio_tpl_dir}` until '
+            '**section 1** points to a valid folder.'
+        )
+    if bf := st.session_state.pop('gui_biometrics_load_feedback', None):
+        ok_bf, txt_bf = bf
+        if ok_bf:
+            st.success(txt_bf)
+        else:
+            st.error(txt_bf)
+    if bfs := st.session_state.pop('gui_biometrics_save_feedback', None):
+        ok_s, txt_s = bfs
+        if ok_s:
+            st.success(txt_s)
+        else:
+            st.error(txt_s)
+    _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
+    _bio_opts: list = [None] + _bio_tpl_list
+    _bio_pick = st.selectbox(
+        'Biometrics file to load',
+        _bio_opts,
+        format_func=_biometrics_template_option_label,
+        key='gui_biometrics_template_select',
+    )
+    c_bl, c_bs = st.columns(2)
+    with c_bl:
+        if st.button(
+            'Load biometrics into form',
+            key='gui_biometrics_btn_load',
+            help='Fills section 2 widgets from the file. Use **Apply** on geometry and profile to update `Bender`.',
+        ):
+            if not _bio_pick:
+                st.session_state['gui_biometrics_load_feedback'] = (False, 'Choose a biometrics file first.')
+            else:
+                st.session_state['gui_pending_biometrics_path'] = _bio_pick
+            st.rerun()
+    with c_bs:
+        st.caption('Independent of **protocol templates** in **section 3**.')
+
+    st.text_input('Save biometrics as (name)', key='gui_biometrics_new_name', placeholder='e.g. Zebrafish adult default')
+    st.text_area('Description (optional)', key='gui_biometrics_new_desc', height=50, placeholder='Optional note stored in the JSON file.')
+    st.checkbox('Overwrite if same file name exists', key='gui_biometrics_overwrite')
+    if st.button('Save biometrics', key='gui_biometrics_btn_save'):
+        _bn = str(st.session_state.get('gui_biometrics_new_name') or '').strip()
+        _bd = str(st.session_state.get('gui_biometrics_new_desc') or '').strip()
+        _bst = sanitize_biometrics_filename_stem(_bn or 'biometrics')
+        _bout = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_bst}.json'))
+        try:
+            if os.path.isfile(_bout) and not bool(st.session_state.get('gui_biometrics_overwrite')):
+                st.session_state['gui_biometrics_save_feedback'] = (
+                    False,
+                    f'File already exists: `{_bout}`. Enable **Overwrite** or change the name.',
+                )
+            else:
+                os.makedirs(os.path.dirname(_bout) or '.', exist_ok=True)
+                save_biometrics_template(
+                    _bout,
+                    name=_bn or _bst,
+                    description=_bd,
+                    session_state=st.session_state,
+                )
+                st.session_state['gui_biometrics_save_feedback'] = (True, f'Saved `{_bout}`')
+        except Exception as e:
+            st.session_state['gui_biometrics_save_feedback'] = (False, f'{type(e).__name__}: {e}')
+        st.rerun()
+
+    st.divider()
+    st.text_input(
+        'Genus-species',
+        key='gui_genus_species',
+        placeholder='e.g. Danio rerio',
+        help='Stored in the exported `.h5` under protocol metadata (`genus_species`) when you run or export.',
+    )
+    st.text_input(
+        'Specimen ID',
+        key='gui_specimen_id',
+        placeholder='e.g. fish-042',
+        help='Optional label stored in protocol metadata (`specimen_id`) on run/export.',
+    )
+
+    st.divider()
+    st.session_state.setdefault('gui_bio_hide', False)
+    if st.session_state.get('gui_bio_hide'):
+        st.caption(
+            'Section body hidden. Uncheck **Hide section** at the bottom to edit geometry or profiled-specimen inputs.'
         )
     else:
         st.markdown('**Bending geometry** (strain ↔ curvature ↔ motor angle)')
         st.caption(
-            '**d_clamp**: effective bending lever / clamp spacing (mm). **xsec_width**: specimen width for strain '
-            '(mm). Both are required for strain-based amplitudes and for preview/run math.'
+            '**test_segment_length_mm**: distance between the clamps where the fish is bent. '
+            '**test_segment_position_mm**: distance from snout to the inner edge of the body clamp '
+            'on the motor-sensor side. **xsec_width** is specimen width for strain calculations.'
         )
-        g1, g2 = st.columns(2)
+        g1, g2, g3 = st.columns(3)
         with g1:
-            st.number_input('d_clamp (mm)', min_value=0.001, format='%.6g', key='bio_dclamp')
+            st.number_input('test_segment_length_mm', min_value=0.001, format='%.6g', key='bio_dclamp')
         with g2:
+            st.number_input('test_segment_position_mm', min_value=0.0, format='%.6g', key='bio_dbend')
+        with g3:
             st.number_input('Cross-section width xsec_width (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
-        if st.button('Apply bending geometry to experiment object', key='bio_btn_geom'):
+        t1, t2 = st.columns(2)
+        with t1:
+            st.number_input('temp_C_room', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_room')
+        with t2:
+            st.number_input('temp_C_tank', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_tank')
+        if st.button('Apply', key='bio_btn_geom'):
             b.dclamp = float(st.session_state['bio_dclamp'])
+            b.test_segment_length_mm = float(st.session_state['bio_dclamp'])
+            b.dbend = float(st.session_state['bio_dbend'])
+            b.test_segment_position_mm = float(st.session_state['bio_dbend'])
             b.xsec_width = float(st.session_state['bio_xsec'])
-            st.success('Updated `dclamp` and `xsec_width`.')
+            b.temp_C_room = float(st.session_state['bio_temp_room'])
+            b.temp_C_tank = float(st.session_state['bio_temp_tank'])
+            st.toast('Settings applied.')
 
         st.divider()
-        st.markdown('**Elliptical frustum (specimen inertia)**')
+        st.markdown('**Profiled specimen (inertia from outline)**')
         st.caption(
-            'Feeds `set_frustum_inertial_model` — used with theoretical inertial correction when enabled.'
+            'Standard model for **specimen** rotational inertia when **inertial correction** is enabled: proximal and '
+            'distal cross-sections define a tapering outline; **Apply** calls `make_profile_stations` and '
+            '`set_profiled_specimen_inertial_model`. Use consistent **clamp offset** with your hardware setup.'
         )
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            st.number_input('Height (mm)', min_value=0.001, format='%.6g', key='bio_f_height')
-            st.number_input('Width (mm)', min_value=0.001, format='%.6g', key='bio_f_width')
-        with f2:
-            st.number_input('Length (mm)', min_value=0.001, format='%.6g', key='bio_f_length')
-            st.number_input('Density (g / mm³)', min_value=1e-9, format='%.6g', key='bio_f_rho')
-        with f3:
-            st.number_input('Tip scale (0–1)', min_value=0.0, max_value=1.0, format='%.6g', key='bio_f_tip')
-            st.number_input('Clamp offset (mm)', min_value=0.0, format='%.6g', key='bio_f_clamp_off')
-        st.number_input('Frustum integration samples', min_value=10, max_value=500, step=10, key='bio_f_samples')
-        st.checkbox('Use frustum-based specimen inertia flag', key='bio_use_frustum')
-        if st.button('Apply frustum inertial model', key='bio_btn_frustum'):
-            b.use_frustum_inertial_model = bool(st.session_state['bio_use_frustum'])
-            b.set_frustum_inertial_model(
-                st.session_state['bio_f_height'],
-                st.session_state['bio_f_width'],
-                st.session_state['bio_f_length'],
-                st.session_state['bio_f_rho'],
-                tip_scale=float(st.session_state['bio_f_tip']),
-                clamp_offset_mm=float(st.session_state['bio_f_clamp_off']),
-                num_samples=int(st.session_state['bio_f_samples']),
-            )
-            st.success('Frustum inertia model updated.')
-
-        st.divider()
-        st.markdown('**Optional: profiled specimen (proximal → distal, two stations)**')
-        st.caption('Builds a simple two-segment outline via `make_profile_stations` + `set_profiled_specimen_inertial_model`.')
         p1, p2 = st.columns(2)
         with p1:
             st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_ph')
@@ -443,7 +1055,7 @@ def main():
         with p4:
             st.number_input('Clamp offset (mm)', min_value=0.0, format='%.6g', key='bio_prof_clamp')
             st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='bio_prof_samples')
-        if st.button('Apply profiled inertial model', key='bio_btn_profile'):
+        if st.button('Apply', key='bio_btn_profile'):
             stations = b.make_profile_stations(
                 st.session_state['bio_prof_ph'],
                 st.session_state['bio_prof_pw'],
@@ -457,73 +1069,182 @@ def main():
                 clamp_offset_mm=float(st.session_state['bio_prof_clamp']),
                 num_samples=int(st.session_state['bio_prof_samples']),
             )
-            st.success('Profiled specimen inertia model updated.')
+            st.toast('Settings applied.')
 
         st.divider()
         st.checkbox(
-            'Use theoretical inertial correction (specimen + hardware model)',
+            'Check here to perform inertial correction',
             key='bio_use_theoretical_inertial',
+            help=(
+                'Subtracts model **system** inertia (from calibration, if loaded) and **specimen** inertia from the '
+                'profile above when correcting measured torque.'
+            ),
         )
 
+    if st.button(
+        'Apply',
+        key='bio_btn_apply_all',
+        help='Copy bending geometry, profiled specimen model, and inertial-correction flag onto the experiment object.',
+    ):
+        _apply_all_biometrics_to_bender(b)
+        st.toast('Biometrics applied.')
+
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_bio_hide',
+        help='Collapse geometry and profile fields after you are done editing or applying.',
+    )
+
     st.divider()
-    st.subheader('2 · Experiment type & parameters')
+    st.subheader('3 · Experiment type & parameters')
+
+    st.markdown('**Protocol templates (load)**')
+    st.caption(
+        'Lists `.json` files in your **Data folder** (**section 1**). **Load template into form** sets **experiment type** '
+        'and procedure fields; click **Apply** (below or in **section 5**) to copy onto the Bender object. Does not '
+        'change **section 2** biometrics—use **Load biometrics** there or enter fields manually.'
+    )
+    if fb := st.session_state.pop('gui_protocol_load_feedback', None):
+        ok_fb, txt_fb = fb
+        if ok_fb:
+            st.success(txt_fb)
+        else:
+            st.error(txt_fb)
+    _tpl_folder_top = _shared_experiment_dir()
+    _tpl_files_top = list_template_files(_tpl_folder_top)
+    _tpl_options_top: list = [None] + _tpl_files_top
+    _tpl_pick_top = st.selectbox(
+        'Template to load',
+        _tpl_options_top,
+        format_func=_protocol_template_option_label,
+        key='gui_protocol_template_select',
+    )
+    c_tl_top, c_ts_top = st.columns(2)
+    with c_tl_top:
+        if st.button(
+            'Load template into form',
+            key='gui_protocol_btn_load',
+            help='Sets **Experiment type** and procedure widgets from the file. Then click **Apply** to copy onto the Bender object.',
+        ):
+            if not _tpl_pick_top:
+                st.session_state['gui_protocol_load_feedback'] = (False, 'Choose a template file first.')
+            else:
+                st.session_state['gui_pending_protocol_template_path'] = _tpl_pick_top
+            st.rerun()
+    with c_ts_top:
+        st.caption('Same directory as your **Data folder** and **Save** in **Procedure fields**.')
+
+    st.divider()
 
     tt = st.selectbox('Experiment type (test_type)', test_types, key='test_type_select')
     b.test_type = tt
 
     st.session_state.setdefault('gui_exp_hide', False)
-    st.checkbox(
-        'Collapse procedure fields (values stay for preview & run — open the bar below to edit)',
-        key='gui_exp_hide',
-    )
     st.caption(
-        'Fields are stored in the browser session. **Refresh preview** copies them onto the experiment object. '
-        'Collapsing only hides this panel; widgets still keep your entries. If anything looks out of sync, use '
-        '**Save parameters** or reload the config module.'
+        'Fields are stored in the browser session. Use **Apply** below (or in **section 5**) to copy them onto the '
+        'experiment object before **Refresh preview** or **Run**. Collapsing only hides this panel; widgets keep '
+        'your entries. If anything looks out of sync, use **Load config** again in **section 1**.'
     )
 
     updates = {}
 
     with st.expander('Procedure fields', expanded=not bool(st.session_state.get('gui_exp_hide'))):
         if tt == 'isometric':
+            st.caption(
+                '**Isometric** turns strain or curvature targets into motor angles using **test segment length** '
+                'and **cross-section width** from **section 2** (same as clamp spacing `dclamp`). '
+                'Those values are copied to the experiment object when you **Run** or **Apply**.'
+            )
             st.markdown('**Required**')
             for key in schema['isometric_required']:
                 label = key.replace('_', ' ')
-                updates[key] = _render_field(b, key, 'float' if 'steps' not in key else 'int', label)
+                updates[key] = _render_field(
+                    b,
+                    key,
+                    'float' if 'steps' not in key else 'int',
+                    label,
+                    help_text=ISOMETRIC_FIELD_HELP.get(key),
+                )
             if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
                 updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
             st.markdown('**Optional**')
             for key in schema['isometric_optional']:
-                if key in ('isometric_stim_params', 'isometric_stim_overrides'):
-                    updates[key] = _render_field(b, key, 'json_dict', key)
+                if key == 'isometric_stim_params':
+                    updates[key] = _render_field(
+                        b,
+                        key,
+                        'json_dict',
+                        'Isometric step timing & stimulation (JSON, optional)',
+                        help_text=ISOMETRIC_STIM_JSON_HELP,
+                    )
+                elif key == 'isometric_stim_overrides':
+                    updates[key] = _render_field(
+                        b,
+                        key,
+                        'json_dict',
+                        'Isometric stim routing overrides (JSON, advanced)',
+                        help_text=ISOMETRIC_STIM_OVERRIDES_HELP,
+                    )
                 elif key == 'recruitment':
                     skr = _widget_key('recruitment')
                     cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
                     if skr not in st.session_state:
                         st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
-                    updates[key] = st.selectbox('recruitment', list(RECRUITMENT_OPTIONS), key=skr)
+                    updates[key] = st.selectbox(
+                        'recruitment',
+                        list(RECRUITMENT_OPTIONS),
+                        key=skr,
+                        help=RECRUITMENT_FIELD_HELP,
+                    )
                 elif key == 'lateral_mode':
                     skl = _widget_key('lateral_mode')
                     if skl not in st.session_state:
                         st.session_state[skl] = str(_get_session_value(b, key) or '')
-                    updates[key] = st.text_input('lateral_mode', key=skl)
+                    updates[key] = st.text_input(LATERAL_MODE_LABEL, key=skl, help=ISOMETRIC_FIELD_HELP.get('lateral_mode'))
                 elif key in ('bilateral_mirror_motor',):
-                    updates[key] = _render_field(b, key, 'bool', key)
+                    updates[key] = _render_field(
+                        b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                    )
                 elif key == 'bilateral_sequential_left_frac':
-                    updates[key] = _render_field(b, key, 'float', key)
+                    updates[key] = _render_field(
+                        b, key, 'float', key, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                    )
                 elif key == 'isometric_mode':
-                    modes = ('strain', 'strain_pct', 'curvature', 'angle')
+                    modes = list(ALL_AMPS_MODE_OPTIONS)
                     skm = _widget_key('isometric_mode')
                     cur_m = str(_get_session_value(b, key, 'strain'))
                     if skm not in st.session_state:
                         st.session_state[skm] = cur_m if cur_m in modes else 'strain'
-                    updates[key] = st.selectbox('isometric_mode', modes, key=skm)
+                    updates[key] = st.selectbox(
+                        'isometric_mode (how to interpret isometric_initial / isometric_final)',
+                        modes,
+                        key=skm,
+                        format_func=_format_strain_or_amp_mode,
+                        help=ISOMETRIC_FIELD_HELP.get(key),
+                    )
+                elif key == 'isometric_inter_step_interval_s':
+                    skg = _widget_key('isometric_inter_step_interval_s')
+                    if skg not in st.session_state:
+                        v0 = _get_session_value(b, key, 0.0)
+                        st.session_state[skg] = float(v0) if v0 is not None else 0.0
+                    updates[key] = float(
+                        st.number_input(
+                            'Time between steps (s)',
+                            min_value=0.0,
+                            format='%.6g',
+                            key=skg,
+                            help=(
+                                'Seconds to wait after each step finishes (after acquisition) before the next '
+                                'ramp/stimulus period. Use **0** for back-to-back steps.'
+                            ),
+                        )
+                    )
                 elif 'random_seed' in key:
                     sks = _widget_key(key)
                     if sks not in st.session_state:
                         v0 = _get_session_value(b, key)
                         st.session_state[sks] = '' if v0 is None else str(v0)
-                    s = st.text_input(key.replace('_', ' '), key=sks)
+                    s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
                     if not str(s).strip():
                         updates[key] = None
                     else:
@@ -534,47 +1255,85 @@ def main():
                             updates[key] = None
                 else:
                     kind = 'bool' if 'randomize' in key else 'str'
-                    updates[key] = _render_field(b, key, kind, key)
+                    updates[key] = _render_field(
+                        b, key, kind, key, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                    )
 
         elif tt == 'isovelocity':
             st.markdown('**Required**')
             for key in schema['isovelocity_required']:
                 kind = 'int' if 'num_steps' in key else 'float'
-                updates[key] = _render_field(b, key, kind, key.replace('_', ' '))
+                lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                updates[key] = _render_field(
+                    b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                )
             if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
                 updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
             st.markdown('**Optional**')
             for key in schema['isovelocity_optional']:
-                if key in ('isovelocity_stim_params', 'isovelocity_stim_overrides'):
-                    updates[key] = _render_field(b, key, 'json_dict', key)
+                if key == 'isovelocity_stim_params':
+                    updates[key] = _render_field(
+                        b,
+                        key,
+                        'json_dict',
+                        'Isovelocity segment timing & stimulation (JSON, optional)',
+                        help_text=ISOVELOCITY_STIM_JSON_HELP,
+                    )
+                elif key == 'isovelocity_stim_overrides':
+                    updates[key] = _render_field(
+                        b,
+                        key,
+                        'json_dict',
+                        'Isovelocity stim routing overrides (JSON, advanced)',
+                        help_text=ISOVELOCITY_STIM_OVERRIDES_HELP,
+                    )
                 elif key == 'recruitment':
                     skr = _widget_key('recruitment')
                     cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
                     if skr not in st.session_state:
                         st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
-                    updates[key] = st.selectbox('recruitment', list(RECRUITMENT_OPTIONS), key=skr)
+                    updates[key] = st.selectbox(
+                        'recruitment',
+                        list(RECRUITMENT_OPTIONS),
+                        key=skr,
+                        help=RECRUITMENT_FIELD_HELP,
+                    )
                 elif key == 'lateral_mode':
                     skl = _widget_key('lateral_mode')
                     if skl not in st.session_state:
                         st.session_state[skl] = str(_get_session_value(b, key) or '')
-                    updates[key] = st.text_input('lateral_mode', key=skl)
+                    updates[key] = st.text_input(
+                        LATERAL_MODE_LABEL, key=skl, help=ISOVELOCITY_FIELD_HELP.get('lateral_mode')
+                    )
                 elif key in ('bilateral_mirror_motor',):
-                    updates[key] = _render_field(b, key, 'bool', key)
+                    updates[key] = _render_field(
+                        b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                    )
                 elif key == 'bilateral_sequential_left_frac':
-                    updates[key] = _render_field(b, key, 'float', key)
+                    updates[key] = _render_field(
+                        b, key, 'float', key, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                    )
                 elif key == 'isovelocity_starting_strain_mode':
-                    modes = ('strain', 'strain_pct', 'curvature', 'angle')
+                    modes = list(ALL_AMPS_MODE_OPTIONS)
                     skm = _widget_key('isovelocity_starting_strain_mode')
                     cur_m = str(_get_session_value(b, key, 'strain'))
                     if skm not in st.session_state:
                         st.session_state[skm] = cur_m if cur_m in modes else 'strain'
-                    updates[key] = st.selectbox('isovelocity_starting_strain_mode', modes, key=skm)
+                    updates[key] = st.selectbox(
+                        ISOVELOCITY_WIDGET_LABEL.get(
+                            key, 'isovelocity_starting_strain_mode (unit for isovelocity_starting_strain)'
+                        ),
+                        modes,
+                        key=skm,
+                        format_func=_format_strain_or_amp_mode,
+                        help=ISOVELOCITY_FIELD_HELP.get(key),
+                    )
                 elif 'random_seed' in key:
                     sks = _widget_key(key)
                     if sks not in st.session_state:
                         v0 = _get_session_value(b, key)
                         st.session_state[sks] = '' if v0 is None else str(v0)
-                    s = st.text_input(key.replace('_', ' '), key=sks)
+                    s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
                     if not str(s).strip():
                         updates[key] = None
                     else:
@@ -585,7 +1344,10 @@ def main():
                             updates[key] = None
                 else:
                     kind = 'bool' if 'randomize' in key else 'float'
-                    updates[key] = _render_field(b, key, kind, key)
+                    lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                    updates[key] = _render_field(
+                        b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                    )
 
         elif tt == 'calibration':
             st.markdown('**Required**')
@@ -603,8 +1365,8 @@ def main():
             )
             st.info(
                 'Calibration runs the **base** motion protocol. Set **test_type** to that base '
-                '(e.g. dynamic), **Save parameters** (and **Refresh preview** if you use it), then switch '
-                'back to **calibration** before running.'
+                '(e.g. dynamic), click **Apply** in **section 3** or **5** (and **Refresh preview** if you use it), '
+                'then switch back to **calibration** before running.'
             )
             st.markdown('**Optional**')
             for key in schema['calibration_optional']:
@@ -618,95 +1380,619 @@ def main():
             if tt == 'dynamic':
                 st.caption(
                     'Timeline length follows **cycles** (freq × cycles_per_step + end cycles), not **Duration**. '
-                    'If `period_by_cycle` is not set yet, call **organize_cycles** from a notebook/script after **Save parameters**.'
+                    'If `period_by_cycle` is not set yet, call **organize_cycles** from a notebook/script after **Apply**.'
                 )
             elif tt == 'step_change':
                 st.caption('Motion length is computed inside **make_cycles_step_change**; **Duration** does not apply.')
             fields = _motion_parameter_rows(tt)
             for name, kind, label in fields:
-                updates[name] = _render_field(b, name, kind, label)
+                updates[name] = _render_field(
+                    b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
+                )
 
         else:
             st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
 
+        st.divider()
+        st.markdown('**Save current procedure as template**')
+        st.caption(
+            '**Save** stores the current **experiment type** and all **procedure fields** for that type '
+            '(dynamic / sweeps / steps / isometric / isovelocity / calibration). **Section 1** (paths only) and '
+            '**section 2** biometrics are not included—use **Save biometrics** there. For **calibration**, the template '
+            'can also embed the **base protocol** from the Bender object (e.g. frequencies & strains) if you **Apply** '
+            'that base type before saving. Use **Protocol templates (load)** above, then **Apply** and **Run**.'
+        )
+        if sf := st.session_state.pop('gui_protocol_save_feedback', None):
+            ok_sf, txt_sf = sf
+            if ok_sf:
+                st.success(txt_sf)
+            else:
+                st.error(txt_sf)
+        st.text_input(
+            'Template name',
+            key='gui_protocol_new_name',
+            placeholder='e.g. Protocol A (any test_type)',
+        )
+        st.text_area(
+            'Description (optional)',
+            key='gui_protocol_new_desc',
+            height=70,
+            placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz × strains (strain_pct); or calibration + base',
+        )
+        st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
+        if st.button('Save template', key='gui_protocol_btn_save'):
+            _name = str(st.session_state.get('gui_protocol_new_name') or '').strip()
+            _desc = str(st.session_state.get('gui_protocol_new_desc') or '').strip()
+            _stem = sanitize_template_filename_stem(_name or 'protocol')
+            _out = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_stem}.json'))
+            try:
+                if os.path.isfile(_out) and not bool(st.session_state.get('gui_protocol_overwrite')):
+                    st.session_state['gui_protocol_save_feedback'] = (
+                        False,
+                        f'File already exists: `{_out}`. Enable **Overwrite** or pick a different name.',
+                    )
+                else:
+                    os.makedirs(os.path.dirname(_out) or '.', exist_ok=True)
+                    _proc = build_procedure_dict_from_updates(updates)
+                    _base = None
+                    if tt == 'calibration':
+                        _btt = _proc.get('calibration_base_test_type')
+                        if _btt:
+                            _snap = snapshot_bender_procedure(b, schema, str(_btt))
+                            if _snap:
+                                _base = {'test_type': str(_btt), 'procedure': _snap}
+                    save_protocol_template(
+                        _out,
+                        name=_name or _stem,
+                        description=_desc,
+                        test_type=tt,
+                        procedure=_proc,
+                        base_protocol=_base,
+                    )
+                    st.session_state['gui_protocol_save_feedback'] = (True, f'Saved `{_out}`')
+            except Exception as e:
+                st.session_state['gui_protocol_save_feedback'] = (False, f'{type(e).__name__}: {e}')
+            st.rerun()
+
+    ap1, ap2 = st.columns([1, 4])
+    with ap1:
+        if st.button(
+            'Apply',
+            key='gui_exp_apply',
+            help='Copy procedure fields (and optional QC note text) onto the experiment object.',
+        ):
+            _apply_procedure_form_to_bender(b, updates, tt)
+            st.toast('Settings applied.')
+    with ap2:
+        st.caption('Same as **Apply** in **section 5** — use after editing procedure fields.')
+
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_exp_hide',
+        help='Collapse **Procedure fields** after you finish editing, saving a template, or clicking **Apply**.',
+    )
+
     st.divider()
-    st.subheader('3 · Experiment preview (table & plot, no DAQ)')
+    st.session_state.setdefault('gui_sec4_hide', False)
+    st.subheader('4 · Experiment preview (table & plot, no DAQ)')
     st.caption(
         'Uses the same motion math as a real run for **commanded** angle / velocity. '
         '**Refresh preview** copies the form onto the experiment object, then recomputes commands. '
         'For **dynamic**, preview calls **organize_cycles** and updates `period_by_cycle`, so a following **Run** '
         'matches the preview if you do not overwrite those arrays elsewhere. '
-        'You still need **dclamp** and **xsec_width** on the object (specimen metadata).'
+        'Set **test_segment_length_mm** and **xsec_width** in **section 2** (or **Apply** there) so preview matches strain geometry.'
     )
-    pv_on = st.checkbox('Show last preview', value=True, key='gui_show_preview')
-    pv_pts = st.slider('Preview plot resolution (max points)', 400, 12000, 6000, step=200, key='gui_preview_pts')
-    if st.button('Refresh preview'):
-        _sync_biometric_flags_from_session(b)
-        _apply_form_updates(b, updates, tt)
-        st.session_state['gui_last_preview'] = build_protocol_preview(
-            b, requested_test_type=tt, max_plot_points=int(pv_pts)
-        )
-        st.session_state['gui_last_preview_tt'] = tt
+    if st.session_state.get('gui_sec4_hide'):
+        st.caption('Preview panel hidden. Uncheck **Hide section** below to show controls and plots.')
+    else:
+        c_ap4, _ = st.columns([1, 4])
+        with c_ap4:
+            if st.button('Apply', key='gui_preview_apply', help='Copy procedure + biometrics onto `Bender`, same as **Apply** in section 5.'):
+                _sync_biometric_flags_from_session(b)
+                _sync_genus_species_to_bender(b)
+                _apply_procedure_form_to_bender(b, updates, tt)
+                st.toast('Settings applied.')
+        pv_on = st.checkbox('Show last preview', value=True, key='gui_show_preview')
+        pv_pts = st.slider('Preview plot resolution (max points)', 400, 12000, 6000, step=200, key='gui_preview_pts')
+        if st.button('Refresh preview'):
+            _sync_biometric_flags_from_session(b)
+            _sync_genus_species_to_bender(b)
+            _apply_form_updates(b, updates, tt)
+            st.session_state['gui_last_preview'] = build_protocol_preview(
+                b, requested_test_type=tt, max_plot_points=int(pv_pts)
+            )
+            st.session_state['gui_last_preview_tt'] = tt
 
-    if pv_on and st.session_state.get('gui_last_preview') is not None:
-        prev = st.session_state['gui_last_preview']
-        if st.session_state.get('gui_last_preview_tt') != tt:
-            st.warning('Test type changed since the last preview — click **Refresh preview** to update.')
-        if prev.get('error'):
-            st.error(prev['error'])
-        elif prev.get('ok'):
-            if tt == 'calibration':
-                st.info(
-                    f"Calibration uses base protocol **{prev.get('motion_test_type')}** for motion "
-                    '(same as **Run experiment**).'
-                )
-            if prev.get('table'):
-                st.markdown('**Summary table**')
-                st.dataframe(pd.DataFrame(prev['table']), use_container_width=True, hide_index=True)
-            tp = prev.get('t_plot')
-            ap = prev.get('angle_plot')
-            vp = prev.get('anglevel_plot')
-            if tp is not None and ap is not None and vp is not None and len(tp) > 0:
-                st.markdown('**Command preview** (motor angle and angular velocity)')
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=tp, y=ap, mode='lines', name='Commanded angle (deg)'))
-                fig.add_trace(
-                    go.Scatter(
-                        x=tp,
-                        y=vp,
-                        mode='lines',
-                        name='Commanded anglevel (deg/s)',
-                        yaxis='y2',
+        if pv_on and st.session_state.get('gui_last_preview') is not None:
+            prev = st.session_state['gui_last_preview']
+            if st.session_state.get('gui_last_preview_tt') != tt:
+                st.warning('Test type changed since the last preview — click **Refresh preview** to update.')
+            if prev.get('error'):
+                st.error(prev['error'])
+            elif prev.get('ok'):
+                if tt == 'calibration':
+                    st.info(
+                        f"Calibration uses base protocol **{prev.get('motion_test_type')}** for motion "
+                        '(same as **Run experiment**).'
                     )
-                )
-                fig.update_layout(
-                    height=420,
-                    margin=dict(l=48, r=48, t=40, b=40),
-                    xaxis_title='Time (s)',
-                    yaxis=dict(title='Angle (deg)'),
-                    yaxis2=dict(title='Anglevel (deg/s)', overlaying='y', side='right'),
-                    legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            elif prev.get('table') and tt in ('isometric', 'isovelocity'):
-                st.caption('Step protocols: table lists setpoints; full continuous traces are built during the run.')
-        else:
-            st.warning('Preview incomplete; click **Refresh preview** again.')
+                if prev.get('table'):
+                    st.markdown('**Summary table**')
+                    st.dataframe(pd.DataFrame(prev['table']), use_container_width=True, hide_index=True)
+                tp = prev.get('t_plot')
+                ap = prev.get('angle_plot')
+                vp = prev.get('anglevel_plot')
+                if tp is not None and ap is not None and len(tp) > 0:
+                    if tt == 'isometric' and prev.get('preview_isometric'):
+                        st.markdown('**Command preview** (isometric: ramp–hold per step, same timing as run)')
+                    elif tt == 'isovelocity' and prev.get('preview_isovelocity'):
+                        st.markdown(
+                            '**Command preview** (isovelocity: pre-hold at start angle + constant ω segment per step, '
+                            'same timing as run)'
+                        )
+                    else:
+                        st.markdown('**Command preview** (motor angle and angular velocity)')
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=tp, y=ap, mode='lines', name='Commanded angle (deg)'))
+                    if vp is not None and len(vp) > 0:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=tp,
+                                y=vp,
+                                mode='lines',
+                                name='Commanded anglevel (deg/s)',
+                                yaxis='y2',
+                            )
+                        )
+                    if vp is not None and len(vp) > 0:
+                        fig.update_layout(
+                            height=420,
+                            margin=dict(l=48, r=48, t=40, b=40),
+                            xaxis_title='Time (s)',
+                            yaxis=dict(title='Angle (deg)'),
+                            yaxis2=dict(title='Anglevel (deg/s)', overlaying='y', side='right'),
+                            legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                        )
+                    else:
+                        fig.update_layout(
+                            height=420,
+                            margin=dict(l=48, r=48, t=40, b=40),
+                            xaxis_title='Time (s)',
+                            yaxis=dict(title='Angle (deg)'),
+                            legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                        )
+                    st.plotly_chart(fig, use_container_width=True)
+                elif prev.get('table') and tt in ('isometric', 'isovelocity'):
+                    st.caption(
+                        'Step protocols: table lists setpoints; refresh preview after fixing errors to see the plot.'
+                    )
+            else:
+                st.warning('Preview incomplete; click **Refresh preview** again.')
 
-    with st.expander('Post-experiment / QC assessment (written into the data file)', expanded=False):
-        st.caption(
-            'Use this **after** you review **QC plots** and the **rig / setup**. Your text is stored in the '
-            '**Data File (.h5)** as HDF5 attributes (`post-trial notes` on the root and in `01_Metadata`), so it '
-            'travels with the experiment record for analysis or archival.'
-        )
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_sec4_hide',
+        help='Collapse preview controls and plots when you are done reviewing.',
+    )
+
+    st.divider()
+    st.session_state.setdefault('gui_sec5_hide', False)
+    st.subheader('5 · Save, validate, and run')
+    if st.session_state.get('gui_sec5_hide'):
+        st.caption('Run controls hidden. Uncheck **Hide section** below.')
+    else:
+        if st.button('View current settings'):
+            _sync_biometric_flags_from_session(b)
+            _sync_genus_species_to_bender(b)
+            _apply_form_updates(b, updates, tt)
+            settings_rows = [
+                {'group': 'experiment', 'name': 'test_type', 'value': tt},
+                {
+                    'group': 'export',
+                    'name': 'data_file_target_h5',
+                    'value': _compose_output_h5_path() or getattr(b, 'outputfile', None),
+                },
+                {
+                    'group': 'specimen',
+                    'name': 'genus_species',
+                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('genus_species', ''),
+                },
+                {
+                    'group': 'specimen',
+                    'name': 'specimen_id',
+                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_id', ''),
+                },
+                {'group': 'biometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
+                {'group': 'biometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
+                {'group': 'biometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
+                {'group': 'biometric', 'name': 'temp_C_room', 'value': getattr(b, 'temp_C_room', None)},
+                {'group': 'biometric', 'name': 'temp_C_tank', 'value': getattr(b, 'temp_C_tank', None)},
+            ]
+            for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
+                settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
+            st.dataframe(pd.DataFrame(settings_rows), use_container_width=True, hide_index=True)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button(
+                'Apply',
+                help='Copies the current form into the in-memory experiment object used for preview and run.',
+            ):
+                _apply_procedure_form_to_bender(b, updates, tt)
+                st.toast('Settings applied.')
+        with c2:
+            if st.button(
+                'Check required fields',
+                help='Runs validation for the current test type (does not talk to hardware).',
+            ):
+                _sync_biometric_flags_from_session(b)
+                _sync_genus_species_to_bender(b)
+                _apply_form_updates(b, updates, tt)
+                rep = b.validate_dispatch_setup(test_type=tt)
+                if rep['ok']:
+                    st.success('All required fields for this procedure are set.')
+                else:
+                    st.error('Still needed: ' + ', '.join(rep['missing']))
+        with c3:
+            daq_ok = st.checkbox('Hardware: I intend to run DAQ', value=False)
+            needs_cal_confirm = _needs_missing_calibration_confirmation(b)
+            if needs_cal_confirm:
+                st.warning('No calibration file detected. Are you sure you wish to proceed?')
+            ok_wo_cal = st.checkbox(
+                'Yes, proceed without calibration file',
+                key='gui_confirm_run_without_calibration',
+                disabled=not needs_cal_confirm,
+            )
+            if st.button('Run experiment', type='primary', disabled=not daq_ok):
+                _sync_biometric_flags_from_session(b)
+                _apply_form_updates(b, updates, tt)
+                _sync_genus_species_to_bender(b)
+                outp = _compose_output_h5_path().strip()
+                if outp:
+                    b.outputfile = outp
+                notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
+                if needs_cal_confirm and not ok_wo_cal:
+                    st.info('Run canceled. Check "Yes, proceed without calibration file" to continue.')
+                    return
+                try:
+                    with st.spinner('Acquiring (DAQ)…'):
+                        b.run_experiment(test_type=tt)
+                    st.success('Acquisition finished.')
+                    with st.spinner('Writing data file (.h5)…'):
+                        rep = export_primary_h5(
+                            b,
+                            post_trial_notes=notes_in if notes_in else None,
+                            outputfile=outp or None,
+                            append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
+                        )
+                    qix = _read_qc_trial_index(b)
+                    sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
+                    qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                    with st.spinner('Saving QC plot…'):
+                        qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+                    st.success('Data has been saved! Check data folder to confirm before proceeding.')
+                    st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                    if bool(st.session_state.get('gui_qc_notes_append', True)):
+                        st.session_state['gui_post_notes'] = ''
+                    else:
+                        st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+                except Exception as e:
+                    _show_friendly_error(e, action='run_experiment')
+
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_sec5_hide',
+        help='Collapse validate/run controls after you finish.',
+    )
+
+    st.divider()
+    st.session_state.setdefault('gui_sec6_hide', False)
+    st.subheader('6 · Save data here')
+    st.caption('Writes from current in-memory **trial_records** (after **Run** or a prior save). No new DAQ.')
+    if st.session_state.get('gui_sec6_hide'):
+        st.caption('Save controls hidden. Uncheck **Hide section** below.')
+    else:
+
+        def _export_h5_from_session():
+            _sync_genus_species_to_bender(b)
+            outp = _compose_output_h5_path().strip()
+            if not outp and not getattr(b, 'outputfile', None):
+                st.error('Set **Data folder** and **Data file name** in **section 1** first.')
+                return None
+            notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
+            if outp:
+                b.outputfile = outp
+            return export_primary_h5(
+                b,
+                post_trial_notes=notes_in if notes_in else None,
+                outputfile=outp or None,
+                append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
+            )
+
+        def _save_qc_plot_only():
+            qix = _read_qc_trial_index(b)
+            sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
+            qc_base = _qc_figure_base_path(b, sel_h5, qix)
+            return save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+
+        _, c_big, _ = st.columns([1, 2, 1])
+        with c_big:
+            if st.button('Save Data File (.h5) and QC Plot', type='primary', key='gui_save_h5_and_qc'):
+                try:
+                    with st.spinner('Writing data file (.h5)…'):
+                        rep = _export_h5_from_session()
+                    if rep is None:
+                        pass
+                    else:
+                        qix = _read_qc_trial_index(b)
+                        sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
+                        qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                        try:
+                            with st.spinner('Saving QC plot…'):
+                                qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+                        except Exception as e:
+                            _show_friendly_error(e, action='save_qc')
+                            st.warning(f"The data file was saved: `{rep['outputfile']}`")
+                        else:
+                            st.success('Data file and QC plot saved.')
+                            st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                        if bool(st.session_state.get('gui_qc_notes_append', True)):
+                            st.session_state['gui_post_notes'] = ''
+                        else:
+                            st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+                except Exception as e:
+                    _show_friendly_error(e, action='save_h5')
+
+        e1, e2 = st.columns(2)
+        with e1:
+            if st.button('Only save Data File (.h5)', key='gui_save_h5_only'):
+                try:
+                    rep = _export_h5_from_session()
+                    if rep is not None:
+                        st.success(f"{rep['message']}  →  `{rep['outputfile']}`")
+                        if bool(st.session_state.get('gui_qc_notes_append', True)):
+                            st.session_state['gui_post_notes'] = ''
+                        else:
+                            st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+                except Exception as e:
+                    _show_friendly_error(e, action='save_h5')
+        with e2:
+            if st.button('Only Save QC Plot', key='gui_save_qc_only'):
+                try:
+                    qc_path, _ = _save_qc_plot_only()
+                    st.success(f'QC plot saved: `{qc_path}`')
+                except Exception as e:
+                    _show_friendly_error(e, action='save_qc')
+
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_sec6_hide',
+        help='Collapse save buttons when finished.',
+    )
+
+    st.divider()
+    st.session_state.setdefault('gui_sec7_hide', False)
+    st.subheader('7 · Visualize experimental data')
+    if st.session_state.get('gui_sec7_hide'):
+        st.caption('Visualization panel hidden. Uncheck **Hide section** below.')
+    if not st.session_state.get('gui_sec7_hide'):
+        data_path = _output_path_anchor_for_review(b)
+        review_files = _candidate_review_files(data_path) if data_path else []
+        if not review_files:
+            st.info(
+                'No `.h5` / image / HTML files found in the current data folder yet. '
+                'Set **section 1** **Data folder** and **Data file name**, or run/export to create files.'
+            )
+        else:
+            selected_file = st.session_state.get('gui_review_selected')
+            if selected_file not in review_files:
+                st.session_state['gui_review_selected'] = review_files[0]
+                selected_file = review_files[0]
+            st.caption(
+                f'**Selected file:** `{os.path.basename(selected_file)}` — choose or confirm the same file in **section 8 · Add note**.'
+            )
+            ext = os.path.splitext(str(selected_file).lower())[1]
+            if ext in ('.png', '.jpg', '.jpeg', '.webp'):
+                st.image(selected_file, caption=os.path.basename(selected_file))
+            else:
+                st.caption(f"Selected file: `{selected_file}`")
+    
+            st.markdown('**Custom plots from data file**')
+            if ext != '.h5':
+                st.info('Choose a **`.h5`** data file in **section 8 · Add note** to plot saved time series (torque, angle, stim, etc.).')
+            else:
+                summ = h5_custom_plot_summary(selected_file)
+                if not summ['ok']:
+                    st.warning(summ.get('error') or 'Could not read this HDF5 file.')
+                else:
+                    m1, m2, m3, m4 = st.columns(4)
+                    with m1:
+                        st.metric('test_type (file)', summ['test_type'] or '—')
+                    with m2:
+                        st.metric('Trials', str(summ['n_trials']))
+                    with m3:
+                        st.metric('schema', summ['schema_version'] or '—')
+                    with m4:
+                        ax = summ.get('primary_bending_axis') or ''
+                        st.metric('primary axis (saved)', ax or '—')
+    
+                    trial_names = summ['trial_names']
+                    if not trial_names:
+                        st.info('No `trial_*` groups found under `02_TimeSeries`.')
+                    else:
+                        def_trial = trial_names[0]
+                        if st.session_state.get('gui_h5_trial_select') not in trial_names:
+                            st.session_state['gui_h5_trial_select'] = def_trial
+                        trial_sel = st.selectbox(
+                            'Trial',
+                            trial_names,
+                            key='gui_h5_trial_select',
+                            help='Each trial is one acquisition segment stored in the file.',
+                        )
+                        plot_vars = list_h5_plot_variables(
+                            selected_file,
+                            trial_sel,
+                            channel_names=summ.get('channel_names'),
+                        )
+                        if not plot_vars:
+                            st.info('No plottable numeric series in this trial (need length ≥ 2).')
+                        else:
+                            ids = [v['id'] for v in plot_vars]
+                            id_to_label = {v['id']: v['label'] for v in plot_vars}
+                            tt0 = plot_vars[0].get('trial_test_type') or ''
+                            if tt0:
+                                st.caption(f'**test_type (this trial):** `{tt0}`')
+    
+                            n_panel = st.number_input(
+                                'Number of figure panels',
+                                min_value=1,
+                                max_value=4,
+                                value=1,
+                                step=1,
+                                key='gui_h5_n_panels',
+                                help='Each panel is a separate Plotly figure. Use multiple Y traces in one panel for several lines on the same axes.',
+                            )
+                            for p in range(int(n_panel)):
+                                st.markdown(f'**Panel {p + 1}**')
+                                cxa, cya = st.columns(2)
+                                with cxa:
+                                    st.selectbox(
+                                        'X (time, angle, stim, …)',
+                                        ids,
+                                        key=f'gui_h5_x_{p}',
+                                        format_func=lambda i: id_to_label.get(i, i),
+                                    )
+                                with cya:
+                                    st.multiselect(
+                                        'Y — one or more traces (same plot)',
+                                        ids,
+                                        key=f'gui_h5_y_{p}',
+                                        format_func=lambda i: id_to_label.get(i, i),
+                                        help='Pick several series to overlay on the same axes (e.g. raw vs corrected torque).',
+                                    )
+    
+                            if st.button('Generate plots from file', key='gui_h5_gen_plots'):
+                                for p in range(int(n_panel)):
+                                    x_id = st.session_state.get(f'gui_h5_x_{p}')
+                                    y_ids = st.session_state.get(f'gui_h5_y_{p}') or []
+                                    if not x_id or not y_ids:
+                                        st.error(f'Panel {p + 1}: choose X and at least one Y series.')
+                                        continue
+                                    try:
+                                        x_raw = read_h5_series(selected_file, trial_sel, x_id)
+                                        fig_p = go.Figure()
+                                        x_label = id_to_label.get(x_id, x_id)
+                                        for y_id in y_ids:
+                                            y_raw = read_h5_series(selected_file, trial_sel, y_id)
+                                            x, y = align_xy(x_raw, y_raw)
+                                            y_label = id_to_label.get(y_id, y_id)
+                                            fig_p.add_trace(
+                                                go.Scatter(x=x, y=y, mode='lines', name=y_label),
+                                            )
+                                        fig_p.update_layout(
+                                            title=f'Panel {p + 1}: {os.path.basename(selected_file)} · {trial_sel}',
+                                            xaxis_title=x_label,
+                                            yaxis_title='Y (multiple traces)',
+                                            height=420,
+                                            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                                        )
+                                        st.plotly_chart(fig_p, use_container_width=True)
+                                    except Exception as e:
+                                        st.error(f'Panel {p + 1}: {e}')
+    
+            st.markdown('**Add post-experiment note to selected file**')
+            note_file = st.text_area(
+                'New note text (appended for .h5 files)',
+                key='gui_selected_file_note',
+                height=90,
+            )
+            if st.button('Append note to selected file'):
+                try:
+                    if ext != '.h5':
+                        raise ValueError('Selected file is not .h5. Choose a data file to append notes.')
+                    _append_note_to_h5_file(selected_file, note_file)
+                    st.success('Note appended to selected data file.')
+                except Exception as e:
+                    _show_friendly_error(e, action='save_h5')
+
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_sec7_hide',
+        help='Collapse plots and file preview when finished.',
+    )
+
+    st.divider()
+    st.session_state.setdefault('gui_sec8_hide', False)
+    st.subheader('8 · Add note')
+    st.caption(
+        'Write down anything you noticed about the specimen, apparatus, data quality, etc. that may impact analysis '
+        'downstream. Pick a data-folder file below for QC plot naming and **section 7** plots. '
+        'Notes here are saved into the `.h5` on export. After **Run** or **Save Data File (.h5) and QC Plot**, the app '
+        'writes data and a QC plot; PNG needs **kaleido** (`pip install kaleido`), otherwise HTML.'
+    )
+    if st.session_state.get('gui_sec8_hide'):
+        st.caption('Note controls hidden. Uncheck **Hide section** below.')
+    if not st.session_state.get('gui_sec8_hide'):
+        data_path_qc = _output_path_anchor_for_review(b)
+        review_files_qc = _candidate_review_files(data_path_qc) if data_path_qc else []
+        if not review_files_qc:
+            st.info(
+                'Set **section 1** **Data folder** and **Data file name** (or save once) so files appear here.'
+            )
+        else:
+            _ensure_review_file_selection(review_files_qc)
+            st.selectbox(
+                'Data folder file (QC plot name, section 7 plots)',
+                review_files_qc,
+                key='gui_review_selected',
+                format_func=lambda fp: os.path.basename(fp),
+                help=(
+                    'Files in your **data folder**. Choosing an `.h5` sets the stem for the next QC plot export '
+                    '(**section 6**).'
+                ),
+            )
+
+        tr_qc = list(getattr(b, 'trial_records', []) or [])
+        n_tr = len(tr_qc)
+        if n_tr > 1:
+            opts_ix = list(range(n_tr))
+            _cur_ix = st.session_state.get('gui_qc_trial_index')
+            if _cur_ix not in opts_ix:
+                st.session_state['gui_qc_trial_index'] = opts_ix[-1]
+
+            def _qc_trial_label(i: int) -> str:
+                r = tr_qc[i]
+                stp = r.get('step_index', r.get('trial_index', r.get('cycle_index')))
+                ttp = str(r.get('test_type', '') or '')
+                parts = [f'Trial {i}']
+                if ttp:
+                    parts.append(ttp)
+                if stp is not None:
+                    parts.append(f'step {stp}')
+                return ' — '.join(parts) if len(parts) > 1 else parts[0]
+
+            st.selectbox(
+                'In-memory trial for QC plot (this session)',
+                opts_ix,
+                format_func=_qc_trial_label,
+                key='gui_qc_trial_index',
+                help=(
+                    'QC plot uses **trial_records** in memory after Run or save. '
+                    'Pick which segment when the protocol produced several (e.g. multiple isometric steps).'
+                ),
+            )
+        else:
+            st.caption(
+                '**QC trial:** only one in-memory segment — no trial choice needed. '
+                '(After multi-step runs, a trial list appears here.)'
+            )
+
+        st.markdown('**Note text for next save (stored on `.h5`)**')
         st.text_area(
-            'New QC / rig / run-quality comment (optional)',
+            'Comment for export (optional)',
             key='gui_post_notes',
             height=100,
             help=(
-                'On export, this text is **appended** to the note already stored in that file (if any), with a '
-                'timestamp. Leave empty to re-export data without adding a new paragraph. Uncheck **Append…** '
-                'below to replace the stored note entirely.'
+                'On save/export, this text is **appended** to any existing note with a timestamp. Leave empty to skip. '
+                'Uncheck **Append…** below to replace the stored note entirely.'
             ),
         )
         st.checkbox(
@@ -715,105 +2001,11 @@ def main():
             key='gui_qc_notes_append',
         )
 
-    st.divider()
-    st.subheader('4 · Save, validate, and run')
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button(
-            'Save parameters',
-            help='Copies the form into the in-memory experiment object (same as what preview and run use).',
-        ):
-            _sync_biometric_flags_from_session(b)
-            for k, v in updates.items():
-                _apply_pair(b, k, v)
-            b.test_type = tt
-            _pn = str(st.session_state.get('gui_post_notes') or '').strip()
-            if _pn:
-                b.post_trial_notes = _pn
-            st.success('Form values stored on the experiment object.')
-    with c2:
-        if st.button(
-            'Check required fields',
-            help='Runs validation for the current test type (does not talk to hardware).',
-        ):
-            _sync_biometric_flags_from_session(b)
-            _apply_form_updates(b, updates, tt)
-            rep = b.validate_dispatch_setup(test_type=tt)
-            if rep['ok']:
-                st.success('All required fields for this procedure are set.')
-            else:
-                st.error('Still needed: ' + ', '.join(rep['missing']))
-    with c3:
-        daq_ok = st.checkbox('Hardware: I intend to run DAQ', value=False)
-        if st.button('Run experiment', type='primary', disabled=not daq_ok):
-            _sync_biometric_flags_from_session(b)
-            _apply_form_updates(b, updates, tt)
-            outp = (st.session_state.get('gui_outputfile') or '').strip()
-            if outp:
-                b.outputfile = outp
-            notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
-            try:
-                with st.spinner('Acquiring (DAQ)…'):
-                    b.run_experiment(test_type=tt)
-                st.success('Acquisition finished.')
-                if st.session_state.get('gui_save_h5'):
-                    with st.spinner('Writing data file (.h5)…'):
-                        rep = export_primary_h5(
-                            b,
-                            post_trial_notes=notes_in if notes_in else None,
-                            outputfile=outp or None,
-                            append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
-                        )
-                    st.success(f"{rep['message']}  →  `{rep['outputfile']}`")
-                    if bool(st.session_state.get('gui_qc_notes_append', True)):
-                        st.session_state['gui_post_notes'] = ''
-                    else:
-                        st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-                if st.session_state.get('gui_save_qc'):
-                    qix = int(st.session_state.get('gui_qc_trial_index') or 0)
-                    with st.spinner('Saving QC figure…'):
-                        qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix)
-                    st.success(f'QC saved: `{qc_path}`')
-            except Exception as e:
-                st.exception(e)
-
-    st.divider()
-    st.subheader('5 · Export without re-running')
-    e1, e2 = st.columns(2)
-    with e1:
-        if st.button('Export data file only (.h5, from current trial_records)'):
-            outp = (st.session_state.get('gui_outputfile') or '').strip()
-            if not outp and not getattr(b, 'outputfile', None):
-                st.error('Set **Data File (.h5)** in the sidebar first.')
-            else:
-                notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
-                if outp:
-                    b.outputfile = outp
-                try:
-                    rep = export_primary_h5(
-                        b,
-                        post_trial_notes=notes_in if notes_in else None,
-                        outputfile=outp or None,
-                        append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
-                    )
-                    st.success(f"{rep['message']}  →  `{rep['outputfile']}`")
-                    if bool(st.session_state.get('gui_qc_notes_append', True)):
-                        st.session_state['gui_post_notes'] = ''
-                    else:
-                        st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-                except Exception as e:
-                    st.exception(e)
-    with e2:
-        if st.button('Save QC figure only'):
-            try:
-                qix = int(st.session_state.get('gui_qc_trial_index') or 0)
-                qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix)
-                st.success(f'QC saved: `{qc_path}`')
-            except Exception as e:
-                st.exception(e)
-
-    with st.expander('Raw dispatch schema (JSON)'):
-        st.json(schema)
+    st.checkbox(
+        'Hide section (values stay; unhide to edit)',
+        key='gui_sec8_hide',
+        help='Collapse file picker and note fields when finished.',
+    )
 
 
 if __name__ == '__main__':
