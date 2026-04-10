@@ -16,6 +16,14 @@ BIOMETRICS_TEMPLATE_VERSION = 1
 
 # Keys saved/loaded (Streamlit widget session keys).
 BIOMETRICS_SESSION_KEYS = (
+    'bio_fishcode',
+    'bio_segment',
+    'bio_fishmass',
+    'bio_fishlen_TL',
+    'bio_fishlen_SL',
+    'bio_xsec_height',
+    'bio_dvert',
+    'bio_dhoriz',
     'bio_dclamp',
     'bio_dbend',
     'bio_xsec',
