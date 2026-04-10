@@ -16,7 +16,6 @@ BIOMETRICS_TEMPLATE_VERSION = 1
 
 # Keys saved/loaded (Streamlit widget session keys).
 BIOMETRICS_SESSION_KEYS = (
-    'bio_fishcode',
     'bio_segment',
     'bio_fishmass',
     'bio_fishlen_TL',
@@ -130,4 +129,9 @@ def apply_biometrics_template_to_session(
         if k in BIOMETRICS_SESSION_KEYS:
             session_state[k] = v
             n += 1
-    return True, f'Loaded {n} biometrics field(s) into the form. Click **Apply** under geometry and profile to update the experiment object.'
+        elif k == 'bio_fishcode' and v is not None and str(v).strip():
+            # Legacy templates: former fish code → single specimen ID field
+            if not str(session_state.get('gui_specimen_id') or '').strip():
+                session_state['gui_specimen_id'] = str(v).strip()
+                n += 1
+    return True, f'Loaded {n} biometrics field(s) into the form. Use **Apply** in section 2 to update the experiment object.'

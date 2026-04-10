@@ -54,6 +54,7 @@ from bender_config_builder import (  # noqa: E402
     discover_config_modules,
     effective_load_module_name,
     parse_comma_list,
+    parse_n_floats,
     read_base_defaults,
     render_generated_config,
     sanitize_config_module_stem,
@@ -677,6 +678,24 @@ def _seed_cfg_build_from_base(base: str) -> None:
     st.session_state['gui_cfg_bld_sono_channel'] = ', '.join(str(x) for x in d['sono_channel'])
     st.session_state['gui_cfg_bld_sono_name'] = ', '.join(str(x) for x in d['sono_name'])
     st.session_state['gui_cfg_bld_encoder_ppr'] = int(d['encoder_pulses_per_rev'])
+    st.session_state['gui_cfg_bld_motor_axis'] = str(d['motor_axis'])
+    st.session_state['gui_cfg_bld_bending_axis_sensor'] = str(d['bending_axis_sensor'])
+    st.session_state['gui_cfg_bld_bending_axis_specimen'] = str(d['bending_axis_specimen'])
+    st.session_state['gui_cfg_bld_stim_monitor_chan'] = ', '.join(str(x) for x in d['stim_monitor_chan'])
+    st.session_state['gui_cfg_bld_stim_monitor_name'] = ', '.join(str(x) for x in d['stim_monitor_name'])
+    st.session_state['gui_cfg_bld_sono_internal_samplefreq'] = int(d['sono_internal_samplefreq'])
+    st.session_state['gui_cfg_bld_sono_cal_left'] = ', '.join(str(x) for x in d['sono_cal_left'])
+    st.session_state['gui_cfg_bld_sono_cal_right'] = ', '.join(str(x) for x in d['sono_cal_right'])
+    st.session_state['gui_cfg_bld_amp_step_vel'] = int(d['amp_step_vel'])
+    rm = str(d['ramp_mode_default'])
+    st.session_state['gui_cfg_bld_ramp_mode_default'] = rm if rm in ('linear', 'exponential') else 'linear'
+    st.session_state['gui_cfg_bld_waitbefore'] = float(d['waitbefore'])
+    st.session_state['gui_cfg_bld_waitafter'] = float(d['waitafter'])
+    st.session_state['gui_cfg_bld_rampdur'] = float(d['rampdur'])
+    st.session_state['gui_cfg_bld_prepoststim_dur'] = float(d['prepoststim_dur'])
+    st.session_state['gui_cfg_bld_prepoststim_sep'] = float(d['prepoststim_sep'])
+    st.session_state['gui_cfg_bld_prestim_time'] = float(d['prestim_time'])
+    st.session_state['gui_cfg_bld_poststim_time'] = float(d['poststim_time'])
 
 
 def _maybe_seed_cfg_build_fields() -> None:
@@ -719,7 +738,9 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
     """Store identity, notebook-style specimen metadata, and protocol IDs for HDF5 export."""
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['genus_species'] = str(st.session_state.get('gui_genus_species') or '').strip()
-    meta['specimen_id'] = str(st.session_state.get('gui_specimen_id') or '').strip()
+    sid = str(st.session_state.get('gui_specimen_id') or '').strip()
+    meta['specimen_id'] = sid
+    setattr(b, 'fishcode', sid)
 
     def _str_attr(sess_key: str, bender_attr: str) -> None:
         if sess_key not in st.session_state:
@@ -738,7 +759,6 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
         meta[bender_attr] = v
         setattr(b, bender_attr, v)
 
-    _str_attr('bio_fishcode', 'fishcode')
     _str_attr('bio_segment', 'segment')
     _float_attr('bio_fishmass', 'fishmass')
     _float_attr('bio_fishlen_TL', 'fishlen_TL')
@@ -875,8 +895,8 @@ def _sync_biometric_flags_from_session(b: Bender):
         b.dvert = float(st.session_state['bio_dvert'])
     if 'bio_dhoriz' in st.session_state:
         b.dhoriz = float(st.session_state['bio_dhoriz'])
-    if 'bio_fishcode' in st.session_state:
-        b.fishcode = str(st.session_state['bio_fishcode'] or '')
+    if 'gui_specimen_id' in st.session_state:
+        b.fishcode = str(st.session_state.get('gui_specimen_id') or '')
     if 'bio_segment' in st.session_state:
         b.segment = str(st.session_state['bio_segment'] or '')
     if 'bio_fishmass' in st.session_state:
@@ -896,7 +916,11 @@ def _init_biometrics_session_state(b: Bender, *, force: bool = False):
 
     dc = getattr(b, 'dclamp', None)
     xw = getattr(b, 'xsec_width', None)
-    _put('bio_fishcode', str(getattr(b, 'fishcode', '') or ''))
+    _meta_b = getattr(b, 'h5_protocol_metadata', {}) or {}
+    _put(
+        'gui_specimen_id',
+        str(_meta_b.get('specimen_id') or getattr(b, 'fishcode', '') or '').strip(),
+    )
     _put('bio_segment', str(getattr(b, 'segment', '') or ''))
     _fm = getattr(b, 'fishmass', None)
     _put('bio_fishmass', float(_fm) if _fm is not None and math.isfinite(float(_fm)) else 0.0)
@@ -987,7 +1011,7 @@ def _render_landing_page() -> None:
     c0, c1, c2 = st.columns([2.2, 1, 1])
     with c0:
         st.title('The CritterGripper App')
-        st.caption('Animal gear–friendly bending experiments, protocol dispatch, and HDF5 export.')
+        st.caption('Non-destructive multiaxial platform for the mechanical testing of bending organisms.')
     with c1:
         if os.path.isfile(_LOGO_PATH):
             try:
@@ -1004,7 +1028,9 @@ def _render_landing_page() -> None:
                 f'<img src="{_img_data_uri(nsf)}" style="max-width:100%;height:auto;max-height:88px;" alt="NSF"/>',
                 unsafe_allow_html=True,
             )
-            st.caption('NSF support — official logo can replace `assets/nsf_logo.svg`.')
+            st.caption(
+                'Supported by the U.S. National Science Foundation. NSF logo used to acknowledge federal funding.'
+            )
     st.markdown('### How do you want to work today?')
     a, b, c = st.columns(3)
     with a:
@@ -1032,14 +1058,6 @@ def _render_landing_page() -> None:
 
 
 def _render_app_chrome() -> None:
-    st.markdown(
-        """
-        <style>
-        button[kind="primary"][data-testid="baseButton-primary"].kill-switch-btn { background-color: #b00020; border-color: #7a0016; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     h0, h1, h2, h3 = st.columns([1, 2.2, 1, 1.2])
     with h0:
         if st.button('← Home', key='gui_nav_home'):
@@ -1060,20 +1078,19 @@ def _render_app_chrome() -> None:
                 f'<img src="{_img_data_uri(nsf)}" style="max-height:56px;width:auto;" alt="NSF"/>',
                 unsafe_allow_html=True,
             )
-    k0, k1, k2 = st.columns([1, 1, 2])
-    with k0:
-        pass
-    with k2:
-        st.markdown(
-            '<p style="color:#b00020;font-weight:700;font-size:1.05rem;margin:0 0 0.35rem 0;">'
-            'Hardware kill switch — stops DAQ I/O</p>',
-            unsafe_allow_html=True,
-        )
+    st.divider()
+
+
+def _render_sidebar_kill_switch() -> None:
+    """Sidebar hardware stop (always visible while scrolling the main page)."""
+    with st.sidebar:
+        st.markdown('### Safety')
+        st.caption('Resets the NI-DAQ device and stops analog/digital tasks.')
         if st.button(
             'STOP ALL DAQ — RESET NI DEVICE',
             key='gui_kill_daq',
             type='primary',
-            help='Resets the NI-DAQ device to stop analog/digital tasks (hardware outputs/inputs).',
+            use_container_width=True,
         ):
             dev = None
             if st.session_state.get('bender') is not None:
@@ -1083,22 +1100,33 @@ def _render_app_chrome() -> None:
                 st.success(msg)
             else:
                 st.warning(msg)
-    st.divider()
+        st.divider()
 
 
 def _render_stepwise_rail() -> None:
     s = _stepwise_step()
     labels = ['A · Config', 'B · Biometrics', 'C · Experiment & run', 'D · Visualize & notes']
-    st.caption('**Stepwise mode** — complete and confirm each step in order.')
-    c = st.columns(4)
-    for i, lab in enumerate(labels):
-        with c[i]:
-            if i < s:
-                st.success(lab)
-            elif i == s:
-                st.info(lab)
-            else:
-                st.caption(lab)
+    st.caption('**Stepwise mode** — use **Previous** / **Confirm** to move between steps.')
+    nav_a, nav_b = st.columns([1, 2])
+    with nav_a:
+        if s > 0:
+            if st.button('← Previous step', key='gui_stepwise_back'):
+                st.session_state['gui_stepwise_step'] = s - 1
+                st.rerun()
+        else:
+            if st.button('← Home', key='gui_stepwise_home_from_rail'):
+                st.session_state['gui_app_route'] = 'landing'
+                st.rerun()
+    with nav_b:
+        c = st.columns(4)
+        for i, lab in enumerate(labels):
+            with c[i]:
+                if i < s:
+                    st.success(lab)
+                elif i == s:
+                    st.info(lab)
+                else:
+                    st.caption(lab)
 
 
 def _render_template_procedure_strip() -> None:
@@ -1206,6 +1234,7 @@ def main():
     _consume_pending_biometrics_template()
 
     _render_app_chrome()
+    _render_sidebar_kill_switch()
 
     if _nav_route() == 'templates':
         st.markdown('**Template mode** — check what you already have on disk.')
@@ -1290,7 +1319,7 @@ def main():
                 placeholder='e.g. lab_setup_2026',
                 help='Writes a new `.py` file in this folder and loads it.',
             )
-            with st.expander('Calibration & direction', expanded=False):
+            with st.expander('Calibration, direction & axis labels', expanded=False):
                 st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
                 st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
                 st.number_input(
@@ -1299,7 +1328,13 @@ def main():
                     step=1,
                     format='%d',
                 )
+                st.text_input('Motor axis (config `motor_axis`)', key='gui_cfg_bld_motor_axis')
+                st.text_input('Bending axis — sensor (`bending_axis_sensor`)', key='gui_cfg_bld_bending_axis_sensor')
                 st.text_input('Primary bending axis (e.g. zTorque)', key='gui_cfg_bld_primary_bending_axis')
+                st.text_input(
+                    'Bending axis — specimen (`bending_axis_specimen`: dorsoventral / lateral / anteroposterior)',
+                    key='gui_cfg_bld_bending_axis_specimen',
+                )
                 st.text_input('S1 side label', key='gui_cfg_bld_S1side')
                 st.text_input('S2 side label', key='gui_cfg_bld_S2side')
             with st.expander('DAQ rates & device', expanded=True):
@@ -1320,6 +1355,43 @@ def main():
                 st.checkbox('Use sonomicrometry', key='gui_cfg_bld_use_sono')
                 st.text_input('Sono AI channels (comma-separated)', key='gui_cfg_bld_sono_channel')
                 st.text_input('Sono names (comma-separated)', key='gui_cfg_bld_sono_name')
+                st.number_input(
+                    'Sono internal sample frequency (`sono_internal_samplefreq`)',
+                    key='gui_cfg_bld_sono_internal_samplefreq',
+                    min_value=1,
+                    step=1,
+                    format='%d',
+                )
+                st.text_input(
+                    'Sono cal left [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
+                    key='gui_cfg_bld_sono_cal_left',
+                    help='Four numbers, same order as the config file.',
+                )
+                st.text_input(
+                    'Sono cal right [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
+                    key='gui_cfg_bld_sono_cal_right',
+                )
+            with st.expander('Stim monitor AI (optional)', expanded=False):
+                st.text_input(
+                    'Stim monitor AI channels (comma-separated; empty = none)',
+                    key='gui_cfg_bld_stim_monitor_chan',
+                )
+                st.text_input('Stim monitor channel names (comma-separated)', key='gui_cfg_bld_stim_monitor_name')
+            with st.expander('Default timing, ramp & motion', expanded=False):
+                st.number_input('waitbefore (s)', key='gui_cfg_bld_waitbefore', min_value=0.0, format='%.6g')
+                st.number_input('waitafter (s)', key='gui_cfg_bld_waitafter', min_value=0.0, format='%.6g')
+                st.number_input('rampdur (s)', key='gui_cfg_bld_rampdur', min_value=0.0, format='%.6g')
+                st.number_input('prepoststim_dur (s)', key='gui_cfg_bld_prepoststim_dur', min_value=0.0, format='%.6g')
+                st.number_input('prepoststim_sep (s)', key='gui_cfg_bld_prepoststim_sep', format='%.6g')
+                st.number_input('prestim_time', key='gui_cfg_bld_prestim_time', format='%.6g')
+                st.number_input('poststim_time', key='gui_cfg_bld_poststim_time', format='%.6g')
+                st.number_input('amp_step_vel', key='gui_cfg_bld_amp_step_vel', min_value=1, step=1, format='%d')
+                st.selectbox(
+                    'ramp_mode_default',
+                    options=['linear', 'exponential'],
+                    key='gui_cfg_bld_ramp_mode_default',
+                )
+                st.caption('`units` / `unit_rules` dicts stay from the template unless you edit the generated `.py` file.')
             st.checkbox(
                 'Overwrite if a `.py` file with that name already exists',
                 key='gui_cfg_build_overwrite',
@@ -1336,10 +1408,25 @@ def main():
                     stim_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_channels') or ''))
                     sg_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_chan') or ''))
                     sg_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_name') or ''))
+                    sm_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_chan') or ''))
+                    sm_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_name') or ''))
+                    sono_cal_ok = True
+                    sono_lf: list[float] = []
+                    sono_rf: list[float] = []
+                    try:
+                        sono_lf = parse_n_floats(str(st.session_state.get('gui_cfg_bld_sono_cal_left') or ''), 4)
+                        sono_rf = parse_n_floats(str(st.session_state.get('gui_cfg_bld_sono_cal_right') or ''), 4)
+                    except ValueError as e:
+                        sono_cal_ok = False
+                        st.error(f'Sono calibration: {e}')
                     if not stim_ch:
                         st.error('Set at least one stim channel (comma-separated).')
                     elif not sg_ch or not sg_nm or len(sg_ch) != len(sg_nm):
                         st.error('SG channels and names must be non-empty lists of the same length.')
+                    elif (bool(sm_ch) ^ bool(sm_nm)) or (sm_ch and sm_nm and len(sm_ch) != len(sm_nm)):
+                        st.error('Stim monitor: set both channel and name lists with the same length, or leave both empty.')
+                    elif not sono_cal_ok:
+                        pass
                     else:
                         sono_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_channel') or ''))
                         sono_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_name') or ''))
@@ -1351,6 +1438,9 @@ def main():
                             if os.path.isfile(path) and not st.session_state.get('gui_cfg_build_overwrite'):
                                 st.error(f'`{out_stem}.py` already exists. Enable overwrite or pick another name.')
                             else:
+                                rm = str(st.session_state.get('gui_cfg_bld_ramp_mode_default') or 'linear')
+                                if rm not in ('linear', 'exponential'):
+                                    rm = 'linear'
                                 assignments = {
                                     'forcetorque_calibration_file': str(
                                         st.session_state.get('gui_cfg_bld_forcetorque_calibration_file') or 'FT56491.cal'
@@ -1361,8 +1451,15 @@ def main():
                                     'specimen_lateral_index_on_positive_motor_side': int(
                                         st.session_state.get('gui_cfg_bld_specimen_lateral_index') or -1
                                     ),
+                                    'motor_axis': str(st.session_state.get('gui_cfg_bld_motor_axis') or 'z'),
+                                    'bending_axis_sensor': str(
+                                        st.session_state.get('gui_cfg_bld_bending_axis_sensor') or 'z'
+                                    ),
                                     'primary_bending_axis': str(
                                         st.session_state.get('gui_cfg_bld_primary_bending_axis') or 'zTorque'
+                                    ),
+                                    'bending_axis_specimen': str(
+                                        st.session_state.get('gui_cfg_bld_bending_axis_specimen') or 'dorsoventral'
                                     ),
                                     'device_name': str(st.session_state.get('gui_cfg_bld_device_name') or 'Dev1'),
                                     'daq_ai_sample_rate_hz': float(st.session_state.get('gui_cfg_bld_daq_ai_sr') or 1000.0),
@@ -1377,11 +1474,27 @@ def main():
                                     'encoder_chan': str(st.session_state.get('gui_cfg_bld_encoder_chan') or 'ctr0'),
                                     'SG_chan': sg_ch,
                                     'SG_name': sg_nm,
+                                    'stim_monitor_chan': sm_ch,
+                                    'stim_monitor_name': sm_nm,
                                     'S1side': str(st.session_state.get('gui_cfg_bld_S1side') or 'left'),
                                     'S2side': str(st.session_state.get('gui_cfg_bld_S2side') or 'right'),
                                     'use_sono': use_sono,
                                     'sono_channel': sono_ch if use_sono else [],
                                     'sono_name': sono_nm if use_sono else [],
+                                    'sono_internal_samplefreq': int(
+                                        st.session_state.get('gui_cfg_bld_sono_internal_samplefreq') or 241
+                                    ),
+                                    'sono_cal_left': sono_lf,
+                                    'sono_cal_right': sono_rf,
+                                    'amp_step_vel': int(st.session_state.get('gui_cfg_bld_amp_step_vel') or 10),
+                                    'ramp_mode_default': rm,
+                                    'waitbefore': float(st.session_state.get('gui_cfg_bld_waitbefore') or 3.0),
+                                    'waitafter': float(st.session_state.get('gui_cfg_bld_waitafter') or 4.0),
+                                    'rampdur': float(st.session_state.get('gui_cfg_bld_rampdur') or 0.25),
+                                    'prepoststim_dur': float(st.session_state.get('gui_cfg_bld_prepoststim_dur') or 0.06),
+                                    'prepoststim_sep': float(st.session_state.get('gui_cfg_bld_prepoststim_sep') or 1.0),
+                                    'prestim_time': float(st.session_state.get('gui_cfg_bld_prestim_time') or -2.0),
+                                    'poststim_time': float(st.session_state.get('gui_cfg_bld_poststim_time') or 2.0),
                                 }
                                 src = render_generated_config(base, assignments)
                                 with open(path, 'w', encoding='utf-8') as f:
@@ -1548,10 +1661,9 @@ def main():
 
         st.divider()
         st.markdown('**Specimen identity**')
-        st.caption('Matches notebook-style metadata (`fishcode`, `segment`) and export fields (`genus_species`, `specimen_id`).')
+        st.caption('Export metadata (`genus_species`, `specimen_id`) and notebook-style `fishcode` (mirrors specimen ID).')
         id1, id2 = st.columns(2)
         with id1:
-            st.text_input('Fish / specimen code (`fishcode`)', key='bio_fishcode', placeholder='e.g. 40A polyurethane rod')
             st.text_input(
                 'Genus-species',
                 key='gui_genus_species',
@@ -1559,13 +1671,13 @@ def main():
                 help='Stored in the exported `.h5` under protocol metadata (`genus_species`) when you run or export.',
             )
         with id2:
-            st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
             st.text_input(
                 'Specimen ID',
                 key='gui_specimen_id',
-                placeholder='e.g. fish-042',
-                help='Optional label stored in protocol metadata (`specimen_id`) on run/export.',
+                placeholder='e.g. fish-042 or prep code',
+                help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
             )
+        st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
 
         st.divider()
         st.session_state.setdefault('gui_bio_hide', False)
@@ -1634,7 +1746,7 @@ def main():
                 b.fishlen_TL = float(st.session_state['bio_fishlen_TL'])
                 b.fishlen_SL = float(st.session_state['bio_fishlen_SL'])
                 b.fishmass = float(st.session_state['bio_fishmass'])
-                b.fishcode = str(st.session_state.get('bio_fishcode') or '')
+                b.fishcode = str(st.session_state.get('gui_specimen_id') or '')
                 b.segment = str(st.session_state.get('bio_segment') or '')
                 b.specimen_profile_length_mm = float(st.session_state['bio_prof_L'])
                 b.specimen_profile_density_g_per_mm3 = float(st.session_state['bio_prof_rho'])
@@ -2222,7 +2334,7 @@ def main():
                 for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
                     settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
                 st.dataframe(pd.DataFrame(settings_rows), use_container_width=True, hide_index=True)
-            c1, c2, c3 = st.columns(3)
+            c1, c2 = st.columns(2)
             with c1:
                 if st.button(
                     'Apply',
@@ -2243,17 +2355,23 @@ def main():
                         st.success('All required fields for this procedure are set.')
                     else:
                         st.error('Still needed: ' + ', '.join(rep['missing']))
-            with c3:
-                daq_ok = st.checkbox('Hardware: I intend to run DAQ', value=False)
-                needs_cal_confirm = _needs_missing_calibration_confirmation(b)
-                if needs_cal_confirm:
-                    st.warning('No calibration file detected. Are you sure you wish to proceed?')
-                ok_wo_cal = st.checkbox(
-                    'Yes, proceed without calibration file',
-                    key='gui_confirm_run_without_calibration',
-                    disabled=not needs_cal_confirm,
-                )
-                if st.button('Run experiment', type='primary', disabled=not daq_ok):
+            daq_ok = st.checkbox('Hardware: I intend to run DAQ', value=False)
+            needs_cal_confirm = _needs_missing_calibration_confirmation(b)
+            if needs_cal_confirm:
+                st.warning('No calibration file detected. Are you sure you wish to proceed?')
+            ok_wo_cal = st.checkbox(
+                'Yes, proceed without calibration file',
+                key='gui_confirm_run_without_calibration',
+                disabled=not needs_cal_confirm,
+            )
+            _, _run_big, _ = st.columns([1, 2, 1])
+            with _run_big:
+                if st.button(
+                    'Run experiment',
+                    type='primary',
+                    use_container_width=True,
+                    disabled=not daq_ok,
+                ):
                     _sync_biometric_flags_from_session(b)
                     _apply_form_updates(b, updates, tt)
                     _sync_genus_species_to_bender(b)
