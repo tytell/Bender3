@@ -1,5 +1,5 @@
 """
-Biometrics templates: JSON snapshots of **section 2** session keys (geometry, profile, flags).
+Biometrics templates: JSON snapshots of section **3 · Biometrics** session keys (geometry, profile, conditions, flags).
 
 Unlike protocol templates, these do not change ``test_type`` or procedure fields. Load fills
 Streamlit session state; use **Apply** on geometry and profile blocks to copy onto ``Bender``.
@@ -28,6 +28,7 @@ BIOMETRICS_SESSION_KEYS = (
     'bio_xsec',
     'bio_temp_room',
     'bio_temp_tank',
+    'bio_prep_condition',
     'bio_prof_ph',
     'bio_prof_pw',
     'bio_prof_dh',

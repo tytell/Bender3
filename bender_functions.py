@@ -584,6 +584,28 @@ class Bender:
             return float(ts)
         return None
 
+    def _clamp_spacing_mm_valid(self) -> bool:
+        """True if ``dclamp`` / ``test_segment_length_mm`` resolves to a finite value > 0 mm."""
+        dc = self._effective_dclamp_mm()
+        if dc is None:
+            return False
+        try:
+            dcf = float(dc)
+        except (TypeError, ValueError):
+            return False
+        return bool(np.isfinite(dcf) and dcf > 0)
+
+    def _xsec_width_mm_valid(self) -> bool:
+        """True if ``xsec_width`` is a finite value > 0 mm."""
+        xw = getattr(self, 'xsec_width', None)
+        if xw is None:
+            return False
+        try:
+            xwf = float(xw)
+        except (TypeError, ValueError):
+            return False
+        return bool(np.isfinite(xwf) and xwf > 0)
+
     def _normalize_primary_bending_axis(self):
         """Normalize primary axis to xTorque/yTorque/zTorque."""
         axis = str(getattr(self, 'primary_bending_axis', getattr(self, 'bending_axis_sensor', 'zTorque'))).strip()
@@ -3585,8 +3607,21 @@ class Bender:
             for k in ['isometric_initial', 'isometric_final', 'isometric_num_steps']:
                 if getattr(self, k, None) is None:
                     missing.append(k)
-            if self._effective_dclamp_mm() is None:
-                missing.append('test_segment_length_mm (or dclamp, mm)')
+            ns = getattr(self, 'isometric_num_steps', None)
+            if ns is not None:
+                try:
+                    if int(ns) < 1:
+                        missing.append('isometric_num_steps (must be ≥ 1)')
+                except (TypeError, ValueError):
+                    missing.append('isometric_num_steps (invalid)')
+            if not self._clamp_spacing_mm_valid():
+                missing.append('dclamp (mm)')
+            _iso_mode = str(
+                getattr(self, 'isometric_mode', None) or getattr(self, 'mode', None) or 'strain'
+            ).lower()
+            if _iso_mode in ('strain', 'strain_rate', 'strain_pct', 'strain_pct_rate'):
+                if not self._xsec_width_mm_valid():
+                    missing.append('xsec_width (mm)')
         elif tt == 'isovelocity':
             for k in [
                 'isovelocity_min_vel', 'isovelocity_max_vel',
@@ -3594,11 +3629,99 @@ class Bender:
             ]:
                 if getattr(self, k, None) is None:
                     missing.append(k)
-            if self._effective_dclamp_mm() is None:
-                missing.append('test_segment_length_mm (or dclamp, mm)')
+            ns = getattr(self, 'isovelocity_num_steps', None)
+            if ns is not None:
+                try:
+                    if int(ns) < 1:
+                        missing.append('isovelocity_num_steps (must be ≥ 1)')
+                except (TypeError, ValueError):
+                    missing.append('isovelocity_num_steps (invalid)')
+            if not self._clamp_spacing_mm_valid():
+                missing.append('dclamp (mm)')
+            _iv_mode = str(getattr(self, 'isovelocity_starting_strain_mode', None) or 'strain').lower()
+            if _iv_mode in ('strain', 'strain_rate', 'strain_pct', 'strain_pct_rate'):
+                if not self._xsec_width_mm_valid():
+                    missing.append('xsec_width (mm)')
         elif tt == 'calibration':
             if getattr(self, 'calibration_base_test_type', None) is None:
                 missing.append('calibration_base_test_type')
+        elif tt in ('dynamic', 'frequency_sweep', 'frequency_step', 'curvature_step'):
+            def _seq_missing(seq) -> bool:
+                if seq is None:
+                    return True
+                try:
+                    if np.asarray(seq).size == 0:
+                        return True
+                except Exception:
+                    try:
+                        return len(seq) == 0
+                    except Exception:
+                        return True
+                return False
+
+            af = getattr(self, 'all_freqs', None)
+            ac = getattr(self, 'all_curves', None)
+            if _seq_missing(af):
+                missing.append('all_freqs (Hz)')
+            else:
+                try:
+                    fa = np.asarray(af, dtype=float).ravel()
+                    if fa.size == 0 or not np.all(np.isfinite(fa)) or np.any(fa <= 0):
+                        missing.append('all_freqs (finite values > 0 Hz)')
+                except Exception:
+                    missing.append('all_freqs (valid numeric list)')
+            if _seq_missing(ac):
+                missing.append('all_curves / amplitudes')
+            if tt != 'dynamic':
+                du = getattr(self, 'duration', None)
+                try:
+                    duf = float(du) if du is not None else None
+                except (TypeError, ValueError):
+                    duf = None
+                if duf is None or not np.isfinite(duf) or duf <= 0:
+                    missing.append('duration (s)')
+            if tt == 'dynamic':
+                cps = getattr(self, 'cycles_per_step', None)
+                try:
+                    cpsi = int(cps) if cps is not None else None
+                except (TypeError, ValueError):
+                    cpsi = None
+                if cpsi is None or cpsi <= 0:
+                    missing.append('cycles_per_step')
+                nec = getattr(self, 'n_end_cycles', None)
+                try:
+                    neci = int(nec) if nec is not None else None
+                except (TypeError, ValueError):
+                    neci = None
+                if neci is None or neci < 0:
+                    missing.append('n_end_cycles')
+            if not self._clamp_spacing_mm_valid():
+                missing.append('dclamp (mm)')
+            if not self._xsec_width_mm_valid():
+                missing.append('xsec_width (mm)')
+        elif tt == 'step_change':
+            for attr, label in (
+                ('step_change_frequencies', 'step_change_frequencies'),
+                ('step_change_curves', 'step_change_curves'),
+                ('step_change_cycles_per_step', 'step_change_cycles_per_step'),
+            ):
+                seq = getattr(self, attr, None)
+                if seq is None:
+                    missing.append(label)
+                    continue
+                try:
+                    if np.asarray(seq).size == 0:
+                        missing.append(label)
+                except Exception:
+                    try:
+                        if len(seq) == 0:
+                            missing.append(label)
+                    except Exception:
+                        missing.append(label)
+            if not self._clamp_spacing_mm_valid():
+                missing.append('dclamp (mm)')
+            if not self._xsec_width_mm_valid():
+                missing.append('xsec_width (mm)')
         return {'ok': len(missing) == 0, 'missing': missing, 'test_type': tt}
 
     def make_cycle_tags(self):

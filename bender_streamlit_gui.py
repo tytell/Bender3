@@ -5,8 +5,8 @@ Run from the project directory:
     streamlit run bender_streamlit_gui.py
 
 Select ``test_type`` first; edit fields, use **Apply** to copy them onto the
-``Bender`` instance, optionally **save / load protocol templates** (procedure only) and
-**save / load biometrics templates** in **section 3**, **Check required fields** to validate,
+``Bender`` instance, optionally **save / load protocol** and **biometrics** files in **section 3**,
+**Check required fields** to validate,
 **Refresh preview** for a table/plot of commanded motion (no DAQ), then **Run experiment**
 when hardware is ready.
 """
@@ -342,21 +342,57 @@ DATA_FILE_NAME_HELP = (
     'If that exact file already exists, the app uses a new name like my_run_001.h5 so nothing is overwritten.'
 )
 
+# Specimen density presets: ρ (g/cm³) × 1e-3 → g/mm³ (same mass per volume, different unit).
+BIO_DENSITY_PRESET_LABELS = (
+    'Custom — edit the number below',
+    'Water-like (~1.00 g/cm³)',
+    'Skeletal muscle / soft tissue (~1.06 g/cm³)',
+    'Cortical bone (~1.9 g/cm³)',
+)
+BIO_DENSITY_PRESET_G_PER_MM3 = {
+    'Water-like (~1.00 g/cm³)': 1.0e-3,
+    'Skeletal muscle / soft tissue (~1.06 g/cm³)': 1.06e-3,
+    'Cortical bone (~1.9 g/cm³)': 1.9e-3,
+}
+
+BIO_DBEND_FIELD_HELP = (
+    'Distance **along the body** (mm) from your length reference (same as TL/SL, often snout or a fixed landmark) to the '
+    '**midpoint between the two clamps** — i.e. where the bending test is centered. Use **0** only if that reference is '
+    'already at the segment center. Saved as `dbend` / `test_segment_position_mm`.'
+)
+
+BIO_PROF_CLAMP_FIELD_HELP = (
+    'Used only for **rotating hardware** mass/MOI in the profiled inertial model: offset from the **bend / rotation axis** '
+    'to the clamps (mm). The code adds half of its built-in clamp depth to this value when estimating clamp contribution. '
+    'Saved as `specimen_profile_clamp_offset_mm`.'
+)
+
+
+def _on_bio_density_preset_changed() -> None:
+    """Copy a typical density into ``bio_prof_rho`` when the preset selectbox changes."""
+    label = str(st.session_state.get('bio_prof_rho_preset') or '')
+    v = BIO_DENSITY_PRESET_G_PER_MM3.get(label)
+    if v is not None:
+        st.session_state['bio_prof_rho'] = float(v)
+
+
 ISOMETRIC_STIM_JSON_HELP = (
-    'Optional JSON for **each isometric step** (merged onto defaults). Common keys: **ramp_duration_s**, '
-    '**hold_duration_s**, **settle_before_stim_s** (quiet time at target angle before stim), '
-    '**stim_duration_s** (use null to stim through the rest of the hold), **inter_step_interval_s** '
-    '(idle time between steps; 0 = back-to-back), **is_stim**, **stim_pulse_rate** (Hz), **stim_voltage** (V), '
-    '**device_name** (null = use your NI config). Example: {"ramp_duration_s": 2, "hold_duration_s": 5, "stim_pulse_rate": 75}'
+    'Optional per-step timing and stimulation. **Leave `{}`** unless your protocol needs custom ramps, holds, or stim.\n\n'
+    '**Advanced (JSON text):** use `{ "key": value }` with commas. Common keys: **ramp_duration_s**, **hold_duration_s**, '
+    '**settle_before_stim_s**, **stim_duration_s** (null = through rest of hold), **inter_step_interval_s** (0 = back-to-back), '
+    '**is_stim**, **stim_pulse_rate** (Hz), **stim_voltage** (V), **device_name** (null = NI config). '
+    'Example: `{"ramp_duration_s": 2, "hold_duration_s": 5, "stim_pulse_rate": 75}`'
 )
 ISOMETRIC_STIM_OVERRIDES_HELP = (
-    'Rare. JSON merged into stim **routing** (not timing): e.g. **recruitment**, **lateral_mode**, '
-    '**bilateral_mirror_motor**, **bilateral_sequential_left_frac**. Leave `{}` unless you need overrides.'
+    '**Rare.** Overrides stim **routing** (not timing). **Leave `{}`** unless directed.\n\n'
+    '**Advanced (JSON text):** keys like **recruitment**, **lateral_mode**, **bilateral_mirror_motor**, '
+    '**bilateral_sequential_left_frac**.'
 )
 ISOVELOCITY_STIM_JSON_HELP = (
-    'Optional JSON merged onto isovelocity defaults: **settle_before_stim_s**, **stim_duration_s** (null = rest of iso), '
-    '**pre_iso_stim_duration_s**, **is_stim**, **stim_pulse_rate**, **stim_voltage**, **device_name**, '
-    'and optionally **iso_duration_s** / **pre_hold_s** to override the main fields.'
+    'Optional segment timing and stimulation. **Leave `{}`** unless you need overrides.\n\n'
+    '**Advanced (JSON text):** **settle_before_stim_s**, **stim_duration_s** (null = rest of segment), '
+    '**pre_iso_stim_duration_s**, **is_stim**, **stim_pulse_rate**, **stim_voltage**, **device_name**; '
+    'optionally **iso_duration_s** / **pre_hold_s** to override the main fields.'
 )
 ISOVELOCITY_STIM_OVERRIDES_HELP = ISOMETRIC_STIM_OVERRIDES_HELP
 
@@ -395,7 +431,7 @@ ISOVELOCITY_FIELD_HELP = {
     'recruitment': RECRUITMENT_FIELD_HELP,
     'lateral_mode': (
         'Expert only. Leave **blank** unless you need a custom stim-router label. Normal left/right/bilateral behavior '
-        'is set with **recruitment** above; this field overrides that name inside merged stim JSON.'
+        'is set with **recruitment** above; this overrides that name inside merged stim settings.'
     ),
     'bilateral_mirror_motor': (
         'When **recruitment** is **bilateral sequential**, mirror the commanded bend between the first and second '
@@ -619,14 +655,21 @@ def _render_field(b: Bender, name: str, kind: str, label: str, *, help_text: Opt
     if kind == 'json_dict':
         if sk not in st.session_state:
             st.session_state[sk] = json.dumps(cur, indent=2) if isinstance(cur, dict) else '{}'
-        jh = help_text if help_text is not None else f'JSON object for `{name}` (see protocol docs).'
+        jh = (
+            help_text
+            if help_text is not None
+            else (
+                f'Advanced optional settings for `{name}`. **Leave `{{}}`** unless directed. '
+                'Uses **JSON** text (`{{ "key": value }}`); see protocol docs or your PI.'
+            )
+        )
         s = str(st.text_area(label, height=120, key=sk, help=jh))
         try:
             return json.loads(s)
         except json.JSONDecodeError:
             _st_error_actions(
-                f'Invalid JSON: {name}',
-                ['Fix commas and brackets', 'Match expected JSON shape', 'Compare protocol docs'],
+                f'Could not read `{name}`',
+                ['Fix commas and brackets', 'Check quotes and braces', 'See ? help or protocol docs'],
             )
             return None
 
@@ -654,7 +697,7 @@ def _friendly_error_actions(err: Exception, *, action: str) -> tuple[str, list[s
     if 'file not found' in low and 'h5' in low:
         return ('File missing.', ['Pick file from list', 'Check folder path'])
     if 'selected file is not .h5' in low:
-        return ('Not an HDF5 file.', ['Select a .h5 file', 'Use section 8 list'])
+        return ('Not an HDF5 file.', ['Select a `.h5` file from the list'])
     if 'kaleido' in low and action == 'save_qc':
         return (
             'QC PNG export failed.',
@@ -789,6 +832,13 @@ def _compose_output_h5_path() -> str:
     return os.path.normpath(fn)
 
 
+def _section2_destination_incomplete() -> bool:
+    """True when **Data folder** or **Data file name** is blank (section 2)."""
+    folder = str(st.session_state.get('gui_data_folder') or '').strip()
+    fn = str(st.session_state.get('gui_data_filename') or '').strip()
+    return (not folder) or (not fn)
+
+
 def _output_path_anchor_for_review(b: Optional[Bender] = None) -> str:
     """Path used to locate the data directory (composed section 2 path, else ``b.outputfile``)."""
     p = _compose_output_h5_path().strip()
@@ -806,6 +856,20 @@ def _normalize_config_module_name(raw: str) -> str:
     if s.lower().endswith('.py'):
         s = s[:-3].strip()
     return s
+
+
+def _ensure_hw_config_session_defaults() -> None:
+    """Keep ``gui_load_cfg_select`` / ``gui_cfg_mod`` valid when **section 1** is off-screen or session state is stale."""
+    mods = discover_config_modules(_ROOT)
+    if not mods:
+        return
+    if 'gui_cfg_mod' not in st.session_state or not str(st.session_state.get('gui_cfg_mod') or '').strip():
+        st.session_state['gui_cfg_mod'] = str(st.session_state.get('cfg_mod') or 'jimenez_bender_config_A')
+    typed = str(st.session_state.get('gui_cfg_mod') or '').strip()
+    pick = typed if typed in mods else mods[0]
+    cur_sel = str(st.session_state.get('gui_load_cfg_select') or '').strip()
+    if not cur_sel or cur_sel not in mods:
+        st.session_state['gui_load_cfg_select'] = pick
 
 
 def _selected_config_matches_bender(b: Bender, eff_raw: str) -> bool:
@@ -867,6 +931,7 @@ def _sec1_apply_composed_path_to_bender() -> Optional[str]:
     if not outp:
         return 'Set **Data file name** first.'
     b1.outputfile = outp
+    _mark_data_path_applied()
     return None
 
 
@@ -877,6 +942,124 @@ def _paths_equal_norm(a: str, b: str) -> bool:
         return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
     except Exception:
         return str(a).strip() == str(b).strip()
+
+
+_BIO_APPLY_SESSION_KEYS = (
+    'gui_genus_species',
+    'gui_specimen_id',
+    'bio_segment',
+    'bio_fishmass',
+    'bio_fishlen_TL',
+    'bio_fishlen_SL',
+    'bio_xsec_height',
+    'bio_dvert',
+    'bio_dhoriz',
+    'bio_dclamp',
+    'bio_xsec',
+    'bio_dbend',
+    'bio_temp_room',
+    'bio_temp_tank',
+    'bio_prep_condition',
+    'bio_use_theoretical_inertial',
+    'bio_prof_L',
+    'bio_prof_rho',
+    'bio_prof_ph',
+    'bio_prof_pw',
+    'bio_prof_dh',
+    'bio_prof_dw',
+    'bio_prof_clamp',
+    'bio_prof_samples',
+)
+
+
+def _bio_fingerprint() -> tuple:
+    return tuple(st.session_state.get(k) for k in _BIO_APPLY_SESSION_KEYS)
+
+
+def _data_path_fingerprint() -> tuple:
+    return (st.session_state.get('gui_data_folder'), st.session_state.get('gui_data_filename'))
+
+
+def _procedure_fingerprint() -> tuple:
+    tt = st.session_state.get('test_type_select')
+    pairs = [(k, st.session_state.get(k)) for k in sorted(st.session_state.keys()) if k.startswith('fld_')]
+    return (tt, tuple(pairs))
+
+
+def _ensure_apply_tracking_bender(b: Bender) -> None:
+    """Reset apply/dirty baselines when the in-memory ``Bender`` instance is replaced."""
+    bid = id(b)
+    if st.session_state.get('gui_apply_tracking_bender_id') != bid:
+        st.session_state['gui_apply_tracking_bender_id'] = bid
+        for _k in (
+            'gui_bio_applied_sig',
+            'gui_data_path_applied_sig',
+            'gui_proc_applied_sig',
+            'gui_bio_apply_invalidated',
+            'gui_proc_apply_invalidated',
+        ):
+            st.session_state.pop(_k, None)
+
+
+def _touch_bio_apply_baseline_if_clean() -> None:
+    if st.session_state.get('gui_bio_apply_invalidated'):
+        return
+    if 'gui_bio_applied_sig' not in st.session_state:
+        st.session_state['gui_bio_applied_sig'] = _bio_fingerprint()
+
+
+def _touch_data_path_baseline_if_clean() -> None:
+    if 'gui_data_path_applied_sig' not in st.session_state:
+        st.session_state['gui_data_path_applied_sig'] = _data_path_fingerprint()
+
+
+def _touch_proc_apply_baseline_if_clean() -> None:
+    if st.session_state.get('gui_proc_apply_invalidated'):
+        return
+    if 'gui_proc_applied_sig' not in st.session_state:
+        st.session_state['gui_proc_applied_sig'] = _procedure_fingerprint()
+
+
+def _mark_bio_applied() -> None:
+    st.session_state['gui_bio_apply_invalidated'] = False
+    st.session_state['gui_bio_applied_sig'] = _bio_fingerprint()
+
+
+def _mark_data_path_applied() -> None:
+    st.session_state['gui_data_path_applied_sig'] = _data_path_fingerprint()
+
+
+def _mark_procedure_applied() -> None:
+    st.session_state['gui_proc_apply_invalidated'] = False
+    st.session_state['gui_proc_applied_sig'] = _procedure_fingerprint()
+
+
+def _bio_apply_dirty() -> bool:
+    if st.session_state.get('bender') is None:
+        return False
+    if st.session_state.get('gui_bio_apply_invalidated'):
+        return True
+    if 'gui_bio_applied_sig' not in st.session_state:
+        return False
+    return _bio_fingerprint() != st.session_state['gui_bio_applied_sig']
+
+
+def _data_path_apply_dirty() -> bool:
+    if 'gui_data_path_applied_sig' not in st.session_state:
+        return False
+    return _data_path_fingerprint() != st.session_state['gui_data_path_applied_sig']
+
+
+def _procedure_apply_dirty() -> bool:
+    if st.session_state.get('gui_proc_apply_invalidated'):
+        return True
+    if 'gui_proc_applied_sig' not in st.session_state:
+        return False
+    return _procedure_fingerprint() != st.session_state['gui_proc_applied_sig']
+
+
+def _soft_apply_reminder() -> None:
+    st.info('You have edits that are not on the experiment object yet — click **Apply** (or **Set data file path**) so they take effect.')
 
 
 def _session_float(key: str) -> Optional[float]:
@@ -890,46 +1073,175 @@ def _session_float(key: str) -> Optional[float]:
         return None
 
 
-def _collect_input_sanity_warnings() -> list[str]:
-    """Heuristic checks: blanks, zeros, and sub‑1 mm values that often mean a units slip."""
-    out: list[str] = []
+_CHK_SEC_DATA = '2 · Data path'
+_CHK_SEC_BIO = '3 · Biometrics'
+_CHK_SEC_EXP = '4–6 · Experiment'
+
+
+def _fld_raw_str(name: str) -> str:
+    v = st.session_state.get(_widget_key(name), '')
+    if v is None:
+        return ''
+    return str(v).strip()
+
+
+def _collect_experiment_form_status_messages(tt: str) -> list[str]:
+    """Warnings from **Procedure fields** widgets (`fld_*`), including blank frequencies before **Apply**."""
+    msgs: list[str] = []
+    if tt in MOTION_TYPES and tt != 'step_change':
+        raw_f = _fld_raw_str('all_freqs')
+        if not raw_f:
+            msgs.append('Frequencies field is blank.')
+        else:
+            parsed = _parse_float_list(raw_f)
+            if not parsed:
+                msgs.append('Frequencies not parseable.')
+            else:
+                if any(not math.isfinite(x) for x in parsed):
+                    msgs.append('Frequencies must be finite.')
+                if any(x <= 0 for x in parsed):
+                    msgs.append('Frequencies must be > 0 Hz.')
+        raw_a = _fld_raw_str('all_amps')
+        if not raw_a:
+            msgs.append('Amplitudes field is blank.')
+        else:
+            ap = _parse_float_list(raw_a)
+            if not ap:
+                msgs.append('Amplitudes not parseable.')
+        if tt in ('frequency_sweep', 'frequency_step', 'curvature_step'):
+            skd = _widget_key('duration')
+            dv = None
+            if skd in st.session_state:
+                try:
+                    dv = float(st.session_state[skd])
+                except (TypeError, ValueError):
+                    dv = None
+            if dv is None or not math.isfinite(dv) or dv <= 0:
+                msgs.append('Duration (s) must be > 0.')
+        if tt == 'dynamic':
+            sk = _widget_key('cycles_per_step')
+            if sk in st.session_state:
+                try:
+                    cps = int(st.session_state[sk])
+                    if cps <= 0:
+                        msgs.append('Cycles per step must be ≥ 1.')
+                except (TypeError, ValueError):
+                    msgs.append('Cycles per step must be an integer ≥ 1.')
+    elif tt == 'step_change':
+        for fname, label in (
+            ('step_change_frequencies', 'Step-change frequencies'),
+            ('step_change_curves', 'Step-change amplitudes'),
+            ('step_change_cycles_per_step', 'Cycles per step'),
+        ):
+            raw = _fld_raw_str(fname)
+            if not raw:
+                msgs.append(f'{label} field is blank.')
+                continue
+            if fname == 'step_change_cycles_per_step':
+                pi = _parse_int_list(raw)
+                if not pi:
+                    msgs.append(f'{label} not parseable.')
+                elif any(x < 1 for x in pi):
+                    msgs.append(f'{label}: values must be ≥ 1.')
+            else:
+                pf = _parse_float_list(raw)
+                if not pf:
+                    msgs.append(f'{label} not parseable.')
+                elif fname == 'step_change_frequencies' and any(not math.isfinite(x) or x <= 0 for x in pf):
+                    msgs.append('Step-change frequencies must be finite and > 0 Hz.')
+    if tt == 'isometric':
+        sk = _widget_key('isometric_num_steps')
+        if sk in st.session_state:
+            try:
+                if int(st.session_state[sk]) < 1:
+                    msgs.append('Isometric steps must be ≥ 1.')
+            except (TypeError, ValueError):
+                pass
+    if tt == 'isovelocity':
+        sk = _widget_key('isovelocity_num_steps')
+        if sk in st.session_state:
+            try:
+                if int(st.session_state[sk]) < 1:
+                    msgs.append('Isovelocity steps must be ≥ 1.')
+            except (TypeError, ValueError):
+                pass
+    return msgs
+
+
+def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
+    """Return ``(section_label, message)`` for sidebar **Status check**: path, biometrics, experiment form + Bender validation."""
+    out: list[tuple[str, str]] = []
+    tt = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
 
     df = str(st.session_state.get('gui_data_folder') or '').strip()
     fn = str(st.session_state.get('gui_data_filename') or '').strip()
     if not df:
-        out.append('Data folder is empty.')
+        out.append((_CHK_SEC_DATA, 'Data folder is empty.'))
     else:
         try:
             if not os.path.isdir(os.path.normpath(df)):
-                out.append('Data folder is not a valid directory.')
+                out.append((_CHK_SEC_DATA, 'Data folder is not a valid directory.'))
         except Exception:
-            out.append('Data folder path is invalid.')
+            out.append((_CHK_SEC_DATA, 'Data folder path is invalid.'))
     if not fn:
-        out.append('Data file name is empty.')
+        out.append((_CHK_SEC_DATA, 'Data file name is empty.'))
+
+    composed = _compose_output_h5_path().strip()
+    applied = str(getattr(b, 'outputfile', '') or '').strip()
+    if composed and applied and not _paths_equal_norm(applied, composed):
+        out.append((_CHK_SEC_DATA, 'Form path ≠ experiment object (section 2).'))
+    elif composed and not applied:
+        out.append((_CHK_SEC_DATA, 'Data path not set on experiment object (section 2).'))
 
     if not str(st.session_state.get('gui_specimen_id') or '').strip():
-        out.append('Specimen ID is blank.')
+        out.append((_CHK_SEC_BIO, 'Specimen ID is blank.'))
     if not str(st.session_state.get('gui_genus_species') or '').strip():
-        out.append('Genus-species is blank.')
+        out.append((_CHK_SEC_BIO, 'Genus-species is blank.'))
 
-    for label, key in (
+    m = _session_float('bio_fishmass')
+    if m is not None:
+        if m <= 0:
+            out.append((_CHK_SEC_BIO, 'Mass is zero or negative.'))
+        elif m < 1.0:
+            out.append((_CHK_SEC_BIO, f'Mass {m:g} g (check units).'))
+
+    _BIO_INTRINSIC_MM = (
+        ('Whole-body TL', 'bio_fishlen_TL'),
+        ('Whole-body SL', 'bio_fishlen_SL'),
+    )
+    _BIO_CLAMP_GEOMETRY_MM = (
         ('Clamp spacing (dclamp)', 'bio_dclamp'),
         ('Cross-section width', 'bio_xsec'),
         ('Cross-section height', 'bio_xsec_height'),
-        ('Profile length', 'bio_prof_L'),
+    )
+    _BIO_PROFILE_OUTLINE_MM = (('Profile outline length', 'bio_prof_L'),)
+    for label, key in _BIO_INTRINSIC_MM + _BIO_CLAMP_GEOMETRY_MM + _BIO_PROFILE_OUTLINE_MM:
+        v = _session_float(key)
+        if v is None:
+            continue
+        if v <= 0:
+            out.append((_CHK_SEC_BIO, f'{label}: invalid ({v:g} mm).'))
+        elif v < 1.0:
+            out.append((_CHK_SEC_BIO, f'{label}: {v:g} mm (check units).'))
+
+    v_dbend = _session_float('bio_dbend')
+    if v_dbend is not None:
+        if v_dbend < 0:
+            out.append((_CHK_SEC_BIO, f'Segment center distance: invalid ({v_dbend:g} mm).'))
+        elif 0 < v_dbend < 1.0:
+            out.append((_CHK_SEC_BIO, f'Segment center distance: {v_dbend:g} mm (check units).'))
+
+    for label, key in (
+        ('Vertical offset (dvert)', 'bio_dvert'),
+        ('Horizontal offset (dhoriz)', 'bio_dhoriz'),
     ):
         v = _session_float(key)
-        if v is not None and 0 < v < 1.0:
-            out.append(f'{label} is {v:g} mm (< 1 mm — check units).')
-
-    for label, key in (('Clamp spacing', 'bio_dclamp'), ('TL', 'bio_fishlen_TL'), ('SL', 'bio_fishlen_SL')):
-        v = _session_float(key)
-        if v is not None and v <= 0:
-            out.append(f'{label} is zero or negative.')
-
-    m = _session_float('bio_fishmass')
-    if m is not None and m <= 0:
-        out.append('Mass is zero or negative.')
+        if v is None:
+            continue
+        if v < 0:
+            out.append((_CHK_SEC_BIO, f'{label}: invalid ({v:g} mm).'))
+        elif 0 < v < 1.0:
+            out.append((_CHK_SEC_BIO, f'{label}: {v:g} mm (check units).'))
 
     for label, key in (
         ('Profile proximal H', 'bio_prof_ph'),
@@ -938,17 +1250,55 @@ def _collect_input_sanity_warnings() -> list[str]:
         ('Profile distal W', 'bio_prof_dw'),
     ):
         v = _session_float(key)
-        if v is not None and 0 < v < 1.0:
-            out.append(f'{label} is {v:g} mm (< 1 mm).')
+        if v is None:
+            continue
+        if v <= 0:
+            out.append((_CHK_SEC_BIO, f'{label}: invalid ({v:g} mm).'))
+        elif v < 1.0:
+            out.append((_CHK_SEC_BIO, f'{label}: {v:g} mm (check units).'))
 
-    # Dedupe while keeping order
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for w in out:
-        if w not in seen:
-            seen.add(w)
-            uniq.append(w)
+    v_pclamp = _session_float('bio_prof_clamp')
+    if v_pclamp is not None:
+        if v_pclamp < 0:
+            out.append((_CHK_SEC_BIO, f'Axis-clamp distance (profile): invalid ({v_pclamp:g} mm).'))
+        elif 0 < v_pclamp < 1.0:
+            out.append((_CHK_SEC_BIO, f'Axis-clamp distance (profile): {v_pclamp:g} mm (check units).'))
+
+    for msg in _collect_experiment_form_status_messages(tt):
+        out.append((_CHK_SEC_EXP, msg))
+
+    try:
+        rep = b.validate_dispatch_setup(test_type=tt)
+        for m in rep.get('missing') or []:
+            out.append((_CHK_SEC_EXP, f'{tt}: {m}'))
+    except Exception:
+        pass
+
+    # Dedupe (section, message) while keeping order
+    seen: set[tuple[str, str]] = set()
+    uniq: list[tuple[str, str]] = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
     return uniq
+
+
+def _check_sections_for_sidebar() -> Optional[frozenset[str]]:
+    """Which section labels to show in **Status check**. ``None`` = all sections (full workflow)."""
+    if _nav_route() != 'stepwise':
+        return None
+    s = _stepwise_step()
+    if s <= 0:
+        return frozenset()
+    if s == 1:
+        return frozenset({_CHK_SEC_DATA})
+    if s == 2:
+        return frozenset({_CHK_SEC_BIO})
+    if s == 3:
+        return frozenset({_CHK_SEC_EXP})
+    # Step 5 (index 4): full session review before plots
+    return None
 
 
 def _render_sidebar_stepwise_progress() -> None:
@@ -973,16 +1323,34 @@ def _render_sidebar_stepwise_progress() -> None:
 
 
 def _render_sidebar_input_checks() -> None:
-    """Suspicious / missing inputs when hardware is loaded."""
-    if st.session_state.get('bender') is None:
+    """Status check: suspicious or missing inputs when hardware is loaded; grouped by section, filtered in stepwise."""
+    b = st.session_state.get('bender')
+    if b is None:
         return
-    warns = _collect_input_sanity_warnings()
-    if not warns:
+    items = _collect_check_tuples(b)
+    allowed = _check_sections_for_sidebar()
+    if allowed is not None:
+        items = [(sec, msg) for sec, msg in items if sec in allowed]
+    if not items:
         return
-    st.markdown('**Checks**')
-    st.warning('\n\n'.join(f'- {w}' for w in warns[:10]))
-    if len(warns) > 10:
-        st.caption(f'… and {len(warns) - 10} more.')
+    st.markdown('**Status check**')
+    if allowed is None:
+        st.caption('Path, biometrics, and experiment settings worth a second look (full workflow).')
+    else:
+        st.caption(f'For **{_STEPWISE_TAB_LABELS[_stepwise_step()]}** only.')
+    groups: dict[str, list[str]] = {}
+    for sec, msg in items[:24]:
+        groups.setdefault(sec, []).append(msg)
+    parts: list[str] = []
+    for sec, msgs in groups.items():
+        parts.append(f'**{sec}**\n' + '\n'.join(f'- {m}' for m in msgs))
+    st.warning('\n\n'.join(parts))
+    if len(items) > 24:
+        st.caption(f'… and {len(items) - 24} more.')
+    if _CHK_SEC_EXP in groups:
+        st.caption(
+            'Experiment rows combine **Procedure fields** (form) and values on the **Bender** object after **Apply**.'
+        )
     st.divider()
 
 
@@ -1098,10 +1466,44 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
     _float_attr('bio_fishlen_TL', 'fishlen_TL')
     _float_attr('bio_fishlen_SL', 'fishlen_SL')
     _float_attr('bio_xsec_height', 'xsec_height')
-    _float_attr('bio_dvert', 'dvert')
-    _float_attr('bio_dhoriz', 'dhoriz')
+    if 'bio_prep_condition' in st.session_state:
+        meta['prep_condition'] = str(st.session_state.get('bio_prep_condition') or '').strip()
+    if 'bio_temp_room' in st.session_state:
+        try:
+            meta['temp_C_room'] = float(st.session_state['bio_temp_room'])
+        except (TypeError, ValueError):
+            pass
+    if 'bio_temp_tank' in st.session_state:
+        try:
+            meta['temp_C_tank'] = float(st.session_state['bio_temp_tank'])
+        except (TypeError, ValueError):
+            pass
+    if 'bio_dvert' in st.session_state:
+        try:
+            meta['dvert'] = float(st.session_state['bio_dvert'])
+        except (TypeError, ValueError):
+            pass
+    if 'bio_dhoriz' in st.session_state:
+        try:
+            meta['dhoriz'] = float(st.session_state['bio_dhoriz'])
+        except (TypeError, ValueError):
+            pass
 
     b.h5_protocol_metadata = meta
+
+
+def _apply_specimen_identity_to_bender(b: Bender) -> None:
+    """Copy genus/species, specimen ID, ``fishcode``, and ``segment`` from section 3 onto ``b`` and ``h5_protocol_metadata``."""
+    meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
+    meta['genus_species'] = str(st.session_state.get('gui_genus_species') or '').strip()
+    sid = str(st.session_state.get('gui_specimen_id') or '').strip()
+    meta['specimen_id'] = sid
+    b.fishcode = sid
+    seg = str(st.session_state.get('bio_segment') or '').strip()
+    meta['segment'] = seg
+    b.segment = seg
+    b.h5_protocol_metadata = meta
+    _mark_bio_applied()
 
 
 def _apply_pair(b: Bender, name: str, value):
@@ -1137,6 +1539,7 @@ def _apply_procedure_form_to_bender(b: Bender, updates: dict, tt: str) -> None:
     _pn = str(st.session_state.get('gui_post_notes') or '').strip()
     if _pn:
         b.post_trial_notes = _pn
+    _mark_procedure_applied()
 
 
 def _consume_pending_protocol_template(valid_test_types: list) -> None:
@@ -1153,10 +1556,12 @@ def _consume_pending_protocol_template(valid_test_types: list) -> None:
             valid_test_types=list(valid_test_types),
         )
         st.session_state['gui_protocol_load_feedback'] = (ok, msg)
+        if ok:
+            st.session_state['gui_proc_apply_invalidated'] = True
     except OSError as e:
         st.session_state['gui_protocol_load_feedback'] = (False, f'Could not read template: {e}')
     except json.JSONDecodeError as e:
-        st.session_state['gui_protocol_load_feedback'] = (False, f'Invalid JSON: {e}')
+        st.session_state['gui_protocol_load_feedback'] = (False, f'Could not read template file: {e}')
     except Exception as e:
         st.session_state['gui_protocol_load_feedback'] = (False, f'{type(e).__name__}: {e}')
 
@@ -1170,42 +1575,56 @@ def _consume_pending_biometrics_template() -> None:
         ok, msg = apply_biometrics_template_to_session(st.session_state, data)
         st.session_state['gui_biometrics_load_feedback'] = (ok, msg)
         if ok:
+            st.session_state['gui_bio_apply_invalidated'] = True
             st.session_state.pop('gui_tpl_bio_done', None)
     except OSError as e:
         st.session_state['gui_biometrics_load_feedback'] = (False, f'Could not read file: {e}')
     except json.JSONDecodeError as e:
-        st.session_state['gui_biometrics_load_feedback'] = (False, f'Invalid JSON: {e}')
+        st.session_state['gui_biometrics_load_feedback'] = (False, f'Could not read biometrics file: {e}')
     except Exception as e:
         st.session_state['gui_biometrics_load_feedback'] = (False, f'{type(e).__name__}: {e}')
 
 
 def _apply_intrinsic_biometrics_to_bender(b: Bender) -> None:
-    """TL/SL, mass, density, environment, offsets, identity → ``b``."""
+    """Whole-body TL/SL and mass → ``b``; identity/metadata via ``_sync_genus_species_to_bender``."""
     b.fishlen_TL = float(st.session_state['bio_fishlen_TL'])
     b.fishlen_SL = float(st.session_state['bio_fishlen_SL'])
     b.fishmass = float(st.session_state['bio_fishmass'])
-    b.specimen_profile_density_g_per_mm3 = float(st.session_state['bio_prof_rho'])
+    _sync_genus_species_to_bender(b)
+    _mark_bio_applied()
+
+
+def _apply_experimental_conditions_to_bender(b: Bender) -> None:
+    """Room/tank temperatures and prep condition → ``b`` and ``h5_protocol_metadata``."""
     b.temp_C_room = float(st.session_state['bio_temp_room'])
     b.temp_C_tank = float(st.session_state['bio_temp_tank'])
-    b.dvert = float(st.session_state['bio_dvert'])
-    b.dhoriz = float(st.session_state['bio_dhoriz'])
-    b.fishcode = str(st.session_state.get('gui_specimen_id') or '')
-    b.segment = str(st.session_state.get('bio_segment') or '')
-    _sync_genus_species_to_bender(b)
+    meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
+    meta['temp_C_room'] = float(st.session_state['bio_temp_room'])
+    meta['temp_C_tank'] = float(st.session_state['bio_temp_tank'])
+    meta['prep_condition'] = str(st.session_state.get('bio_prep_condition') or '').strip()
+    b.h5_protocol_metadata = meta
+    _mark_bio_applied()
 
 
 def _apply_clamp_geometry_to_bender(b: Bender) -> None:
-    """Clamp spacing, bend position, cross-section at the test segment → ``b``."""
+    """Clamp spacing, bend position, cross-section, and vertical/horizontal offsets → ``b``."""
     b.dclamp = float(st.session_state['bio_dclamp'])
     b.test_segment_length_mm = float(st.session_state['bio_dclamp'])
     b.dbend = float(st.session_state['bio_dbend'])
     b.test_segment_position_mm = float(st.session_state['bio_dbend'])
     b.xsec_width = float(st.session_state['bio_xsec'])
     b.xsec_height = float(st.session_state['bio_xsec_height'])
+    b.dvert = float(st.session_state['bio_dvert'])
+    b.dhoriz = float(st.session_state['bio_dhoriz'])
+    meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
+    meta['dvert'] = float(st.session_state['bio_dvert'])
+    meta['dhoriz'] = float(st.session_state['bio_dhoriz'])
+    b.h5_protocol_metadata = meta
+    _mark_bio_applied()
 
 
 def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
-    """Tapered outline + outline length + density for rotational inertia model → ``b``."""
+    """Tapered outline + specimen density + length for profiled / inertial (and frustum-style) corrections → ``b``."""
     stations = b.make_profile_stations(
         st.session_state['bio_prof_ph'],
         st.session_state['bio_prof_pw'],
@@ -1219,12 +1638,14 @@ def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
         clamp_offset_mm=float(st.session_state['bio_prof_clamp']),
         num_samples=int(st.session_state['bio_prof_samples']),
     )
+    _mark_bio_applied()
 
 
 def _apply_all_biometrics_to_bender(b: Bender) -> None:
-    """Copy intrinsic, clamp, mounted-profile, and inertial flags from section 3 biometrics session state onto ``b``."""
+    """Copy intrinsic, experimental conditions, clamp, profile (density + outline), and inertial flags from section 3 onto ``b``."""
     _sync_biometric_flags_from_session(b)
     _apply_intrinsic_biometrics_to_bender(b)
+    _apply_experimental_conditions_to_bender(b)
     _apply_clamp_geometry_to_bender(b)
     _apply_mounted_profile_inertial_to_bender(b)
 
@@ -1298,6 +1719,7 @@ def _init_biometrics_session_state(b: Bender, *, force: bool = False):
     _put('bio_dbend', float(getattr(b, 'dbend', 0.0) or 0.0))
     _put('bio_temp_room', float(getattr(b, 'temp_C_room', 22.0) or 22.0))
     _put('bio_temp_tank', float(getattr(b, 'temp_C_tank', 22.0) or 22.0))
+    _put('bio_prep_condition', str(_meta_b.get('prep_condition', '') or ''))
     _put(
         'bio_use_theoretical_inertial',
         bool(getattr(b, 'use_theoretical_inertial_correction', False)),
@@ -1441,7 +1863,7 @@ body:has(.bnd-landing-page) section[data-testid="stMain"] button[kind="secondary
         )
     with b:
         st.markdown('**Templates**')
-        st.caption('Load hardware `.py` and biometrics JSON from disk; optional protocol template checklist.')
+        st.caption('Load hardware `.py` and saved biometrics from disk; optional protocol template checklist.')
     with c:
         st.markdown('**Step-by-step**')
         st.caption('One focus per step with a progress bar; good for training or checklist-style sessions.')
@@ -1523,7 +1945,7 @@ def _render_app_chrome() -> None:
 
 
 def _render_sidebar() -> None:
-    """Sidebar: stepwise progress, input checks, emergency stop."""
+    """Sidebar: stepwise progress, status check, emergency stop."""
     with st.sidebar:
         if _nav_route() == 'stepwise':
             _render_sidebar_stepwise_progress()
@@ -1573,6 +1995,13 @@ def _render_stepwise_rail() -> None:
     if cur != st.session_state.get('gui_stepwise_step'):
         st.session_state['gui_stepwise_step'] = cur
 
+    if err := st.session_state.pop('gui_sw_default_hw_err', None):
+        _st_error_detail(
+            'Default hardware load failed.',
+            ['Use step 1 to pick module', 'Read Details'],
+            err,
+        )
+
     with st.container(border=True):
         st.progress(min(1.0, (cur + 1) / 5.0), text=f'Step {cur + 1} / 5 · {_STEPWISE_TAB_SHORT[cur]}')
 
@@ -1615,15 +2044,36 @@ def _render_stepwise_rail() -> None:
 
     if st.session_state.get('bender') is None and _stepwise_step() >= 2:
         with st.container(border=True):
-            w1, w2 = st.columns([3, 1])
+            st.warning(
+                '**Hardware not loaded.** Finish **Step 1** (hardware) and **Step 2** (data path) first, or use **Load default hardware** below.'
+            )
+            w1, w2 = st.columns(2)
             with w1:
-                st.warning(
-                    'No hardware configuration is loaded yet. Go back to **step 1** to choose a module, then **step 2** '
-                    'to set folder, file name, and **Set data file path** before continuing to biometrics.'
-                )
-            with w2:
                 if st.button('Go to step 1', key='gui_stepwise_go_a', use_container_width=True):
                     st.session_state['gui_stepwise_step'] = 0
+                    st.rerun()
+            with w2:
+                if st.button(
+                    'Load default hardware and proceed',
+                    key='gui_sw_load_default_hw',
+                    use_container_width=True,
+                    help='Loads the typed override if valid, else jimenez_bender_config_A, else the first project module, then continues here.',
+                ):
+                    _mods = discover_config_modules(_ROOT)
+                    _typed = str(st.session_state.get('gui_cfg_mod') or '').strip()
+                    _stem = _typed if _typed and _typed in _mods else None
+                    if _stem is None and 'jimenez_bender_config_A' in _mods:
+                        _stem = 'jimenez_bender_config_A'
+                    if _stem is None and _mods:
+                        _stem = _mods[0]
+                    if not _stem:
+                        st.session_state['gui_sw_default_hw_err'] = 'No hardware `.py` config modules found in the project folder.'
+                        st.rerun()
+                    _err = _apply_loaded_config_module(_stem)
+                    if _err:
+                        st.session_state['gui_sw_default_hw_err'] = _err
+                        st.rerun()
+                    st.toast(f'Loaded `{_stem}`. Complete **Step 2** (data path) before **Run**.')
                     st.rerun()
 
 
@@ -1633,8 +2083,9 @@ def _cb_tpl_config_module_changed() -> None:
 
 def _render_template_procedure_strip() -> None:
     """Compact loaders: config + biometrics from disk, then experiment sections (procedure edited in the app)."""
+    _ensure_hw_config_session_defaults()
     st.subheader('Load saved files')
-    st.caption('Order: hardware `.py` → data path → biometrics JSON. Reload module after changing the list or typed name.')
+    st.caption('Order: hardware `.py` → data path → biometrics file. Reload module after changing the list or typed name.')
 
     if st.session_state.pop('gui_tpl_reload_config', False):
         eff = effective_load_module_name(
@@ -1707,10 +2158,11 @@ def _render_template_procedure_strip() -> None:
     _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
     _bio_opts: list = [None] + _bio_tpl_list
     st.selectbox(
-        'Biometrics JSON',
+        'Biometrics file',
         _bio_opts,
         format_func=_biometrics_template_option_label,
         key='gui_biometrics_template_select',
+        help='Saved specimen/setup files in your data folder (`.json` on disk).',
     )
     if _load_save_button('Load biometrics into form', key='gui_biometrics_btn_load_tpl'):
         _bp = st.session_state.get('gui_biometrics_template_select')
@@ -1726,13 +2178,14 @@ def _render_template_procedure_strip() -> None:
         else:
             _st_error_detail(
                 'Biometrics load failed.',
-                ['Check JSON file', 'Read Details'],
+                ['Check file format', 'Read Details'],
                 txt_bf,
             )
     if st.session_state.get('bender') is not None:
         if _load_save_button(
             'Apply loaded biometrics to experiment',
             key='gui_tpl_apply_bio_to_bender',
+            help='Same as **section 3 · Apply all biometrics**: identity, intrinsic, experimental conditions, clamp, profile, inertial flag.',
         ):
             _apply_all_biometrics_to_bender(st.session_state['bender'])
             st.session_state['gui_tpl_bio_done'] = True
@@ -1760,6 +2213,9 @@ def main():
         st.session_state['gui_genus_species'] = ''
     if 'gui_specimen_id' not in st.session_state:
         st.session_state['gui_specimen_id'] = ''
+    if 'bio_prep_condition' not in st.session_state:
+        st.session_state['bio_prep_condition'] = ''
+    st.session_state.setdefault('bio_prof_rho_preset', 'Custom — edit the number below')
     st.session_state.setdefault('gui_app_route', 'landing')
     if _nav_route() == 'landing':
         _render_landing_page()
@@ -1775,8 +2231,18 @@ def main():
         st.session_state.pop('gui_tpl_need_procedure', None)
         st.markdown('**Template mode** — check what you already have on disk.')
         st.checkbox('I have a saved hardware **config**', value=True, key='gui_tpl_chk_config')
-        st.checkbox('I have a **biometrics** JSON file', value=True, key='gui_tpl_chk_biometrics')
-        st.checkbox('I already have a **protocol** template (JSON)', value=False, key='gui_tpl_have_protocol_template')
+        st.checkbox(
+            'I have a saved **biometrics** file',
+            value=True,
+            key='gui_tpl_chk_biometrics',
+            help='Usually a `.json` file in your data folder with lengths, clamp spacing, etc.',
+        )
+        st.checkbox(
+            'I already have a **protocol** template',
+            value=False,
+            key='gui_tpl_have_protocol_template',
+            help='A saved procedure file (`.json`) listing experiment type and parameters.',
+        )
         if not _tpl_only_procedure():
             st.info(
                 'All sections below match **Build from scratch**, or use **Load template into form** in **section 4** when you '
@@ -2041,49 +2507,37 @@ def main():
         )
 
     if _show_data_path_section():
+        _ensure_hw_config_session_defaults()
         st.subheader('2 · Data file path')
         st.caption('HDF5 save location (separate from the hardware `.py` module).')
         _sw_dp = _stepwise_on_data_file_path_step()
         with st.container(border=True):
             if _sw_dp:
                 st.caption('Red button sets the path; it also reloads the module if you changed it in step 1.')
-            st.session_state.setdefault('gui_sec1_hide', False)
-            st.checkbox(
-                'Collapse data path fields (values are kept)',
-                key='gui_sec1_hide',
-                help='Hides folder and file name inputs to reduce scrolling. Uncheck to edit again.',
-            )
-            if st.session_state.get('gui_sec1_hide'):
-                st.caption('Expand the checkbox above to edit **Data folder** and **Data file name**.')
+            df_col, fn_col = st.columns(2)
+            with df_col:
+                st.text_input(
+                    'Data folder',
+                    key='gui_data_folder',
+                    placeholder=r'Example: C:\Users\me\Data\Experiments',
+                    help=DATA_FOLDER_HELP,
+                )
+            with fn_col:
+                st.text_input(
+                    'Data file name',
+                    key='gui_data_filename',
+                    placeholder='my_experiment.h5',
+                    help=DATA_FILE_NAME_HELP,
+                )
+            full_out = _compose_output_h5_path()
+            if full_out:
+                st.caption(f'**Save path (base name):** `{full_out}`')
+                st.caption(
+                    'If this file already exists when you **Run** or save, the app writes to a **new** name with a numeric suffix '
+                    '(e.g. `_001`) so nothing is overwritten — the preview above does not show that suffix until after save.'
+                )
             else:
-                df_col, fn_col = st.columns(2)
-                with df_col:
-                    st.text_input(
-                        'Data folder',
-                        key='gui_data_folder',
-                        placeholder=r'Example: C:\Users\me\Data\Experiments',
-                        help=DATA_FOLDER_HELP,
-                    )
-                with fn_col:
-                    st.text_input(
-                        'Data file name',
-                        key='gui_data_filename',
-                        placeholder='my_experiment.h5',
-                        help=DATA_FILE_NAME_HELP,
-                    )
-                full_out = _compose_output_h5_path()
-                if full_out:
-                    st.caption(f'**Save path:** `{full_out}`')
-                else:
-                    st.caption('Enter a file name to preview the full path.')
-                anchor = _output_path_anchor_for_review()
-                qc_files = _candidate_review_files(anchor) if anchor else []
-                if qc_files:
-                    st.caption(
-                        f'{len(qc_files)} data-related file(s) in this folder — use **section 8** for plots and **section 9** for notes.'
-                    )
-                elif full_out:
-                    st.caption('No matching files in the folder yet; run or save to create some.')
+                st.caption('Enter a file name to preview the full path.')
             _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
             if _cfg_mode == 'Load existing':
                 _load_lbl = 'Set data file path' if _sw_dp else 'Load hardware configuration and data path'
@@ -2093,12 +2547,23 @@ def main():
                     else 'Loads the module from section 1 and sets the save path. Does not start DAQ; re-click after changes.'
                 )
                 if _load_save_button(_load_lbl, key='gui_btn_load_config', help=_load_hlp):
+                    _ensure_hw_config_session_defaults()
                     eff = effective_load_module_name(
                         typed=str(st.session_state.get('gui_cfg_mod') or ''),
                         selected=str(st.session_state.get('gui_load_cfg_select') or ''),
                     )
                     if not eff:
-                        _st_error_actions('No config selected.', ['Pick list or type name'])
+                        _mods_here = discover_config_modules(_ROOT)
+                        if not _mods_here:
+                            _st_error_actions(
+                                'No hardware config modules found.',
+                                ['Add a `.py` config module in the project folder'],
+                            )
+                        else:
+                            _st_error_actions(
+                                'No config module resolved.',
+                                ['Pick a module from the list in Step 1', 'Or type a name in Override'],
+                            )
                     else:
                         b0 = st.session_state.get('bender')
                         need_hw_reload = b0 is None or not _selected_config_matches_bender(b0, eff)
@@ -2157,11 +2622,15 @@ def main():
                     else:
                         st.toast('Data file path set.' if _sw_dp else 'Data file path applied.')
                         st.rerun()
+            if _data_path_apply_dirty():
+                _soft_apply_reminder()
+            _touch_data_path_baseline_if_clean()
 
     if 'bender' not in st.session_state:
         st.stop()
 
     b: Bender = st.session_state['bender']
+    _ensure_apply_tracking_bender(b)
     _init_biometrics_session_state(b, force=False)
     _sync_biometric_flags_from_session(b)
     _ensure_review_file_selection(
@@ -2173,17 +2642,19 @@ def main():
 
     if _show_full_sec2():
         st.subheader('3 · Biometrics')
+        if _bio_apply_dirty():
+            _soft_apply_reminder()
 
         st.markdown('**Biometrics templates**')
         st.caption(
-            'Save or reload this section as JSON in your **Data folder** (**section 2**). After **Load biometrics**, use **Apply** '
-            'in each block below (or **Apply all biometrics**) to update the experiment object.'
+            'Save or reload this section to a file in your **Data folder** (**section 2**). After **Load biometrics**, use **Apply** '
+            'in each block — **Specimen identity**, **Intrinsic**, **Experimental conditions**, **Clamp**, **Profile** — or **Apply all**.'
         )
         _df_check = str(st.session_state.get('gui_data_folder') or '').strip()
         _bio_tpl_dir = _shared_experiment_dir()
         if not (_df_check and os.path.isdir(os.path.normpath(_df_check))):
             st.caption(
-                f'**Data folder** is not set or not found on disk—listing template JSON files from `{_bio_tpl_dir}` until '
+                f'**Data folder** is not set or not found on disk—listing saved template files from `{_bio_tpl_dir}` until '
                 '**section 2** points to a valid folder.'
             )
         if bf := st.session_state.pop('gui_biometrics_load_feedback', None):
@@ -2193,7 +2664,7 @@ def main():
             else:
                 _st_error_detail(
                     'Biometrics load failed.',
-                    ['Check JSON file', 'Read Details'],
+                    ['Check file format', 'Read Details'],
                     txt_bf,
                 )
         if bfs := st.session_state.pop('gui_biometrics_save_feedback', None):
@@ -2219,7 +2690,7 @@ def main():
             if _load_save_button(
                 'Load biometrics into form',
                 key='gui_biometrics_btn_load',
-                help='Fills biometrics widgets from the file. Use **Apply** in each block below (or **Apply all**) to update `Bender`.',
+                help='Fills biometrics widgets from the file. Use **Apply** in each block (identity, intrinsic, experimental conditions, clamp, profile) or **Apply all**.',
             ):
                 if not _bio_pick:
                     st.session_state['gui_biometrics_load_feedback'] = (False, 'Choose a biometrics file first.')
@@ -2230,7 +2701,13 @@ def main():
             st.caption('Independent of **protocol templates** in **section 4**.')
 
         st.text_input('Save biometrics as (name)', key='gui_biometrics_new_name', placeholder='e.g. Zebrafish adult default')
-        st.text_area('Description (optional)', key='gui_biometrics_new_desc', height=50, placeholder='Optional note stored in the JSON file.')
+        st.text_area(
+            'Description (optional)',
+            key='gui_biometrics_new_desc',
+            height=50,
+            placeholder='Optional note saved inside the file.',
+            help='Stored in the file metadata when you save.',
+        )
         st.checkbox('Overwrite if same file name exists', key='gui_biometrics_overwrite')
         if _load_save_button('Save biometrics', key='gui_biometrics_btn_save'):
             _bn = str(st.session_state.get('gui_biometrics_new_name') or '').strip()
@@ -2258,7 +2735,10 @@ def main():
 
         st.divider()
         st.markdown('**Specimen identity**')
-        st.caption('Export metadata (`genus_species`, `specimen_id`) and notebook-style `fishcode` (mirrors specimen ID).')
+        st.caption(
+            'Export metadata (`genus_species`, `specimen_id`) and notebook-style `fishcode` (mirrors specimen ID). '
+            'Same pattern as other blocks in this section: edit fields, then **Apply**.'
+        )
         id1, id2 = st.columns(2)
         with id1:
             st.text_input(
@@ -2275,43 +2755,63 @@ def main():
                 help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
             )
         st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
+        if st.button(
+            'Apply specimen identity',
+            key='bio_btn_identity',
+            help='Writes genus/species, specimen ID, fishcode, and segment onto the experiment object (HDF5 metadata on export).',
+        ):
+            _apply_specimen_identity_to_bender(b)
+            st.toast('Specimen identity applied.')
 
         st.divider()
         st.session_state.setdefault('gui_bio_hide', False)
-        if st.session_state.get('gui_bio_hide'):
+        _bio_section_collapsed = bool(st.session_state.get('gui_bio_hide')) and _nav_route() != 'stepwise'
+        if _bio_section_collapsed:
             st.caption(
                 'Section body hidden. Uncheck **Hide section** at the bottom to edit biometrics inputs.'
             )
         else:
             st.markdown('### Intrinsic biometrics')
             st.caption(
-                'Whole-specimen lengths, mass, material density, environment, and offsets. Identity fields above are applied '
-                'with this block.'
+                'Whole-specimen lengths and mass. **Apply intrinsic biometrics** also refreshes protocol metadata for identity '
+                '(same as **Apply specimen identity** above). Offsets, density, and temperatures are in the blocks below.'
             )
             L1, L2 = st.columns(2)
             with L1:
                 st.number_input('Total length TL (`fishlen_TL`)', min_value=0.0, format='%.6g', key='bio_fishlen_TL')
-                st.number_input('Total length SL (`fishlen_SL`)', min_value=0.0, format='%.6g', key='bio_fishlen_SL')
             with L2:
-                st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
-                st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
-            m1, m2 = st.columns(2)
-            with m1:
-                st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
-            with m2:
-                st.number_input('Specimen density (g / mm³)', min_value=1e-9, format='%.6g', key='bio_prof_rho')
-            t1, t2 = st.columns(2)
-            with t1:
-                st.number_input('temp_C_room', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_room')
-            with t2:
-                st.number_input('temp_C_tank', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_tank')
+                st.number_input('Total length SL (`fishlen_SL`)', min_value=0.0, format='%.6g', key='bio_fishlen_SL')
+            st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
             if st.button('Apply intrinsic biometrics', key='bio_btn_intrinsic'):
                 _apply_intrinsic_biometrics_to_bender(b)
                 st.toast('Intrinsic biometrics applied.')
 
             st.divider()
+            st.markdown('### Experimental conditions')
+            st.caption(
+                'Environmental context for the trial (not specimen geometry). Stored on the experiment object and in HDF5 protocol metadata.'
+            )
+            t1, t2 = st.columns(2)
+            with t1:
+                st.number_input('Room temperature (`temp_C_room`, °C)', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_room')
+            with t2:
+                st.number_input('Tank / bath temperature (`temp_C_tank`, °C)', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_tank')
+            st.text_input(
+                'Prep condition',
+                key='bio_prep_condition',
+                placeholder='e.g. anesthetized, recovered 24 h, fasted',
+                help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+            )
+            if st.button('Apply experimental conditions', key='bio_btn_exp_conditions'):
+                _apply_experimental_conditions_to_bender(b)
+                st.toast('Experimental conditions applied.')
+
+            st.divider()
             st.markdown('### Clamp geometry')
-            st.caption('Spacing between clamps and where the bend is measured along the body; cross-section at the test segment for strain ↔ motor mapping.')
+            st.caption(
+                'Clamp spacing, bend location along the body, cross-section at the test segment, and vertical/horizontal offsets '
+                '(`dvert`, `dhoriz`) for strain ↔ motor mapping.'
+            )
             st.number_input(
                 'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`)',
                 min_value=0.001,
@@ -2319,16 +2819,22 @@ def main():
                 key='bio_dclamp',
             )
             st.number_input(
-                'Test segment position (`dbend` / `test_segment_position_mm`)',
+                'Along-body distance to center of clamped test segment (mm)',
                 min_value=0.0,
                 format='%.6g',
                 key='bio_dbend',
+                help=BIO_DBEND_FIELD_HELP,
             )
             x1, x2 = st.columns(2)
             with x1:
                 st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
             with x2:
                 st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
+            o1, o2 = st.columns(2)
+            with o1:
+                st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
+            with o2:
+                st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
             if st.button('Apply clamp geometry', key='bio_btn_clamp'):
                 _apply_clamp_geometry_to_bender(b)
                 st.toast('Clamp geometry applied.')
@@ -2336,8 +2842,28 @@ def main():
             st.divider()
             st.markdown('### Mounted body profile (inertial model)')
             st.caption(
-                'Tapered outline between proximal and distal cross-sections, outline length, and integration settings. '
-                'Uses the same **density** as intrinsic biometrics. Drives rotational inertia for corrections.'
+                'Tapered outline between proximal and distal cross-sections, **specimen density**, outline length, and integration. '
+                'Density feeds the profiled inertial model (and related frustum-style inertia calculations).'
+            )
+            st.selectbox(
+                'Typical density (sets g/mm³ below)',
+                BIO_DENSITY_PRESET_LABELS,
+                key='bio_prof_rho_preset',
+                on_change=_on_bio_density_preset_changed,
+                help=(
+                    'Quick picks from literature-scale values: ~1.00 g/cm³ water-like, ~1.06 g/cm³ muscle/soft tissue, '
+                    '~1.9 g/cm³ cortical bone. Values are converted to **g/mm³** for the field below (divide g/cm³ by 1000).'
+                ),
+            )
+            st.number_input(
+                'Specimen density (g / mm³)',
+                min_value=1e-9,
+                format='%.6g',
+                key='bio_prof_rho',
+                help=(
+                    'Mass density for the inertial model (`specimen_profile_density_g_per_mm3`). '
+                    '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
+                ),
             )
             st.number_input(
                 'Specimen outline length for profile model (mm)',
@@ -2355,7 +2881,13 @@ def main():
                 st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_dw')
             p3, p4 = st.columns(2)
             with p3:
-                st.number_input('Clamp offset (mm)', min_value=0.0, format='%.6g', key='bio_prof_clamp')
+                st.number_input(
+                    'Distance from rotation axis to clamps (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='bio_prof_clamp',
+                    help=BIO_PROF_CLAMP_FIELD_HELP,
+                )
             with p4:
                 st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='bio_prof_samples')
             if st.button('Apply mounted profile & inertia model', key='bio_btn_profile'):
@@ -2371,20 +2903,28 @@ def main():
                     'profile above when correcting measured torque.'
                 ),
             )
+            st.caption(
+                'This checkbox is saved on the experiment object when you click any **Apply** in this section (including **Apply all**).'
+            )
 
         if st.button(
             'Apply all biometrics',
             key='bio_btn_apply_all',
-            help='Copies intrinsic biometrics, clamp geometry, mounted profile / inertia model, and the inertial-correction flag onto the experiment object.',
+            help=(
+                'Runs all applies in order: intrinsic (incl. identity metadata), experimental conditions, clamp geometry '
+                '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
+            ),
         ):
             _apply_all_biometrics_to_bender(b)
             st.toast('Biometrics applied.')
 
-        st.checkbox(
-            'Hide section (values stay; unhide to edit)',
-            key='gui_bio_hide',
-            help='Collapse biometrics fields after you are done editing or applying.',
-        )
+        if _nav_route() != 'stepwise':
+            st.checkbox(
+                'Hide section (values stay; unhide to edit)',
+                key='gui_bio_hide',
+                help='Collapse biometrics fields after you are done editing or applying.',
+            )
+        _touch_bio_apply_baseline_if_clean()
 
     if _show_sec3_through_6():
 
@@ -2393,7 +2933,7 @@ def main():
 
         st.markdown('**Protocol templates (load)**')
         st.caption(
-            'Lists `.json` files in your **Data folder** (**section 2**). **Load template into form** sets **experiment type** '
+            'Lists saved protocol files in your **Data folder** (**section 2**). **Load template into form** sets **experiment type** '
             'and procedure fields; click **Apply** (below or in **section 6**) to copy onto the Bender object. Does not '
             'change **section 3** biometrics—use **Load biometrics** there or enter fields manually.'
         )
@@ -2404,7 +2944,7 @@ def main():
             else:
                 _st_error_detail(
                     'Protocol load failed.',
-                    ['Check JSON template', 'Read Details'],
+                    ['Check template file', 'Read Details'],
                     txt_fb,
                 )
         _tpl_folder_top = _shared_experiment_dir()
@@ -2415,6 +2955,7 @@ def main():
             _tpl_options_top,
             format_func=_protocol_template_option_label,
             key='gui_protocol_template_select',
+            help='Procedure files saved from this app (`.json` in the data folder).',
         )
         c_tl_top, c_ts_top = st.columns(2)
         with c_tl_top:
@@ -2447,11 +2988,13 @@ def main():
         updates = {}
 
         with st.expander('Procedure fields', expanded=not bool(st.session_state.get('gui_exp_hide'))):
+            if _procedure_apply_dirty():
+                _soft_apply_reminder()
             if tt == 'isometric':
                 st.caption(
                     '**Isometric** turns strain or curvature targets into motor angles using **test segment length** '
                     'and **cross-section width** from **section 3** (same as clamp spacing `dclamp`). '
-                    'Those values are copied to the experiment object when you **Run** or **Apply**.'
+                    'Those values are copied when you use **Apply** in **section 3** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
                 )
                 st.markdown('**Required**')
                 for key in schema['isometric_required']:
@@ -2472,7 +3015,7 @@ def main():
                             b,
                             key,
                             'json_dict',
-                            'Isometric step timing & stimulation (JSON, optional)',
+                            'Isometric step timing & stimulation (optional)',
                             help_text=ISOMETRIC_STIM_JSON_HELP,
                         )
                     elif key == 'isometric_stim_overrides':
@@ -2480,7 +3023,7 @@ def main():
                             b,
                             key,
                             'json_dict',
-                            'Isometric stim routing overrides (JSON, advanced)',
+                            'Stim routing overrides (advanced)',
                             help_text=ISOMETRIC_STIM_OVERRIDES_HELP,
                         )
                     elif key == 'recruitment':
@@ -2577,7 +3120,7 @@ def main():
                             b,
                             key,
                             'json_dict',
-                            'Isovelocity segment timing & stimulation (JSON, optional)',
+                            'Isovelocity segment timing & stimulation (optional)',
                             help_text=ISOVELOCITY_STIM_JSON_HELP,
                         )
                     elif key == 'isovelocity_stim_overrides':
@@ -2585,7 +3128,7 @@ def main():
                             b,
                             key,
                             'json_dict',
-                            'Isovelocity stim routing overrides (JSON, advanced)',
+                            'Stim routing overrides (advanced)',
                             help_text=ISOVELOCITY_STIM_OVERRIDES_HELP,
                         )
                     elif key == 'recruitment':
@@ -2762,6 +3305,8 @@ def main():
                     st.session_state['gui_protocol_save_feedback'] = (False, f'{type(e).__name__}: {e}')
                 st.rerun()
 
+            _touch_proc_apply_baseline_if_clean()
+
         ap1, ap2 = st.columns([1, 4])
         with ap1:
             if st.button(
@@ -2790,6 +3335,8 @@ def main():
             'matches the preview if you do not overwrite those arrays elsewhere. '
             'Set **test_segment_length_mm** and **xsec_width** in **section 3** (or **Apply** there) so preview matches strain geometry.'
         )
+        if _procedure_apply_dirty() or _bio_apply_dirty():
+            _soft_apply_reminder()
         if st.session_state.get('gui_sec4_hide'):
             st.caption('Preview panel hidden. Uncheck **Hide section** below to show controls and plots.')
         else:
@@ -2798,7 +3345,10 @@ def main():
                 if st.button(
                     'Apply (procedure + biometrics)',
                     key='gui_preview_apply',
-                    help='Copy procedure and biometrics onto `Bender` (like section 6 **Apply procedure** plus biometrics).',
+                    help=(
+                        'Procedure: full **Apply procedure** sync. Biometrics: flags + identity/metadata from the form (same as '
+                        '**Apply specimen identity** + intrinsic metadata). For clamp/profile numbers, use **section 3** Apply.'
+                    ),
                 ):
                     _sync_biometric_flags_from_session(b)
                     _sync_genus_species_to_bender(b)
@@ -2810,6 +3360,7 @@ def main():
                 _sync_biometric_flags_from_session(b)
                 _sync_genus_species_to_bender(b)
                 _apply_form_updates(b, updates, tt)
+                _mark_procedure_applied()
                 st.session_state['gui_last_preview'] = build_protocol_preview(
                     b, requested_test_type=tt, max_plot_points=int(pv_pts)
                 )
@@ -2897,10 +3448,13 @@ def main():
         if st.session_state.get('gui_sec5_hide'):
             st.caption('Run controls hidden. Uncheck **Hide section** below.')
         else:
+            if _procedure_apply_dirty() or _bio_apply_dirty():
+                _soft_apply_reminder()
             if st.button('View current settings'):
                 _sync_biometric_flags_from_session(b)
                 _sync_genus_species_to_bender(b)
                 _apply_form_updates(b, updates, tt)
+                _mark_procedure_applied()
                 settings_rows = [
                     {'group': 'experiment', 'name': 'test_type', 'value': tt},
                     {
@@ -2921,8 +3475,23 @@ def main():
                     {'group': 'biometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
                     {'group': 'biometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
                     {'group': 'biometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
-                    {'group': 'biometric', 'name': 'temp_C_room', 'value': getattr(b, 'temp_C_room', None)},
-                    {'group': 'biometric', 'name': 'temp_C_tank', 'value': getattr(b, 'temp_C_tank', None)},
+                    {'group': 'biometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
+                    {'group': 'biometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
+                    {
+                        'group': 'conditions',
+                        'name': 'temp_C_room',
+                        'value': getattr(b, 'temp_C_room', None),
+                    },
+                    {
+                        'group': 'conditions',
+                        'name': 'temp_C_tank',
+                        'value': getattr(b, 'temp_C_tank', None),
+                    },
+                    {
+                        'group': 'conditions',
+                        'name': 'prep_condition',
+                        'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('prep_condition', ''),
+                    },
                 ]
                 for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
                     settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
@@ -2943,6 +3512,7 @@ def main():
                     _sync_biometric_flags_from_session(b)
                     _sync_genus_species_to_bender(b)
                     _apply_form_updates(b, updates, tt)
+                    _mark_procedure_applied()
                     rep = b.validate_dispatch_setup(test_type=tt)
                     if rep['ok']:
                         st.success('All required fields for this procedure are set.')
@@ -2956,7 +3526,7 @@ def main():
                 'Biometrics applied (section 3)',
                 value=False,
                 key='gui_run_biometrics_confirm',
-                help='Confirm you loaded JSON or used Apply / Apply all in section 3.',
+                help='Confirm you used **Apply** in each edited block (identity, intrinsic, experimental conditions, clamp, profile) or **Apply all**.',
             )
             needs_cal_confirm = _needs_missing_calibration_confirmation(b)
             if needs_cal_confirm:
@@ -2966,24 +3536,42 @@ def main():
                 key='gui_confirm_run_without_calibration',
                 disabled=not needs_cal_confirm,
             )
+            needs_dest_confirm = _section2_destination_incomplete()
+            if needs_dest_confirm:
+                st.warning(
+                    '**No designated file destination.** Data will not save to a known `.h5` path until you set '
+                    '**Data folder** and **Data file name** in **section 2**. Proceed anyway?'
+                )
+            ok_wo_dest = st.checkbox(
+                'Yes, proceed without section 2 save path',
+                key='gui_confirm_run_without_destination',
+                disabled=not needs_dest_confirm,
+                help='Only for quick tests; without section 2 the app may not write an .h5 where you expect.',
+            )
+            _run_dest_block = needs_dest_confirm and not ok_wo_dest
             _, _run_big, _ = st.columns([1, 2, 1])
             with _run_big:
                 if st.button(
                     'Run experiment',
                     type='primary',
                     use_container_width=True,
-                    disabled=not daq_ok or not bio_confirm,
+                    disabled=not daq_ok or not bio_confirm or _run_dest_block,
                     help='Starts DAQ acquisition.',
                 ):
                     _sync_biometric_flags_from_session(b)
                     _apply_form_updates(b, updates, tt)
                     _sync_genus_species_to_bender(b)
+                    _mark_procedure_applied()
                     outp = _compose_output_h5_path().strip()
                     if outp:
                         b.outputfile = outp
+                        _mark_data_path_applied()
                     notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
                     if needs_cal_confirm and not ok_wo_cal:
                         st.info('Run canceled. Check "Yes, proceed without calibration file" to continue.')
+                        return
+                    if needs_dest_confirm and not ok_wo_dest:
+                        st.info('Run canceled. Set **section 2** or check "Yes, proceed without section 2 save path".')
                         return
                     try:
                         _status_factory = getattr(st, 'status', None)
@@ -3146,18 +3734,13 @@ def main():
             data_path = _output_path_anchor_for_review(b)
             review_files = _candidate_review_files(data_path) if data_path else []
             if not review_files:
-                st.info(
-                    'No `.h5` / image / HTML files found in the current data folder yet. '
-                    'Set **section 2** **Data folder** and **Data file name**, or run/export to create files.'
-                )
+                st.info('No matching files in the data folder yet. Set **Data folder** and **Data file name** in Step 2, then run or export.')
             else:
                 selected_file = st.session_state.get('gui_review_selected')
                 if selected_file not in review_files:
                     st.session_state['gui_review_selected'] = review_files[0]
                     selected_file = review_files[0]
-                st.caption(
-                    f'**Selected file:** `{os.path.basename(selected_file)}` — choose or confirm the same file in **section 9 · Add note**.'
-                )
+                st.caption(f'**Selected file:** `{os.path.basename(selected_file)}`')
                 ext = os.path.splitext(str(selected_file).lower())[1]
                 if ext in ('.png', '.jpg', '.jpeg', '.webp'):
                     st.image(selected_file, caption=os.path.basename(selected_file))
@@ -3166,7 +3749,7 @@ def main():
     
                 st.markdown('**Custom plots from data file**')
                 if ext != '.h5':
-                    st.info('Choose a **`.h5`** data file in **section 9 · Add note** to plot saved time series (torque, angle, stim, etc.).')
+                    st.info('Select a **`.h5`** file above to plot saved time series (torque, angle, stim, etc.).')
                 else:
                     summ = h5_custom_plot_summary(selected_file)
                     if not summ['ok']:
@@ -3300,10 +3883,8 @@ def main():
         st.session_state.setdefault('gui_sec8_hide', False)
         st.subheader('9 · Add note')
         st.caption(
-            'Write down anything you noticed about the specimen, apparatus, data quality, etc. that may impact analysis '
-            'downstream. Pick a data-folder file below for QC plot naming and **section 8** plots. '
-            'Notes here are saved into the `.h5` on export. After **Run** or **Save Data File (.h5) and QC Plot**, the app '
-            'writes data and a QC plot; PNG needs **kaleido** (`pip install kaleido`), otherwise HTML.'
+            'Optional notes (specimen, setup, data quality). Pick a file below; notes append to the chosen `.h5`. '
+            'QC plot export may use **kaleido** for PNG (`pip install kaleido`); otherwise HTML.'
         )
         if st.session_state.get('gui_sec8_hide'):
             st.caption('Note controls hidden. Uncheck **Hide section** below.')
@@ -3311,20 +3892,15 @@ def main():
             data_path_qc = _output_path_anchor_for_review(b)
             review_files_qc = _candidate_review_files(data_path_qc) if data_path_qc else []
             if not review_files_qc:
-                st.info(
-                    'Set **section 2** **Data folder** and **Data file name** (or save once) so files appear here.'
-                )
+                st.info('Set **Data folder** and **Data file name** in Step 2 (or save once) so files appear here.')
             else:
                 _ensure_review_file_selection(review_files_qc)
                 st.selectbox(
-                    'Data folder file (QC plot name, section 8 plots)',
+                    'Data folder file',
                     review_files_qc,
                     key='gui_review_selected',
                     format_func=lambda fp: os.path.basename(fp),
-                    help=(
-                        'Files in your **data folder**. Choosing an `.h5` sets the stem for the next QC plot export '
-                        '(**section 7**).'
-                    ),
+                    help='Files in your data folder. An `.h5` selection sets the base name for the next QC plot export.',
                 )
 
             tr_qc = list(getattr(b, 'trial_records', []) or [])
