@@ -22,8 +22,10 @@ import tempfile
 from typing import Optional
 
 import h5py
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 # Project root on path for `bender_functions` and config modules
@@ -92,18 +94,45 @@ from bender_h5_explore import (  # noqa: E402
 
 _BND_LS_ACTION_MARK = '<div class="bnd-ls-action" aria-hidden="true"></div>'
 
+# App chrome presets (CSS markers: `body:has(.bnd-theme-*)` in `_inject_accessibility_theme`).
+GUI_UI_THEME_OPTIONS = (
+    'Default (Streamlit)',
+    'Warm paper',
+    'Cool gray',
+    'Slate & ivory',
+)
+_GUI_THEME_TO_MARKER = {
+    'Default (Streamlit)': '',
+    'Warm paper': 'bnd-theme-warm',
+    'Cool gray': 'bnd-theme-cool',
+    'Slate & ivory': 'bnd-theme-slateivory',
+}
+
+
+def _migrate_gui_ui_theme_session() -> None:
+    """Map removed options and unknown values onto ``GUI_UI_THEME_OPTIONS``."""
+    v = str(st.session_state.get('gui_ui_theme', '') or '').strip()
+    if v in ('Default', 'High contrast'):
+        st.session_state['gui_ui_theme'] = GUI_UI_THEME_OPTIONS[0]
+        return
+    if v and v not in GUI_UI_THEME_OPTIONS:
+        st.session_state['gui_ui_theme'] = GUI_UI_THEME_OPTIONS[0]
+
 
 def _render_display_preferences_sidebar() -> None:
-    """Sidebar: contrast and text size (persists in session; applies via `_inject_accessibility_theme`)."""
-    st.session_state.setdefault('gui_ui_theme', 'Default')
+    """Theme and text size inside **Settings** (persists in session; applies via `_inject_accessibility_theme`)."""
+    st.session_state.setdefault('gui_ui_theme', GUI_UI_THEME_OPTIONS[0])
+    _migrate_gui_ui_theme_session()
     st.session_state.setdefault('gui_ui_large_text', False)
-    st.markdown('### Display')
-    st.radio(
-        'Contrast',
-        options=['Default', 'High contrast'],
+    st.markdown('**Display**')
+    st.selectbox(
+        'Theme',
+        options=list(GUI_UI_THEME_OPTIONS),
         key='gui_ui_theme',
-        horizontal=True,
-        help='High contrast uses black text on white, stronger borders, and clearer focus rings.',
+        help=(
+            '**Default** uses Streamlit’s built-in look. Other options tint the app background, sidebar, and bordered panels '
+            'for different reading preferences.'
+        ),
     )
     st.checkbox(
         'Larger text',
@@ -112,13 +141,24 @@ def _render_display_preferences_sidebar() -> None:
     )
 
 
+def _render_sidebar_settings_expander(*, leading_divider: bool = True) -> None:
+    """Bottom of sidebar: collapsed **Settings** panel (display / accessibility)."""
+    if leading_divider:
+        st.divider()
+    with st.expander('Settings', expanded=False):
+        st.caption('Theme and readability for this browser session.')
+        _render_display_preferences_sidebar()
+
+
 def _inject_accessibility_theme() -> None:
-    """Skip link, optional high-contrast and large-text overrides (`:has` markers must be in DOM)."""
-    hc = str(st.session_state.get('gui_ui_theme', 'Default') or '') == 'High contrast'
+    """Skip link, optional theme tint and large-text (`:has` markers must be in DOM)."""
+    _migrate_gui_ui_theme_session()
+    theme_label = str(st.session_state.get('gui_ui_theme', GUI_UI_THEME_OPTIONS[0]) or '')
+    theme_cls = _GUI_THEME_TO_MARKER.get(theme_label, '')
     lt = bool(st.session_state.get('gui_ui_large_text'))
     markers = []
-    if hc:
-        markers.append('<div class="bnd-a11y-hc" aria-hidden="true"></div>')
+    if theme_cls:
+        markers.append(f'<div class="bnd-ui-theme {theme_cls}" aria-hidden="true"></div>')
     if lt:
         markers.append('<div class="bnd-a11y-large-text" aria-hidden="true"></div>')
     marker_html = ''.join(markers)
@@ -148,7 +188,7 @@ def _inject_accessibility_theme() -> None:
   outline: 3px solid #fbbf24;
   outline-offset: 2px;
 }}
-/* Focus visibility (all themes) */
+/* Focus visibility */
 section[data-testid="stMain"] button:focus-visible,
 section[data-testid="stMain"] a:focus-visible,
 [data-testid="stSidebar"] button:focus-visible,
@@ -156,53 +196,80 @@ section[data-testid="stMain"] a:focus-visible,
   outline: 3px solid #2563eb !important;
   outline-offset: 2px !important;
 }}
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] button:focus-visible,
-body:has(.bnd-a11y-hc) [data-testid="stSidebar"] button:focus-visible {{
-  outline: 3px solid #000000 !important;
-  outline-offset: 2px !important;
+/* —— Warm paper —— */
+body:has(.bnd-theme-warm) .stApp {{
+  background-color: #faf8f5 !important;
 }}
-/* —— High contrast (light): near-black on white, strong edges —— */
-body:has(.bnd-a11y-hc) .stApp {{
-  background-color: #ffffff !important;
+body:has(.bnd-theme-warm) [data-testid="stSidebar"] {{
+  background-color: #f3eee6 !important;
+  border-right: 1px solid #d6cfc4 !important;
 }}
-body:has(.bnd-a11y-hc) [data-testid="stSidebar"] {{
-  background-color: #f5f5f5 !important;
-  border-right: 3px solid #000000 !important;
+body:has(.bnd-theme-warm) section[data-testid="stMain"] .block-container {{
+  background-color: #fffefb !important;
 }}
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] .block-container {{
-  background-color: #ffffff !important;
+body:has(.bnd-theme-warm) section[data-testid="stMain"] p,
+body:has(.bnd-theme-warm) section[data-testid="stMain"] li,
+body:has(.bnd-theme-warm) section[data-testid="stMain"] h1,
+body:has(.bnd-theme-warm) section[data-testid="stMain"] h2,
+body:has(.bnd-theme-warm) section[data-testid="stMain"] h3,
+body:has(.bnd-theme-warm) [data-testid="stCaption"],
+body:has(.bnd-theme-warm) [data-testid="stWidgetLabel"] p {{
+  color: #1c1917 !important;
 }}
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] p,
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] li,
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] h1,
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] h2,
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] h3,
-body:has(.bnd-a11y-hc) [data-testid="stMarkdownContainer"] p,
-body:has(.bnd-a11y-hc) [data-testid="stMarkdownContainer"] span,
-body:has(.bnd-a11y-hc) [data-testid="stCaption"],
-body:has(.bnd-a11y-hc) [data-testid="stWidgetLabel"] p {{
-  color: #0a0a0a !important;
+body:has(.bnd-theme-warm) [data-testid="stSidebar"] p,
+body:has(.bnd-theme-warm) [data-testid="stSidebar"] span,
+body:has(.bnd-theme-warm) [data-testid="stSidebar"] label {{
+  color: #292524 !important;
 }}
-body:has(.bnd-a11y-hc) [data-testid="stSidebar"] p,
-body:has(.bnd-a11y-hc) [data-testid="stSidebar"] span,
-body:has(.bnd-a11y-hc) [data-testid="stSidebar"] label {{
-  color: #0a0a0a !important;
+/* —— Cool gray —— */
+body:has(.bnd-theme-cool) .stApp {{
+  background-color: #f1f5f9 !important;
 }}
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {{
-  border: 2px solid #000000 !important;
-  background: #ffffff !important;
+body:has(.bnd-theme-cool) [data-testid="stSidebar"] {{
+  background-color: #e2e8f0 !important;
+  border-right: 1px solid #cbd5e1 !important;
 }}
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] div[data-testid="stAlert"] {{
-  border: 2px solid #000000 !important;
+body:has(.bnd-theme-cool) section[data-testid="stMain"] .block-container {{
+  background-color: #f8fafc !important;
 }}
-body:has(.bnd-a11y-hc) input,
-body:has(.bnd-a11y-hc) textarea {{
-  border: 2px solid #000000 !important;
-  background-color: #ffffff !important;
-  color: #0a0a0a !important;
+body:has(.bnd-theme-cool) section[data-testid="stMain"] p,
+body:has(.bnd-theme-cool) section[data-testid="stMain"] li,
+body:has(.bnd-theme-cool) section[data-testid="stMain"] h1,
+body:has(.bnd-theme-cool) section[data-testid="stMain"] h2,
+body:has(.bnd-theme-cool) section[data-testid="stMain"] h3,
+body:has(.bnd-theme-cool) [data-testid="stCaption"],
+body:has(.bnd-theme-cool) [data-testid="stWidgetLabel"] p {{
+  color: #0f172a !important;
 }}
-body:has(.bnd-a11y-hc) [data-baseweb="select"] > div {{
-  border: 2px solid #000000 !important;
+body:has(.bnd-theme-cool) [data-testid="stSidebar"] p,
+body:has(.bnd-theme-cool) [data-testid="stSidebar"] span,
+body:has(.bnd-theme-cool) [data-testid="stSidebar"] label {{
+  color: #1e293b !important;
+}}
+/* —— Slate sidebar + ivory main —— */
+body:has(.bnd-theme-slateivory) .stApp {{
+  background-color: #fefce8 !important;
+}}
+body:has(.bnd-theme-slateivory) [data-testid="stSidebar"] {{
+  background-color: #1e293b !important;
+  border-right: 1px solid #0f172a !important;
+}}
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] .block-container {{
+  background-color: #fffff7 !important;
+}}
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] p,
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] li,
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] h1,
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] h2,
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] h3,
+body:has(.bnd-theme-slateivory) [data-testid="stCaption"],
+body:has(.bnd-theme-slateivory) [data-testid="stWidgetLabel"] p {{
+  color: #0f172a !important;
+}}
+body:has(.bnd-theme-slateivory) [data-testid="stSidebar"] p,
+body:has(.bnd-theme-slateivory) [data-testid="stSidebar"] span,
+body:has(.bnd-theme-slateivory) [data-testid="stSidebar"] label {{
+  color: #e2e8f0 !important;
 }}
 /* —— Larger text —— */
 body:has(.bnd-a11y-large-text) section[data-testid="stMain"] .block-container {{
@@ -210,6 +277,30 @@ body:has(.bnd-a11y-large-text) section[data-testid="stMain"] .block-container {{
 }}
 body:has(.bnd-a11y-large-text) [data-testid="stSidebar"] {{
   font-size: 1.0625rem !important;
+}}
+/* —— Workflow: main column white (all themes); logo strip matches —— */
+body:has(.bnd-workflow-active) section[data-testid="stMain"],
+body:has(.bnd-workflow-active) section[data-testid="stMain"] .block-container {{
+  background-color: #ffffff !important;
+}}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stImage"],
+body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stImage"] > div {{
+  background-color: #ffffff !important;
+}}
+/* Light touch: main panel labels and subheaders read a bit clearer without heavy chrome */
+body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stWidgetLabel"] p {{
+  color: #334155 !important;
+}}
+body:has(.bnd-workflow-active):has(.bnd-theme-warm) section[data-testid="stMain"] [data-testid="stWidgetLabel"] p {{
+  color: #44403c !important;
+}}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] h2,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] h3 {{
+  color: #334155 !important;
+}}
+body:has(.bnd-workflow-active):has(.bnd-theme-warm) section[data-testid="stMain"] h2,
+body:has(.bnd-workflow-active):has(.bnd-theme-warm) section[data-testid="stMain"] h3 {{
+  color: #44403c !important;
 }}
 </style>
 ''',
@@ -229,24 +320,24 @@ def _inject_load_save_button_theme() -> None:
     st.markdown(
         """
 <style>
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[kind="primary"],
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[kind="secondary"] {
-    background-color: #b91c1c !important;
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"],
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"] {
+    background-color: #f87171 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #7f1d1d !important;
+    border: 1px solid #fca5a5 !important;
 }
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[kind="primary"]:hover,
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[kind="secondary"]:hover {
-    background-color: #991b1b !important;
-    border-color: #450a0a !important;
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:hover,
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:hover {
+    background-color: #fb7185 !important;
+    border-color: #fda4af !important;
     color: #ffffff !important;
 }
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[kind="primary"]:focus-visible,
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[kind="secondary"]:focus-visible {
-    box-shadow: 0 0 0 0.2rem rgba(185, 28, 28, 0.45) !important;
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:focus-visible,
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:focus-visible {
+    box-shadow: 0 0 0 0.2rem rgba(248, 113, 113, 0.45) !important;
 }
-/* Bordered layout panels (Streamlit container border=True) — stronger frame in main panel */
+/* Bordered layout panels (Streamlit container border=True) — light frame */
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     border-width: 2px !important;
     border-color: #94a3b8 !important;
@@ -260,13 +351,27 @@ section[data-testid="stMain"] div[data-testid="stAlert"] {
     border: 1px solid #cbd5e1 !important;
     border-radius: 8px !important;
 }
-/* High contrast wins over the panel/alert rules above (same stylesheet order). */
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
-    background: #ffffff !important;
-    border: 2px solid #000000 !important;
+/* Theme-tinted bordered panels (after default panel rules above) */
+body:has(.bnd-theme-warm) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    background: #fffefb !important;
+    border-color: #d6cfc4 !important;
 }
-body:has(.bnd-a11y-hc) section[data-testid="stMain"] div[data-testid="stAlert"] {
-    border: 2px solid #000000 !important;
+body:has(.bnd-theme-warm) section[data-testid="stMain"] div[data-testid="stAlert"] {
+    border-color: #c4b8a8 !important;
+}
+body:has(.bnd-theme-cool) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    background: #f8fafc !important;
+    border-color: #94a3b8 !important;
+}
+body:has(.bnd-theme-cool) section[data-testid="stMain"] div[data-testid="stAlert"] {
+    border-color: #94a3b8 !important;
+}
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    background: #fffff7 !important;
+    border-color: #64748b !important;
+}
+body:has(.bnd-theme-slateivory) section[data-testid="stMain"] div[data-testid="stAlert"] {
+    border-color: #64748b !important;
 }
 </style>
 """,
@@ -508,8 +613,8 @@ BIO_PROF_CLAMP_FIELD_HELP = (
 )
 
 
-def _on_bio_density_preset_changed() -> None:
-    """Copy a typical density into ``bio_prof_rho`` when the preset selectbox changes."""
+def _sync_bio_prof_rho_from_density_preset() -> None:
+    """If a non-Custom density preset is selected, copy its g/mm³ value into ``bio_prof_rho`` (used on Apply)."""
     label = str(st.session_state.get('bio_prof_rho_preset') or '')
     v = BIO_DENSITY_PRESET_G_PER_MM3.get(label)
     if v is not None:
@@ -1765,6 +1870,7 @@ def _apply_clamp_geometry_to_bender(b: Bender) -> None:
 
 def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
     """Tapered outline + specimen density + length for profiled / inertial (and frustum-style) corrections → ``b``."""
+    _sync_bio_prof_rho_from_density_preset()
     stations = b.make_profile_stations(
         st.session_state['bio_prof_ph'],
         st.session_state['bio_prof_pw'],
@@ -1947,6 +2053,364 @@ def _show_sec7_and_8() -> bool:
     return _stepwise_step() == 4
 
 
+_LANDING_STIM_HZ = 75.0
+
+
+def _landing_stimulus_75hz_gated(t: np.ndarray, windows: tuple[tuple[float, float], ...]) -> np.ndarray:
+    """50%-duty square wave at ``_LANDING_STIM_HZ``, gated on during ``windows`` (schematic bursts)."""
+    carrier = (np.sin(2 * np.pi * _LANDING_STIM_HZ * t) >= 0).astype(np.float64)
+    env = np.zeros_like(t)
+    for t0, t1 in windows:
+        env[(t >= t0) & (t <= t1)] = 1.0
+    return env * carrier
+
+
+def _landing_plotly_demo_layout(fig: go.Figure, *, x_title: str, y_title: str, chart_title: str) -> None:
+    fig.update_layout(
+        margin=dict(l=48, r=12, t=36, b=40),
+        height=240,
+        title=dict(text=chart_title, font=dict(size=13, color='#1e293b')),
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+        paper_bgcolor='#ffffff',
+        plot_bgcolor='#f8fafc',
+        font=dict(size=11, color='#1e293b'),
+        xaxis=dict(showgrid=True, gridcolor='#e2e8f0', zeroline=False),
+        yaxis=dict(showgrid=True, gridcolor='#e2e8f0', zeroline=True, zerolinecolor='#cbd5e1'),
+        showlegend=False,
+    )
+
+
+def _landing_demo_figure(test_type: str) -> go.Figure:
+    """Schematic Plotly figures for landing-page education (not real trial data)."""
+    tt = str(test_type)
+    if tt == 'dynamic':
+        t = np.linspace(0, 2.5, 500)
+        y = 0.85 * np.sin(2 * np.pi * 2.0 * t)
+        fig = go.Figure(go.Scatter(x=t, y=y, mode='lines', line=dict(color='#0ea5e9', width=2)))
+        _landing_plotly_demo_layout(
+            fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Steady cyclic command'
+        )
+        return fig
+    if tt == 'frequency_sweep':
+        t = np.linspace(0, 3, 800)
+        dt = float(t[1] - t[0])
+        inst_f = 0.5 + 1.5 * (t / t[-1]) ** 1.1
+        phase = np.cumsum(2 * np.pi * inst_f * dt)
+        y = 0.55 * np.sin(phase)
+        fig = go.Figure(go.Scatter(x=t, y=y, mode='lines', line=dict(color='#6366f1', width=2)))
+        _landing_plotly_demo_layout(
+            fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Frequency increases over time'
+        )
+        return fig
+    if tt == 'frequency_step':
+        t = np.linspace(0, 2.4, 600)
+        seg = (t * 3 / 2.4).astype(int)
+        seg = np.clip(seg, 0, 2)
+        freqs = np.array([0.8, 1.6, 2.4])[seg]
+        dt = float(t[1] - t[0])
+        phase = np.cumsum(2 * np.pi * freqs * dt)
+        y = 0.6 * np.sin(phase)
+        fig = go.Figure(go.Scatter(x=t, y=y, mode='lines', line=dict(color='#8b5cf6', width=2)))
+        _landing_plotly_demo_layout(
+            fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Plateau segments at fixed frequencies'
+        )
+        return fig
+    if tt == 'curvature_step':
+        t = np.linspace(0, 2.2, 500)
+        k = (t * 2.2 / 2.2).astype(int)
+        k = np.clip(k, 0, 3)
+        levels = np.array([-0.5, 0.2, 0.75, 1.1])[k]
+        fig = go.Figure(go.Scatter(x=t, y=levels, mode='lines', line=dict(color='#0d9488', width=2.5)))
+        _landing_plotly_demo_layout(
+            fig, x_title='Time (s)', y_title='Target curvature (a.u.)', chart_title='Hold at each curvature level'
+        )
+        return fig
+    if tt == 'step_change':
+        t = np.linspace(0, 2.0, 400)
+        amp = np.where(t < 1.0, 0.35, 0.9)
+        y = amp * np.sin(2 * np.pi * 1.5 * t)
+        fig = go.Figure(go.Scatter(x=t, y=y, mode='lines', line=dict(color='#ea580c', width=2)))
+        _landing_plotly_demo_layout(
+            fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Abrupt amplitude / condition change'
+        )
+        return fig
+    if tt == 'isometric':
+        t = np.linspace(0, 2.6, int(round(2.6 * 1200)) + 1)
+        stim = _landing_stimulus_75hz_gated(t, ((0.35, 0.52), (1.05, 1.22), (1.85, 2.02)))
+        strain = np.ones_like(t) * 0.55
+        torque = 0.12 + 0.62 * (1 - np.exp(-2.0 * t)) + 0.07 * stim
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07)
+        fig.add_trace(
+            go.Scatter(x=t, y=stim, mode='lines', name='Stimulus (75 Hz)', line=dict(color='#a855f7', width=1.2)),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=t, y=strain, mode='lines', name='Strain (held)', line=dict(color='#0ea5e9', width=2)),
+            row=2,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=t, y=torque, mode='lines', name='Torque', line=dict(color='#be123c', width=2)),
+            row=3,
+            col=1,
+        )
+        fig.update_yaxes(title_text='Stim (75 Hz, a.u.)', row=1, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_yaxes(title_text='Strain (a.u.)', row=2, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_yaxes(title_text='Torque (a.u.)', row=3, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_xaxes(title_text='Time (s)', row=3, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_layout(
+            margin=dict(l=52, r=18, t=40, b=36),
+            height=320,
+            title=dict(
+                text='Isometric: 75 Hz stimulus bursts, held strain, evolving torque',
+                font=dict(size=13, color='#1e293b'),
+            ),
+            paper_bgcolor='#ffffff',
+            plot_bgcolor='#f8fafc',
+            font=dict(size=11, color='#1e293b'),
+            showlegend=True,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
+        )
+        return fig
+    if tt == 'isovelocity':
+        t = np.linspace(0, 2.2, int(round(2.2 * 1200)) + 1)
+        m1, m2, m3 = 0.42, 0.28, -0.35
+        m1a = t < 0.75
+        m2a = (t >= 0.75) & (t < 1.45)
+        m3a = t >= 1.45
+        strain = np.zeros_like(t)
+        strain[m1a] = m1 * t[m1a]
+        strain[m2a] = m1 * 0.75 + m2 * (t[m2a] - 0.75)
+        strain[m3a] = m1 * 0.75 + m2 * 0.7 + m3 * (t[m3a] - 1.45)
+        vel = np.gradient(strain, t, edge_order=2)
+        stim = _landing_stimulus_75hz_gated(t, ((0.2, 0.38), (0.9, 1.05), (1.55, 1.72)))
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07)
+        fig.add_trace(
+            go.Scatter(x=t, y=stim, mode='lines', name='Stimulus (75 Hz)', line=dict(color='#a855f7', width=1.2)),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=t, y=vel, mode='lines', name='Strain rate', line=dict(color='#d97706', width=2)),
+            row=2,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=t, y=strain, mode='lines', name='Strain', line=dict(color='#15803d', width=2)),
+            row=3,
+            col=1,
+        )
+        fig.update_yaxes(title_text='Stim (75 Hz, a.u.)', row=1, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_yaxes(title_text='dε/dt (a.u.)', row=2, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_yaxes(title_text='Strain (a.u.)', row=3, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_xaxes(title_text='Time (s)', row=3, col=1, showgrid=True, gridcolor='#e2e8f0')
+        fig.update_layout(
+            margin=dict(l=52, r=18, t=40, b=36),
+            height=320,
+            title=dict(
+                text='Isovelocity: 75 Hz stimulus bursts, strain rate, integrated strain',
+                font=dict(size=13, color='#1e293b'),
+            ),
+            paper_bgcolor='#ffffff',
+            plot_bgcolor='#f8fafc',
+            font=dict(size=11, color='#1e293b'),
+            showlegend=True,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
+        )
+        return fig
+    # calibration — commanded motion vs raw vs corrected torque (schematic)
+    t = np.linspace(0, 2.2, 550)
+    theta_cmd = 0.32 * np.sin(2 * np.pi * 1.1 * t)
+    theta_meas = 0.31 * np.sin(2 * np.pi * 1.1 * t - 0.07) + 0.018 * np.sin(2 * np.pi * 16.0 * t)
+    tau_raw = 0.55 * np.sin(2 * np.pi * 1.1 * t) + 0.22 * np.sin(2 * np.pi * 16.0 * t + 0.4)
+    tau_model = 0.20 * np.sin(2 * np.pi * 16.0 * t + 0.4)
+    tau_corr = tau_raw - tau_model
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.11)
+    fig.add_trace(
+        go.Scatter(x=t, y=theta_cmd, mode='lines', name='θ command', line=dict(color='#2563eb', width=2)),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(x=t, y=theta_meas, mode='lines', name='θ measured', line=dict(color='#f97316', width=2, dash='dot')),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(x=t, y=tau_raw, mode='lines', name='Torque raw', line=dict(color='#94a3b8', width=2)),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(x=t, y=tau_corr, mode='lines', name='Torque corrected', line=dict(color='#0d9488', width=2)),
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(title_text='Angle (a.u.)', row=1, col=1, showgrid=True, gridcolor='#e2e8f0')
+    fig.update_yaxes(title_text='Torque (a.u.)', row=2, col=1, showgrid=True, gridcolor='#e2e8f0')
+    fig.update_xaxes(title_text='Time (s)', row=2, col=1, showgrid=True, gridcolor='#e2e8f0')
+    fig.update_layout(
+        margin=dict(l=52, r=18, t=44, b=40),
+        height=300,
+        title=dict(
+            text='Calibration: repeat a known motion; subtract modeled inertial ripple from torque',
+            font=dict(size=12, color='#1e293b'),
+        ),
+        paper_bgcolor='#ffffff',
+        plot_bgcolor='#f8fafc',
+        font=dict(size=11, color='#1e293b'),
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='left', x=0),
+    )
+    return fig
+
+
+_LANDING_EXPERIMENT_BLURBS: dict[str, tuple[str, str]] = {
+    'dynamic': (
+        'Dynamic (cyclic)',
+        'Repeat the same bend cycle at fixed frequency and amplitude to measure cyclic mechanics, energy dissipation, '
+        'and responses comparable across specimens — useful for stiffness–damping characterization and fatigue-style loading.',
+    ),
+    'frequency_sweep': (
+        'Frequency sweep',
+        'Vary excitation frequency over time to map how mechanical response changes with frequency — helpful for '
+        'resonance-like behavior and frequency-dependent stiffness in soft tissues.',
+    ),
+    'frequency_step': (
+        'Frequency step',
+        'Hold several discrete frequencies in separate segments so each band is sampled clearly — separates steady '
+        'response at each frequency without the ambiguity of a continuous sweep.',
+    ),
+    'curvature_step': (
+        'Curvature step',
+        'Step through held curvature levels to read torque (or force) at specific bending states — supports '
+        'quasi-static–like curves and stress-relaxation–style interpretation between plateaus.',
+    ),
+    'step_change': (
+        'Step change',
+        'Suddenly change amplitude, frequency, or related parameters mid-protocol to probe transient adjustment, '
+        'history dependence, and nonlinear responses to a new loading condition.',
+    ),
+    'isometric': (
+        'Isometric hold',
+        'Geometry is held constant while you may deliver **electrical or other stimuli** in pulses; torque evolves with '
+        'activation and passive stress relaxation — analogous to isometric contraction, useful for separating active and '
+        'passive mechanics without ongoing bending.',
+    ),
+    'isovelocity': (
+        'Isovelocity ramp',
+        'Bending follows a **commanded strain rate** (piecewise ramps here); optional **stimulus trains** can be aligned '
+        'with loading segments so velocity-dependent effects are not confounded with steady cyclic loops.',
+    ),
+    'calibration': (
+        'Calibration',
+        'Run a **repeatable reference motion** (often the same `test_type` you use later). **Raw torque** mixes tissue load '
+        'with high-frequency inertial “ripple” from acceleration; after fitting a dynamic model, **corrected torque** '
+        'tracks the biology-linked component more cleanly for subsequent trials.',
+    ),
+}
+
+
+def _render_landing_equation_of_motion_box() -> None:
+    th = '\N{GREEK SMALL LETTER THETA}'
+    thdd = th + '\N{COMBINING DIAERESIS}'
+    thd = th + '\N{COMBINING DOT ABOVE}'
+    st.markdown(
+        f'<div class="bnd-landing-eom-box">'
+        f'<p class="bnd-eom-heading"><strong>Fundamental equation of motion (schematic)</strong></p>'
+        f'<p class="bnd-eom-eq"><em>J</em>{thdd} + <em>B</em>{thd} + <em>K</em>{th} ≈ τ<sub>motor</sub> − '
+        f'τ<sub>passive</sub>({th})</p>'
+        f'<p class="bnd-eom-note">Inertial (<em>J{thdd}</em>), viscous (<em>B{thd}</em>), and elastic (<em>K{th}</em>) '
+        f'terms balance the actuator against passive tissue. Calibration and correction in the workflow help separate '
+        f'biology-linked torque from acceleration-dependent artifacts in recorded data.</p></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_landing_learn_section() -> None:
+    _render_landing_equation_of_motion_box()
+    st.markdown(
+        '<p class="bnd-landing-learn-intro">'
+        'Each run uses one <strong>experiment type</strong> (<code>test_type</code>); configure hardware and biometrics, '
+        'preview commanded motion, then run and save. Curves below are <strong>schematics</strong> — not real specimen '
+        'data — to show the idea behind each type.</p>',
+        unsafe_allow_html=True,
+    )
+    tabs = st.tabs(
+        [
+            'Oscillatory',
+            'Steps & sweeps',
+            'Quasi-static',
+            'Calibration',
+        ]
+    )
+    with tabs[0]:
+        c1, c2 = st.columns(2)
+        with c1:
+            title, blurb = _LANDING_EXPERIMENT_BLURBS['dynamic']
+            st.markdown(f'**{title}**')
+            st.caption(blurb)
+            st.plotly_chart(_landing_demo_figure('dynamic'), use_container_width=True, config={'displayModeBar': False})
+        with c2:
+            title, blurb = _LANDING_EXPERIMENT_BLURBS['frequency_sweep']
+            st.markdown(f'**{title}**')
+            st.caption(blurb)
+            st.plotly_chart(
+                _landing_demo_figure('frequency_sweep'), use_container_width=True, config={'displayModeBar': False}
+            )
+    with tabs[1]:
+        c1, c2 = st.columns(2)
+        with c1:
+            title, blurb = _LANDING_EXPERIMENT_BLURBS['frequency_step']
+            st.markdown(f'**{title}**')
+            st.caption(blurb)
+            st.plotly_chart(
+                _landing_demo_figure('frequency_step'), use_container_width=True, config={'displayModeBar': False}
+            )
+        with c2:
+            title, blurb = _LANDING_EXPERIMENT_BLURBS['curvature_step']
+            st.markdown(f'**{title}**')
+            st.caption(blurb)
+            st.plotly_chart(
+                _landing_demo_figure('curvature_step'), use_container_width=True, config={'displayModeBar': False}
+            )
+        c3, c4 = st.columns(2)
+        with c3:
+            title, blurb = _LANDING_EXPERIMENT_BLURBS['step_change']
+            st.markdown(f'**{title}**')
+            st.caption(blurb)
+            st.plotly_chart(
+                _landing_demo_figure('step_change'), use_container_width=True, config={'displayModeBar': False}
+            )
+        with c4:
+            st.markdown('**How to pick a type**')
+            st.caption(
+                'In the full workflow, choose **Experiment type (test_type)** first; the form shows only the motion '
+                'fields that protocol needs. Preview plots approximate commanded motion before you run on hardware.'
+            )
+    with tabs[2]:
+        c1, c2 = st.columns(2)
+        with c1:
+            title, blurb = _LANDING_EXPERIMENT_BLURBS['isometric']
+            st.markdown(f'**{title}**')
+            st.caption(blurb)
+            st.plotly_chart(_landing_demo_figure('isometric'), use_container_width=True, config={'displayModeBar': False})
+        with c2:
+            title, blurb = _LANDING_EXPERIMENT_BLURBS['isovelocity']
+            st.markdown(f'**{title}**')
+            st.caption(blurb)
+            st.plotly_chart(
+                _landing_demo_figure('isovelocity'), use_container_width=True, config={'displayModeBar': False}
+            )
+    with tabs[3]:
+        title, blurb = _LANDING_EXPERIMENT_BLURBS['calibration']
+        st.markdown(f'**{title}**')
+        st.caption(blurb)
+        st.plotly_chart(_landing_demo_figure('calibration'), use_container_width=True, config={'displayModeBar': False})
+
+
 def _render_landing_page() -> None:
     st.markdown(
         '<div id="bnd-main-content" tabindex="-1"></div>',
@@ -1956,91 +2420,315 @@ def _render_landing_page() -> None:
         '<div class="bnd-landing-page" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
+    if os.path.isfile(_LOGO_PATH):
+        _logo_uri = _img_data_uri(_LOGO_PATH)
+        st.markdown(
+            f'<div class="bnd-landing-hero-wrap">'
+            f'<div class="bnd-landing-hero-text">'
+            f'<h1>The CritterGripper App</h1>'
+            f'<p class="bnd-landing-tagline">Non-destructive <strong>bending-mechanics</strong> workflows for small '
+            f'organisms — instrument control, specimen metadata, protocols, and structured HDF5 data.</p>'
+            f'</div>'
+            f'<div class="bnd-landing-hero-logo">'
+            f'<img class="bnd-landing-hero-logo-img" src="{_logo_uri}" alt="Laboratory logo"/>'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.title('The CritterGripper App')
+        st.markdown(
+            '<p class="bnd-landing-tagline">Non-destructive <strong>bending-mechanics</strong> workflows for small '
+            'organisms — instrument control, specimen metadata, protocols, and structured HDF5 data.</p>',
+            unsafe_allow_html=True,
+        )
+
     st.markdown(
-        """
-<style>
-body:has(.bnd-landing-page) section[data-testid="stMain"] .block-container {
-    padding-top: 1rem !important;
-}
-/* Landing: equal-tall action buttons (row is only buttons, so tops align). */
-body:has(.bnd-landing-page) section[data-testid="stMain"] button[kind="primary"],
-body:has(.bnd-landing-page) section[data-testid="stMain"] button[kind="secondary"] {
-    min-height: 3.15rem !important;
-}
-</style>
-""",
+        '<div class="bnd-landing-hero-rule" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
-    try:
-        c0, c1, c2 = st.columns([2.4, 1, 1], vertical_alignment='center')
-    except TypeError:
-        c0, c1, c2 = st.columns([2.4, 1, 1])
-    with c0:
-        st.title('The CritterGripper App')
-        st.caption('Non-destructive multiaxial platform for the mechanical testing of bending organisms.')
-    with c1:
-        if os.path.isfile(_LOGO_PATH):
-            try:
-                st.image(_LOGO_PATH, use_container_width=True)
-            except TypeError:
-                try:
-                    st.image(_LOGO_PATH, use_column_width=True)
-                except TypeError:
-                    st.image(_LOGO_PATH, width=160)
-    with c2:
-        nsf = _nsf_logo_path()
-        if nsf:
-            st.markdown(
-                f'<img src="{_img_data_uri(nsf)}" style="max-width:100%;height:auto;max-height:80px;" alt="NSF"/>',
-                unsafe_allow_html=True,
-            )
-            st.caption('NSF support acknowledgment.')
 
-    st.markdown('### Choose a workflow')
-    st.caption('Same capabilities — pick the layout that fits how you like to work.')
+    st.markdown('<div class="bnd-landing-between-sections"></div>', unsafe_allow_html=True)
 
-    a, b, c = st.columns(3)
-    with a:
-        st.markdown('**Build from scratch**')
-        st.caption(
-            'All sections visible: hardware, data path, biometrics, experiment, preview, run, save, plots, notes.'
+    with st.container(border=True):
+        st.markdown(
+            '<h3 class="bnd-landing-section-title">Choose Workflow</h3>',
+            unsafe_allow_html=True,
         )
-    with b:
-        st.markdown('**Templates**')
-        st.caption('Load hardware `.py` and saved biometrics from disk; optional protocol template checklist.')
-    with c:
-        st.markdown('**Step-by-step**')
-        st.caption('One focus per step with a progress bar; good for training or checklist-style sessions.')
+        st.markdown(
+            '<p class="bnd-landing-section-sub">The same experiment engine under each path — layouts differ in what is '
+            'shown at once, training-style steps, and optional checklist loading from disk.</p>',
+            unsafe_allow_html=True,
+        )
+        a, b, c = st.columns(3)
+        with a:
+            st.markdown('**Build from scratch**')
+            st.caption(
+                'All sections visible: hardware, data path, biometrics, experiment, preview, run, save, plots, notes.'
+            )
+        with b:
+            st.markdown('**Templates**')
+            st.caption('Load hardware `.py` and saved biometrics from disk; optional protocol template checklist.')
+        with c:
+            st.markdown('**Step-by-step**')
+            st.caption('One focus per step with a progress bar; good for training or checklist-style sessions.')
 
-    st.markdown('<div style="height:0.85rem"></div>', unsafe_allow_html=True)
-    ba, bb, bc = st.columns(3)
-    with ba:
-        if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='primary'):
-            st.session_state['gui_app_route'] = 'scratch'
-            st.session_state.pop('gui_stepwise_step', None)
-            st.rerun()
-    with bb:
-        if st.button('Template workflow', key='land_templates', use_container_width=True):
-            st.session_state['gui_app_route'] = 'templates'
-            st.session_state.pop('gui_stepwise_step', None)
-            st.session_state.pop('gui_tpl_bio_done', None)
-            st.session_state.pop('gui_tpl_cfg_autoloaded', None)
-            st.rerun()
-    with bc:
-        if st.button('Step-by-step', key='land_stepwise', use_container_width=True):
-            st.session_state['gui_app_route'] = 'stepwise'
-            st.session_state['gui_stepwise_step'] = 0
+        st.markdown('<div style="height:0.5rem"></div>', unsafe_allow_html=True)
+        ba, bb, bc = st.columns(3)
+        with ba:
+            if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='secondary'):
+                st.session_state['gui_app_route'] = 'scratch'
+                st.session_state.pop('gui_stepwise_step', None)
+                st.rerun()
+        with bb:
+            if st.button('Template workflow', key='land_templates', use_container_width=True, type='secondary'):
+                st.session_state['gui_app_route'] = 'templates'
+                st.session_state.pop('gui_stepwise_step', None)
+                st.session_state.pop('gui_tpl_bio_done', None)
+                st.session_state.pop('gui_tpl_cfg_autoloaded', None)
+                st.rerun()
+        with bc:
+            if st.button('Step-by-step', key='land_stepwise', use_container_width=True, type='secondary'):
+                st.session_state['gui_app_route'] = 'stepwise'
+                st.session_state['gui_stepwise_step'] = 0
+                st.rerun()
+
+    st.markdown('<div class="bnd-landing-between-sections"></div>', unsafe_allow_html=True)
+
+    with st.container(border=True):
+        st.markdown(
+            '<h3 class="bnd-landing-section-title">Visualize Data</h3>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="bnd-landing-section-sub">Open exported <code>.h5</code> files and plot 1D series (e.g. '
+            '<strong>time vs torque</strong> or <strong>curvature vs torque</strong>) without loading the full '
+            'experiment workflow.</p>',
+            unsafe_allow_html=True,
+        )
+        if st.button('Open H5 data explorer', key='land_h5_explorer', use_container_width=True, type='secondary'):
+            st.session_state['gui_app_route'] = 'h5_explorer'
             st.rerun()
 
-    st.divider()
-    st.subheader('H5 data explorer')
-    st.caption(
-        'Open exported experiment files (schema v2 or legacy) and plot any pair of 1D series — e.g. **time vs torque** '
-        'or **curvature vs torque** — without loading the full experiment workflow.'
-    )
-    if st.button('Open H5 data explorer', key='land_h5_explorer', use_container_width=True):
-        st.session_state['gui_app_route'] = 'h5_explorer'
-        st.rerun()
+    st.markdown('<div class="bnd-landing-between-sections"></div>', unsafe_allow_html=True)
+
+    with st.container(border=True):
+        st.markdown(
+            '<h3 class="bnd-landing-section-title">What this App Does</h3>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="bnd-landing-section-sub bnd-landing-what-section-sub">Physics overview, experiment types, '
+            'schematic plots, and why you might run each one.</p>',
+            unsafe_allow_html=True,
+        )
+        _render_landing_learn_section()
+
+    st.markdown('<div class="bnd-landing-between-sections"></div>', unsafe_allow_html=True)
+    with st.expander('Settings', expanded=False):
+        st.caption('The sidebar is hidden on this page. Adjust theme and text size here; they apply after you open a workflow.')
+        _render_display_preferences_sidebar()
+
+    # Landing-only overrides (this function runs only on the home route). Avoid CSS :has() here —
+    # some Edge / Streamlit DOM shapes treat it unreliably. Use #root (Streamlit mount) to beat theme
+    # specificity. st.html keeps <style> in the live document (markdown path can drop or scope styles).
+    _landing_style = """
+<style>
+#root .stApp,
+#root [data-testid="stAppViewContainer"],
+#root section[data-testid="stMain"],
+#root section[data-testid="stMain"] > div,
+#root section[data-testid="stMain"] .block-container {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+}
+#root section[data-testid="stMain"] .block-container {
+    padding-top: 0.35rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 52rem !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+}
+#root .bnd-landing-hero-logo {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+}
+#root section[data-testid="stMain"] [data-testid="stVerticalBlock"] > div:first-child {
+    margin-top: 0 !important;
+}
+#root section[data-testid="stMain"] h1 {
+    font-weight: 700 !important;
+    letter-spacing: -0.03em !important;
+    color: #334155 !important;
+    line-height: 1.12 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0.35rem !important;
+    font-size: clamp(2.45rem, 5.2vw, 3.45rem) !important;
+}
+#root .bnd-landing-tagline {
+    font-size: 1.32rem !important;
+    line-height: 1.48 !important;
+    color: #64748b !important;
+    margin: 0.1rem 0 0.2rem 0 !important;
+    font-weight: 450;
+}
+#root .bnd-landing-hero-wrap {
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    padding-right: min(38%, 15rem);
+}
+#root .bnd-landing-hero-text { display: block; }
+#root .bnd-landing-hero-logo {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(34%, 13.5rem);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+#root .bnd-landing-hero-logo-img {
+    display: block;
+    max-height: 100%;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    pointer-events: auto;
+}
+#root .bnd-landing-hero-rule {
+    height: 0;
+    margin: 0.55rem 0 0.55rem 0;
+    padding: 0;
+    border: none;
+    border-top: 2px dotted #c2410c;
+    background: none;
+    opacity: 0.85;
+}
+#root .bnd-landing-eom-box {
+    background: linear-gradient(145deg, #e2f4f0 0%, #dff4f8 50%, #e4e8f5 100%);
+    border-radius: 14px;
+    padding: 1rem 1.2rem 1.05rem;
+    margin: 1.95rem 0 1.05rem 0;
+    border-left: 4px solid #0d9488;
+}
+#root .bnd-eom-heading { margin: 0 0 0.45rem 0; font-size: 0.98rem; color: #475569; }
+#root .bnd-eom-eq {
+    margin: 0 0 0.55rem 0;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 1.22rem;
+    line-height: 1.45;
+    color: #334155;
+}
+#root .bnd-eom-note { margin: 0; font-size: 0.92rem; line-height: 1.5; color: #64748b; }
+#root .bnd-landing-section-sub.bnd-landing-what-section-sub { margin-bottom: 1.15rem !important; }
+#root .bnd-landing-section-title {
+    text-align: center !important;
+    width: 100%;
+    margin: 0.1rem 0 0.35rem 0 !important;
+    font-size: 1.45rem !important;
+    font-weight: 600 !important;
+    color: #475569 !important;
+    letter-spacing: -0.02em;
+}
+#root .bnd-landing-section-sub {
+    text-align: center;
+    color: #64748b;
+    font-size: 1.08rem;
+    line-height: 1.5;
+    margin: 0 0 0.9rem 0;
+}
+#root .bnd-landing-learn-intro {
+    font-size: 1.02rem;
+    line-height: 1.55;
+    color: #64748b !important;
+    margin: 0 0 0.65rem 0;
+}
+#root section[data-testid="stMain"] [data-testid="stCaption"] { color: #64748b !important; }
+#root .bnd-landing-between-sections { height: 1.65rem; }
+#root [data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 1.05rem 1.05rem 1.2rem !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    background: #f1f5f9 !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 14px !important;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+}
+#root [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] p,
+#root [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] li {
+    color: #475569 !important;
+}
+/* st.button → .stButton + data-testid=stButton; Base Web may nest button or role=button */
+#root section[data-testid="stMain"] div[data-testid="stButton"] button,
+#root section[data-testid="stMain"] div.stButton button,
+#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
+    min-height: 3rem !important;
+    background-color: #000000 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #262626 !important;
+    font-weight: 600 !important;
+}
+#root section[data-testid="stMain"] div[data-testid="stButton"] button p,
+#root section[data-testid="stMain"] div.stButton button p,
+#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] p,
+#root section[data-testid="stMain"] div[data-testid="stButton"] button span,
+#root section[data-testid="stMain"] div.stButton button span,
+#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] span {
+    color: #ffffff !important;
+}
+#root section[data-testid="stMain"] div[data-testid="stButton"] button:hover,
+#root section[data-testid="stMain"] div.stButton button:hover,
+#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
+    border-color: #404040 !important;
+    color: #ffffff !important;
+    background-color: #171717 !important;
+}
+#root section[data-testid="stMain"] div[data-testid="stButton"] button:hover p,
+#root section[data-testid="stMain"] div[data-testid="stButton"] button:hover span,
+#root section[data-testid="stMain"] div.stButton button:hover p,
+#root section[data-testid="stMain"] div.stButton button:hover span {
+    color: #ffffff !important;
+}
+#root section[data-testid="stMain"] div[data-testid="stButton"] button:focus-visible,
+#root section[data-testid="stMain"] div.stButton button:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #000000 !important;
+}
+#root section[data-testid="stMain"] button[data-testid="baseButton-primary"],
+#root section[data-testid="stMain"] button[data-testid="baseButton-secondary"],
+#root section[data-testid="stMain"] button[data-testid="stBaseButton-primary"],
+#root section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] {
+    min-height: 3rem !important;
+    background-color: #000000 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #262626 !important;
+    font-weight: 600 !important;
+}
+#root section[data-testid="stMain"] button[data-testid="baseButton-primary"] p,
+#root section[data-testid="stMain"] button[data-testid="baseButton-secondary"] p,
+#root section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] p,
+#root section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] p,
+#root section[data-testid="stMain"] button[data-testid="baseButton-primary"] span,
+#root section[data-testid="stMain"] button[data-testid="baseButton-secondary"] span,
+#root section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] span,
+#root section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] span {
+    color: #ffffff !important;
+}
+#root [data-testid="stSidebar"],
+#root [data-testid="stSidebarCollapsedControl"],
+#root [data-testid="collapsedControl"] {
+    display: none !important;
+}
+</style>
+"""
+    st.markdown(_landing_style, unsafe_allow_html=True)
+    if hasattr(st, 'html'):
+        st.html(_landing_style)
 
 
 def _cb_h5_explorer_trial_changed() -> None:
@@ -2252,7 +2940,8 @@ def _render_h5_explorer() -> None:
 
 def _render_app_chrome() -> None:
     st.markdown(
-        '<div id="bnd-main-content" tabindex="-1"></div>',
+        '<div id="bnd-main-content" tabindex="-1"></div>'
+        '<div class="bnd-workflow-active" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
     if _nav_route() == 'stepwise':
@@ -2318,13 +3007,19 @@ def _render_sidebar() -> None:
             _render_sidebar_stepwise_progress()
         _render_sidebar_input_checks()
         st.markdown('### Emergency stop')
-        st.caption('Stops DAQ tasks and resets the NI device. Safe to use if something slips.')
+        st.caption(
+            'Resets the NI-DAQ device (stops tasks and clears analog/digital outputs). With a loaded experiment, only '
+            'that device is reset; otherwise all local NI devices are reset. Not a substitute for lab safety interlocks.'
+        )
         if st.button(
             'Stop DAQ & reset NI device',
             key='gui_kill_daq',
             type='primary',
             use_container_width=True,
-            help='Stops outputs and resets tasks.',
+            help=(
+                'Hardware reset via NI-DAQmx: stops running tasks and clears outputs on the configured device, '
+                'or on every local NI device if none is configured.'
+            ),
         ):
             dev = None
             if st.session_state.get('bender') is not None:
@@ -2334,7 +3029,7 @@ def _render_sidebar() -> None:
                 st.success(msg)
             else:
                 st.warning(msg)
-        st.divider()
+        _render_sidebar_settings_expander(leading_divider=True)
 
 
 _STEPWISE_TAB_LABELS = (
@@ -2580,11 +3275,23 @@ def main():
         menu_items={
             'Get Help': None,
             'Report a bug': None,
-            'About': 'CritterGripper — Streamlit UI for Bender experiments.',
+            'About': (
+                'CritterGripper is the browser-based console for Bender bending experiments. It walks operators through '
+                'hardware configuration, where HDF5 files will be written, specimen biometrics, and protocol parameters; '
+                'offers a no-DAQ preview of commanded motion; validates required fields; and runs acquisition and export '
+                'when you deliberately enable it. A separate H5 data explorer plots saved trials without loading the full '
+                'workflow.\n\n'
+                'Reliable biomechanics depends on consistent metadata, a clear picture of what the rig will do before it '
+                'moves, and separation between “configure / preview” and “run.” This app supports that workflow, surfaces '
+                'common setup gaps (paths, biometrics, calibration), and exposes an NI-DAQ hardware reset for situations '
+                'where outputs should halt immediately — alongside, not instead of, your lab’s normal safety practices.'
+            ),
         },
     )
-    with st.sidebar:
-        _render_display_preferences_sidebar()
+    st.session_state.setdefault('gui_ui_theme', GUI_UI_THEME_OPTIONS[0])
+    _migrate_gui_ui_theme_session()
+    st.session_state.setdefault('gui_ui_large_text', False)
+    st.session_state.setdefault('gui_app_route', 'landing')
     _inject_accessibility_theme()
     _ensure_gui_data_path_session_keys()
     if 'gui_post_notes' not in st.session_state:
@@ -2596,7 +3303,6 @@ def main():
     if 'bio_prep_condition' not in st.session_state:
         st.session_state['bio_prep_condition'] = ''
     st.session_state.setdefault('bio_prof_rho_preset', 'Custom — edit the number below')
-    st.session_state.setdefault('gui_app_route', 'landing')
     if _nav_route() == 'landing':
         _render_landing_page()
         return
@@ -3121,184 +3827,224 @@ def main():
         st.markdown('**Specimen identity**')
         st.caption(
             'Export metadata (`genus_species`, `specimen_id`) and notebook-style `fishcode` (mirrors specimen ID). '
-            'Same pattern as other blocks in this section: edit fields, then **Apply**.'
+            'Click **Apply specimen identity** to commit fields (same as pressing Enter in each box).'
         )
-        id1, id2 = st.columns(2)
-        with id1:
-            st.text_input(
-                'Genus-species',
-                key='gui_genus_species',
-                placeholder='e.g. Danio rerio',
-                help='Stored in the exported `.h5` under protocol metadata (`genus_species`) when you run or export.',
+        sub_bio_id = False
+        with st.form('bio_form_identity', clear_on_submit=False):
+            id1, id2 = st.columns(2)
+            with id1:
+                st.text_input(
+                    'Genus-species',
+                    key='gui_genus_species',
+                    placeholder='e.g. Danio rerio',
+                    help='Stored in the exported `.h5` under protocol metadata (`genus_species`) when you run or export.',
+                )
+            with id2:
+                st.text_input(
+                    'Specimen ID',
+                    key='gui_specimen_id',
+                    placeholder='e.g. fish-042 or prep code',
+                    help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
+                )
+            st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
+            sub_bio_id = st.form_submit_button(
+                'Apply specimen identity',
+                use_container_width=True,
+                help='Writes genus/species, specimen ID, fishcode, and segment onto the experiment object (HDF5 metadata on export).',
             )
-        with id2:
-            st.text_input(
-                'Specimen ID',
-                key='gui_specimen_id',
-                placeholder='e.g. fish-042 or prep code',
-                help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
-            )
-        st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
-        if st.button(
-            'Apply specimen identity',
-            key='bio_btn_identity',
-            help='Writes genus/species, specimen ID, fishcode, and segment onto the experiment object (HDF5 metadata on export).',
-        ):
+        if sub_bio_id:
             _apply_specimen_identity_to_bender(b)
             st.toast('Specimen identity applied.')
 
         st.divider()
         st.session_state.setdefault('gui_bio_hide', False)
         _bio_section_collapsed = bool(st.session_state.get('gui_bio_hide')) and _nav_route() != 'stepwise'
+        s_bio_intr = s_bio_exp = s_bio_clamp = s_bio_prof = s_bio_all = False
         if _bio_section_collapsed:
             st.caption(
                 'Section body hidden. Uncheck **Hide section** at the bottom to edit biometrics inputs.'
             )
+            if st.button(
+                'Apply all biometrics',
+                key='bio_btn_apply_all_collapsed',
+                help=(
+                    'Runs all applies in order: intrinsic (incl. identity metadata), experimental conditions, clamp geometry '
+                    '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
+                ),
+            ):
+                _apply_all_biometrics_to_bender(b)
+                st.toast('Biometrics applied.')
         else:
-            st.markdown('### Intrinsic biometrics')
-            st.caption(
-                'Whole-specimen lengths and mass. **Apply intrinsic biometrics** also refreshes protocol metadata for identity '
-                '(same as **Apply specimen identity** above). Offsets, density, and temperatures are in the blocks below.'
-            )
-            L1, L2 = st.columns(2)
-            with L1:
-                st.number_input('Total length TL (`fishlen_TL`)', min_value=0.0, format='%.6g', key='bio_fishlen_TL')
-            with L2:
-                st.number_input('Total length SL (`fishlen_SL`)', min_value=0.0, format='%.6g', key='bio_fishlen_SL')
-            st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
-            if st.button('Apply intrinsic biometrics', key='bio_btn_intrinsic'):
-                _apply_intrinsic_biometrics_to_bender(b)
-                st.toast('Intrinsic biometrics applied.')
+            with st.form('bio_main_form', clear_on_submit=False):
+                st.markdown('### Intrinsic biometrics')
+                st.caption(
+                    'Whole-specimen lengths and mass. **Apply intrinsic biometrics** also refreshes protocol metadata for identity '
+                    '(same as **Apply specimen identity** above). Offsets, density, and temperatures are in the blocks below.'
+                )
+                L1, L2 = st.columns(2)
+                with L1:
+                    st.number_input('Total length TL (`fishlen_TL`)', min_value=0.0, format='%.6g', key='bio_fishlen_TL')
+                with L2:
+                    st.number_input('Total length SL (`fishlen_SL`)', min_value=0.0, format='%.6g', key='bio_fishlen_SL')
+                st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
 
-            st.divider()
-            st.markdown('### Experimental conditions')
-            st.caption(
-                'Environmental context for the trial (not specimen geometry). Stored on the experiment object and in HDF5 protocol metadata.'
-            )
-            t1, t2 = st.columns(2)
-            with t1:
-                st.number_input('Room temperature (`temp_C_room`, °C)', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_room')
-            with t2:
-                st.number_input('Tank / bath temperature (`temp_C_tank`, °C)', min_value=-5.0, max_value=60.0, format='%.3f', key='bio_temp_tank')
-            st.text_input(
-                'Prep condition',
-                key='bio_prep_condition',
-                placeholder='e.g. anesthetized, recovered 24 h, fasted',
-                help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
-            )
-            if st.button('Apply experimental conditions', key='bio_btn_exp_conditions'):
-                _apply_experimental_conditions_to_bender(b)
-                st.toast('Experimental conditions applied.')
+                st.divider()
+                st.markdown('### Experimental conditions')
+                st.caption(
+                    'Environmental context for the trial (not specimen geometry). Stored on the experiment object and in HDF5 protocol metadata.'
+                )
+                t1, t2 = st.columns(2)
+                with t1:
+                    st.number_input(
+                        'Room temperature (`temp_C_room`, °C)',
+                        min_value=-5.0,
+                        max_value=60.0,
+                        format='%.3f',
+                        key='bio_temp_room',
+                    )
+                with t2:
+                    st.number_input(
+                        'Tank / bath temperature (`temp_C_tank`, °C)',
+                        min_value=-5.0,
+                        max_value=60.0,
+                        format='%.3f',
+                        key='bio_temp_tank',
+                    )
+                st.text_input(
+                    'Prep condition',
+                    key='bio_prep_condition',
+                    placeholder='e.g. anesthetized, recovered 24 h, fasted',
+                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+                )
 
-            st.divider()
-            st.markdown('### Clamp geometry')
-            st.caption(
-                'Clamp spacing, bend location along the body, cross-section at the test segment, and vertical/horizontal offsets '
-                '(`dvert`, `dhoriz`) for strain ↔ motor mapping.'
-            )
-            st.number_input(
-                'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`)',
-                min_value=0.001,
-                format='%.6g',
-                key='bio_dclamp',
-            )
-            st.number_input(
-                'Along-body distance to center of clamped test segment (mm)',
-                min_value=0.0,
-                format='%.6g',
-                key='bio_dbend',
-                help=BIO_DBEND_FIELD_HELP,
-            )
-            x1, x2 = st.columns(2)
-            with x1:
-                st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
-            with x2:
-                st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
-            o1, o2 = st.columns(2)
-            with o1:
-                st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
-            with o2:
-                st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
-            if st.button('Apply clamp geometry', key='bio_btn_clamp'):
-                _apply_clamp_geometry_to_bender(b)
-                st.toast('Clamp geometry applied.')
-
-            st.divider()
-            st.markdown('### Mounted body profile (inertial model)')
-            st.caption(
-                'Tapered outline between proximal and distal cross-sections, **specimen density**, outline length, and integration. '
-                'Density feeds the profiled inertial model (and related frustum-style inertia calculations).'
-            )
-            st.selectbox(
-                'Typical density (sets g/mm³ below)',
-                BIO_DENSITY_PRESET_LABELS,
-                key='bio_prof_rho_preset',
-                on_change=_on_bio_density_preset_changed,
-                help=(
-                    'Quick picks from literature-scale values: ~1.00 g/cm³ water-like, ~1.06 g/cm³ muscle/soft tissue, '
-                    '~1.9 g/cm³ cortical bone. Values are converted to **g/mm³** for the field below (divide g/cm³ by 1000).'
-                ),
-            )
-            st.number_input(
-                'Specimen density (g / mm³)',
-                min_value=1e-9,
-                format='%.6g',
-                key='bio_prof_rho',
-                help=(
-                    'Mass density for the inertial model (`specimen_profile_density_g_per_mm3`). '
-                    '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
-                ),
-            )
-            st.number_input(
-                'Specimen outline length for profile model (mm)',
-                min_value=0.001,
-                format='%.6g',
-                key='bio_prof_L',
-                help='Length along the specimen used with the tapered outline below (`specimen_profile_length_mm`).',
-            )
-            p1, p2 = st.columns(2)
-            with p1:
-                st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_ph')
-                st.number_input('Proximal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_pw')
-            with p2:
-                st.number_input('Distal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_dh')
-                st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_dw')
-            p3, p4 = st.columns(2)
-            with p3:
+                st.divider()
+                st.markdown('### Clamp geometry')
+                st.caption(
+                    'Clamp spacing, bend location along the body, cross-section at the test segment, and vertical/horizontal offsets '
+                    '(`dvert`, `dhoriz`) for strain ↔ motor mapping.'
+                )
                 st.number_input(
-                    'Distance from rotation axis to clamps (mm)',
+                    'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`)',
+                    min_value=0.001,
+                    format='%.6g',
+                    key='bio_dclamp',
+                )
+                st.number_input(
+                    'Along-body distance to center of clamped test segment (mm)',
                     min_value=0.0,
                     format='%.6g',
-                    key='bio_prof_clamp',
-                    help=BIO_PROF_CLAMP_FIELD_HELP,
+                    key='bio_dbend',
+                    help=BIO_DBEND_FIELD_HELP,
                 )
-            with p4:
-                st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='bio_prof_samples')
-            if st.button('Apply mounted profile & inertia model', key='bio_btn_profile'):
-                _apply_mounted_profile_inertial_to_bender(b)
-                st.toast('Profile / inertia model applied.')
+                x1, x2 = st.columns(2)
+                with x1:
+                    st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
+                with x2:
+                    st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
+                o1, o2 = st.columns(2)
+                with o1:
+                    st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
+                with o2:
+                    st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
 
-            st.divider()
-            st.checkbox(
-                'Check here to perform inertial correction',
-                key='bio_use_theoretical_inertial',
-                help=(
-                    'Subtracts model **system** inertia (from calibration, if loaded) and **specimen** inertia from the '
-                    'profile above when correcting measured torque.'
-                ),
-            )
-            st.caption(
-                'This checkbox is saved on the experiment object when you click any **Apply** in this section (including **Apply all**).'
-            )
+                st.divider()
+                st.markdown('### Mounted body profile (inertial model)')
+                st.caption(
+                    'Tapered outline between proximal and distal cross-sections, **specimen density**, outline length, and integration. '
+                    'Density feeds the profiled inertial model (and related frustum-style inertia calculations).'
+                )
+                st.selectbox(
+                    'Typical density (sets g/mm³ on Apply)',
+                    BIO_DENSITY_PRESET_LABELS,
+                    key='bio_prof_rho_preset',
+                    help=(
+                        'Quick picks from literature-scale values: ~1.00 g/cm³ water-like, ~1.06 g/cm³ muscle/soft tissue, '
+                        '~1.9 g/cm³ cortical bone. Values are copied into **Specimen density** when you click **Apply profile** '
+                        'or **Apply all** (or choose **Custom** and edit the number).'
+                    ),
+                )
+                st.number_input(
+                    'Specimen density (g / mm³)',
+                    min_value=1e-9,
+                    format='%.6g',
+                    key='bio_prof_rho',
+                    help=(
+                        'Mass density for the inertial model (`specimen_profile_density_g_per_mm3`). '
+                        '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
+                    ),
+                )
+                st.number_input(
+                    'Specimen outline length for profile model (mm)',
+                    min_value=0.001,
+                    format='%.6g',
+                    key='bio_prof_L',
+                    help='Length along the specimen used with the tapered outline below (`specimen_profile_length_mm`).',
+                )
+                p1, p2 = st.columns(2)
+                with p1:
+                    st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_ph')
+                    st.number_input('Proximal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_pw')
+                with p2:
+                    st.number_input('Distal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_dh')
+                    st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_dw')
+                p3, p4 = st.columns(2)
+                with p3:
+                    st.number_input(
+                        'Distance from rotation axis to clamps (mm)',
+                        min_value=0.0,
+                        format='%.6g',
+                        key='bio_prof_clamp',
+                        help=BIO_PROF_CLAMP_FIELD_HELP,
+                    )
+                with p4:
+                    st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='bio_prof_samples')
 
-        if st.button(
-            'Apply all biometrics',
-            key='bio_btn_apply_all',
-            help=(
-                'Runs all applies in order: intrinsic (incl. identity metadata), experimental conditions, clamp geometry '
-                '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
-            ),
-        ):
+                st.divider()
+                st.checkbox(
+                    'Check here to perform inertial correction',
+                    key='bio_use_theoretical_inertial',
+                    help=(
+                        'Subtracts model **system** inertia (from calibration, if loaded) and **specimen** inertia from the '
+                        'profile above when correcting measured torque.'
+                    ),
+                )
+                st.caption(
+                    'This checkbox is saved on the experiment object when you click any **Apply** below (including **Apply all biometrics**).'
+                )
+                st.caption(
+                    '**Apply** commits every field in this panel at once—you can use **Apply** instead of pressing Enter in each box.'
+                )
+                br1 = st.columns(4)
+                with br1[0]:
+                    s_bio_intr = st.form_submit_button('Apply intrinsic', use_container_width=True)
+                with br1[1]:
+                    s_bio_exp = st.form_submit_button('Apply conditions', use_container_width=True)
+                with br1[2]:
+                    s_bio_clamp = st.form_submit_button('Apply clamp', use_container_width=True)
+                with br1[3]:
+                    s_bio_prof = st.form_submit_button('Apply profile', use_container_width=True)
+                s_bio_all = st.form_submit_button(
+                    'Apply all biometrics',
+                    type='primary',
+                    use_container_width=True,
+                    help=(
+                        'Runs all applies in order: intrinsic (incl. identity metadata), experimental conditions, clamp geometry '
+                        '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
+                    ),
+                )
+        if s_bio_intr:
+            _apply_intrinsic_biometrics_to_bender(b)
+            st.toast('Intrinsic biometrics applied.')
+        elif s_bio_exp:
+            _apply_experimental_conditions_to_bender(b)
+            st.toast('Experimental conditions applied.')
+        elif s_bio_clamp:
+            _apply_clamp_geometry_to_bender(b)
+            st.toast('Clamp geometry applied.')
+        elif s_bio_prof:
+            _apply_mounted_profile_inertial_to_bender(b)
+            st.toast('Profile / inertia model applied.')
+        elif s_bio_all:
             _apply_all_biometrics_to_bender(b)
             st.toast('Biometrics applied.')
 
@@ -3363,276 +4109,17 @@ def main():
 
         st.session_state.setdefault('gui_exp_hide', False)
         st.caption(
-            'Fields are stored in the browser session. Use **Apply** below (or in **section 6**) to copy them onto the '
-            'experiment object before **Refresh preview** or **Run**. Collapsing only hides this panel; widgets keep '
-            'your entries. If anything looks out of sync, use **Load hardware configuration and data path** again '
-            '(**sections 1–2**, load existing).'
+            'Procedure widgets live inside **Procedure fields** below. Use **Apply procedure** there (or in **section 6**) '
+            'to copy them onto the experiment object—**Apply** commits typed values without pressing Enter in each field. '
+            'Collapsing only hides the panel. If anything looks out of sync, use **Load hardware configuration and data path** '
+            'again (**sections 1–2**, load existing).'
         )
 
         updates = {}
+        sub_proc_apply = False
+        sub_proc_save = False
 
         with st.expander('Procedure fields', expanded=not bool(st.session_state.get('gui_exp_hide'))):
-            if _procedure_apply_dirty():
-                _soft_apply_reminder()
-            if tt == 'isometric':
-                st.caption(
-                    '**Isometric** turns strain or curvature targets into motor angles using **test segment length** '
-                    'and **cross-section width** from **section 3** (same as clamp spacing `dclamp`). '
-                    'Those values are copied when you use **Apply** in **section 3** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
-                )
-                st.markdown('**Required**')
-                for key in schema['isometric_required']:
-                    label = key.replace('_', ' ')
-                    updates[key] = _render_field(
-                        b,
-                        key,
-                        'float' if 'steps' not in key else 'int',
-                        label,
-                        help_text=ISOMETRIC_FIELD_HELP.get(key),
-                    )
-                if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
-                    updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
-                st.markdown('**Optional**')
-                for key in schema['isometric_optional']:
-                    if key == 'isometric_stim_params':
-                        updates[key] = _render_field(
-                            b,
-                            key,
-                            'json_dict',
-                            'Isometric step timing & stimulation (optional)',
-                            help_text=ISOMETRIC_STIM_JSON_HELP,
-                        )
-                    elif key == 'isometric_stim_overrides':
-                        updates[key] = _render_field(
-                            b,
-                            key,
-                            'json_dict',
-                            'Stim routing overrides (advanced)',
-                            help_text=ISOMETRIC_STIM_OVERRIDES_HELP,
-                        )
-                    elif key == 'recruitment':
-                        skr = _widget_key('recruitment')
-                        cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
-                        if skr not in st.session_state:
-                            st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
-                        updates[key] = st.selectbox(
-                            'recruitment',
-                            list(RECRUITMENT_OPTIONS),
-                            key=skr,
-                            help=RECRUITMENT_FIELD_HELP,
-                        )
-                    elif key == 'lateral_mode':
-                        skl = _widget_key('lateral_mode')
-                        if skl not in st.session_state:
-                            st.session_state[skl] = str(_get_session_value(b, key) or '')
-                        updates[key] = st.text_input(LATERAL_MODE_LABEL, key=skl, help=ISOMETRIC_FIELD_HELP.get('lateral_mode'))
-                    elif key in ('bilateral_mirror_motor',):
-                        updates[key] = _render_field(
-                            b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOMETRIC_FIELD_HELP.get(key)
-                        )
-                    elif key == 'bilateral_sequential_left_frac':
-                        updates[key] = _render_field(
-                            b, key, 'float', key, help_text=ISOMETRIC_FIELD_HELP.get(key)
-                        )
-                    elif key == 'isometric_mode':
-                        modes = list(ALL_AMPS_MODE_OPTIONS)
-                        skm = _widget_key('isometric_mode')
-                        cur_m = str(_get_session_value(b, key, 'strain'))
-                        if skm not in st.session_state:
-                            st.session_state[skm] = cur_m if cur_m in modes else 'strain'
-                        updates[key] = st.selectbox(
-                            'isometric_mode (how to interpret isometric_initial / isometric_final)',
-                            modes,
-                            key=skm,
-                            format_func=_format_strain_or_amp_mode,
-                            help=ISOMETRIC_FIELD_HELP.get(key),
-                        )
-                    elif key == 'isometric_inter_step_interval_s':
-                        skg = _widget_key('isometric_inter_step_interval_s')
-                        if skg not in st.session_state:
-                            v0 = _get_session_value(b, key, 0.0)
-                            st.session_state[skg] = float(v0) if v0 is not None else 0.0
-                        updates[key] = float(
-                            st.number_input(
-                                'Time between steps (s)',
-                                min_value=0.0,
-                                format='%.6g',
-                                key=skg,
-                                help=(
-                                    'Seconds to wait after each step finishes (after acquisition) before the next '
-                                    'ramp/stimulus period. Use **0** for back-to-back steps.'
-                                ),
-                            )
-                        )
-                    elif 'random_seed' in key:
-                        sks = _widget_key(key)
-                        if sks not in st.session_state:
-                            v0 = _get_session_value(b, key)
-                            st.session_state[sks] = '' if v0 is None else str(v0)
-                        s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
-                        if not str(s).strip():
-                            updates[key] = None
-                        else:
-                            try:
-                                updates[key] = int(s)
-                            except ValueError:
-                                _st_error_actions(
-                                    'Random seed invalid.',
-                                    ['Use whole number only', 'Or leave field blank'],
-                                )
-                                updates[key] = None
-                    else:
-                        kind = 'bool' if 'randomize' in key else 'str'
-                        updates[key] = _render_field(
-                            b, key, kind, key, help_text=ISOMETRIC_FIELD_HELP.get(key)
-                        )
-
-            elif tt == 'isovelocity':
-                st.markdown('**Required**')
-                for key in schema['isovelocity_required']:
-                    kind = 'int' if 'num_steps' in key else 'float'
-                    lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                    updates[key] = _render_field(
-                        b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                    )
-                if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
-                    updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
-                st.markdown('**Optional**')
-                for key in schema['isovelocity_optional']:
-                    if key == 'isovelocity_stim_params':
-                        updates[key] = _render_field(
-                            b,
-                            key,
-                            'json_dict',
-                            'Isovelocity segment timing & stimulation (optional)',
-                            help_text=ISOVELOCITY_STIM_JSON_HELP,
-                        )
-                    elif key == 'isovelocity_stim_overrides':
-                        updates[key] = _render_field(
-                            b,
-                            key,
-                            'json_dict',
-                            'Stim routing overrides (advanced)',
-                            help_text=ISOVELOCITY_STIM_OVERRIDES_HELP,
-                        )
-                    elif key == 'recruitment':
-                        skr = _widget_key('recruitment')
-                        cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
-                        if skr not in st.session_state:
-                            st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
-                        updates[key] = st.selectbox(
-                            'recruitment',
-                            list(RECRUITMENT_OPTIONS),
-                            key=skr,
-                            help=RECRUITMENT_FIELD_HELP,
-                        )
-                    elif key == 'lateral_mode':
-                        skl = _widget_key('lateral_mode')
-                        if skl not in st.session_state:
-                            st.session_state[skl] = str(_get_session_value(b, key) or '')
-                        updates[key] = st.text_input(
-                            LATERAL_MODE_LABEL, key=skl, help=ISOVELOCITY_FIELD_HELP.get('lateral_mode')
-                        )
-                    elif key in ('bilateral_mirror_motor',):
-                        updates[key] = _render_field(
-                            b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                        )
-                    elif key == 'bilateral_sequential_left_frac':
-                        updates[key] = _render_field(
-                            b, key, 'float', key, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                        )
-                    elif key == 'isovelocity_starting_strain_mode':
-                        modes = list(ALL_AMPS_MODE_OPTIONS)
-                        skm = _widget_key('isovelocity_starting_strain_mode')
-                        cur_m = str(_get_session_value(b, key, 'strain'))
-                        if skm not in st.session_state:
-                            st.session_state[skm] = cur_m if cur_m in modes else 'strain'
-                        updates[key] = st.selectbox(
-                            ISOVELOCITY_WIDGET_LABEL.get(
-                                key, 'isovelocity_starting_strain_mode (unit for isovelocity_starting_strain)'
-                            ),
-                            modes,
-                            key=skm,
-                            format_func=_format_strain_or_amp_mode,
-                            help=ISOVELOCITY_FIELD_HELP.get(key),
-                        )
-                    elif 'random_seed' in key:
-                        sks = _widget_key(key)
-                        if sks not in st.session_state:
-                            v0 = _get_session_value(b, key)
-                            st.session_state[sks] = '' if v0 is None else str(v0)
-                        s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
-                        if not str(s).strip():
-                            updates[key] = None
-                        else:
-                            try:
-                                updates[key] = int(s)
-                            except ValueError:
-                                _st_error_actions(
-                                    'Random seed invalid.',
-                                    ['Use whole number only', 'Or leave field blank'],
-                                )
-                                updates[key] = None
-                    else:
-                        kind = 'bool' if 'randomize' in key else 'float'
-                        lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                        updates[key] = _render_field(
-                            b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                        )
-
-            elif tt == 'calibration':
-                st.markdown('**Required**')
-                bases = [x for x in test_types if x != 'calibration']
-                cur = _get_session_value(b, 'calibration_base_test_type', 'dynamic')
-                if cur not in bases:
-                    cur = 'dynamic'
-                sk_cal = _widget_key('calibration_base_test_type')
-                if sk_cal not in st.session_state:
-                    st.session_state[sk_cal] = cur
-                if st.session_state[sk_cal] not in bases:
-                    st.session_state[sk_cal] = bases[0]
-                updates['calibration_base_test_type'] = st.selectbox(
-                    'calibration_base_test_type', bases, key=sk_cal
-                )
-                st.info(
-                    'Calibration runs the **base** motion protocol. Set **test_type** to that base '
-                    '(e.g. dynamic), click **Apply** in **section 4** or **6** (and **Refresh preview** if you use it), '
-                    'then switch back to **calibration** before running.'
-                )
-                st.markdown('**Optional**')
-                for key in schema['calibration_optional']:
-                    sko = _widget_key(key)
-                    if sko not in st.session_state:
-                        st.session_state[sko] = str(_get_session_value(b, key) or '')
-                    updates[key] = st.text_input(key, key=sko)
-
-            elif tt in MOTION_TYPES:
-                st.markdown('**Motion-series parameters** (procedure-specific)')
-                if tt == 'dynamic':
-                    st.caption(
-                        'Timeline length follows **cycles** (freq × cycles_per_step + end cycles), not **Duration**. '
-                        'If `period_by_cycle` is not set yet, call **organize_cycles** from a notebook/script after **Apply**.'
-                    )
-                elif tt == 'step_change':
-                    st.caption('Motion length is computed inside **make_cycles_step_change**; **Duration** does not apply.')
-                fields = _motion_parameter_rows(tt)
-                for name, kind, label in fields:
-                    updates[name] = _render_field(
-                        b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
-                    )
-
-            else:
-                st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
-
-            st.divider()
-            st.markdown('**Save current procedure as template**')
-            st.caption(
-                '**Save** stores the current **experiment type** and all **procedure fields** for that type '
-                '(dynamic / sweeps / steps / isometric / isovelocity / calibration). **Section 2** (data path) and '
-                '**section 3** biometrics are not included—use **Save biometrics** there. For **calibration**, the template '
-                'can also embed the **base protocol** from the Bender object (e.g. frequencies & strains) if you **Apply** '
-                'that base type before saving. Use **Protocol templates (load)** above, then **Apply** and **Run**.'
-            )
             if sf := st.session_state.pop('gui_protocol_save_feedback', None):
                 ok_sf, txt_sf = sf
                 if ok_sf:
@@ -3643,19 +4130,297 @@ def main():
                         ['Check name and folder', 'Read Details'],
                         txt_sf,
                     )
-            st.text_input(
-                'Template name',
-                key='gui_protocol_new_name',
-                placeholder='e.g. Protocol A (any test_type)',
-            )
-            st.text_area(
-                'Description (optional)',
-                key='gui_protocol_new_desc',
-                height=70,
-                placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz × strains (strain_pct); or calibration + base',
-            )
-            st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
-            if _load_save_button('Save template', key='gui_protocol_btn_save'):
+            with st.form('gui_procedure_form', clear_on_submit=False):
+                if _procedure_apply_dirty():
+                    _soft_apply_reminder()
+                if tt == 'isometric':
+                    st.caption(
+                        '**Isometric** turns strain or curvature targets into motor angles using **test segment length** '
+                        'and **cross-section width** from **section 3** (same as clamp spacing `dclamp`). '
+                        'Those values are copied when you use **Apply** in **section 3** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
+                    )
+                    st.markdown('**Required**')
+                    for key in schema['isometric_required']:
+                        label = key.replace('_', ' ')
+                        updates[key] = _render_field(
+                            b,
+                            key,
+                            'float' if 'steps' not in key else 'int',
+                            label,
+                            help_text=ISOMETRIC_FIELD_HELP.get(key),
+                        )
+                    if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
+                        updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
+                    st.markdown('**Optional**')
+                    for key in schema['isometric_optional']:
+                        if key == 'isometric_stim_params':
+                            updates[key] = _render_field(
+                                b,
+                                key,
+                                'json_dict',
+                                'Isometric step timing & stimulation (optional)',
+                                help_text=ISOMETRIC_STIM_JSON_HELP,
+                            )
+                        elif key == 'isometric_stim_overrides':
+                            updates[key] = _render_field(
+                                b,
+                                key,
+                                'json_dict',
+                                'Stim routing overrides (advanced)',
+                                help_text=ISOMETRIC_STIM_OVERRIDES_HELP,
+                            )
+                        elif key == 'recruitment':
+                            skr = _widget_key('recruitment')
+                            cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
+                            if skr not in st.session_state:
+                                st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
+                            updates[key] = st.selectbox(
+                                'recruitment',
+                                list(RECRUITMENT_OPTIONS),
+                                key=skr,
+                                help=RECRUITMENT_FIELD_HELP,
+                            )
+                        elif key == 'lateral_mode':
+                            skl = _widget_key('lateral_mode')
+                            if skl not in st.session_state:
+                                st.session_state[skl] = str(_get_session_value(b, key) or '')
+                            updates[key] = st.text_input(LATERAL_MODE_LABEL, key=skl, help=ISOMETRIC_FIELD_HELP.get('lateral_mode'))
+                        elif key in ('bilateral_mirror_motor',):
+                            updates[key] = _render_field(
+                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                            )
+                        elif key == 'bilateral_sequential_left_frac':
+                            updates[key] = _render_field(
+                                b, key, 'float', key, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                            )
+                        elif key == 'isometric_mode':
+                            modes = list(ALL_AMPS_MODE_OPTIONS)
+                            skm = _widget_key('isometric_mode')
+                            cur_m = str(_get_session_value(b, key, 'strain'))
+                            if skm not in st.session_state:
+                                st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                            updates[key] = st.selectbox(
+                                'isometric_mode (how to interpret isometric_initial / isometric_final)',
+                                modes,
+                                key=skm,
+                                format_func=_format_strain_or_amp_mode,
+                                help=ISOMETRIC_FIELD_HELP.get(key),
+                            )
+                        elif key == 'isometric_inter_step_interval_s':
+                            skg = _widget_key('isometric_inter_step_interval_s')
+                            if skg not in st.session_state:
+                                v0 = _get_session_value(b, key, 0.0)
+                                st.session_state[skg] = float(v0) if v0 is not None else 0.0
+                            updates[key] = float(
+                                st.number_input(
+                                    'Time between steps (s)',
+                                    min_value=0.0,
+                                    format='%.6g',
+                                    key=skg,
+                                    help=(
+                                        'Seconds to wait after each step finishes (after acquisition) before the next '
+                                        'ramp/stimulus period. Use **0** for back-to-back steps.'
+                                    ),
+                                )
+                            )
+                        elif 'random_seed' in key:
+                            sks = _widget_key(key)
+                            if sks not in st.session_state:
+                                v0 = _get_session_value(b, key)
+                                st.session_state[sks] = '' if v0 is None else str(v0)
+                            s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
+                            if not str(s).strip():
+                                updates[key] = None
+                            else:
+                                try:
+                                    updates[key] = int(s)
+                                except ValueError:
+                                    _st_error_actions(
+                                        'Random seed invalid.',
+                                        ['Use whole number only', 'Or leave field blank'],
+                                    )
+                                    updates[key] = None
+                        else:
+                            kind = 'bool' if 'randomize' in key else 'str'
+                            updates[key] = _render_field(
+                                b, key, kind, key, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                            )
+
+                elif tt == 'isovelocity':
+                    st.markdown('**Required**')
+                    for key in schema['isovelocity_required']:
+                        kind = 'int' if 'num_steps' in key else 'float'
+                        lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                        updates[key] = _render_field(
+                            b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                        )
+                    if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
+                        updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
+                    st.markdown('**Optional**')
+                    for key in schema['isovelocity_optional']:
+                        if key == 'isovelocity_stim_params':
+                            updates[key] = _render_field(
+                                b,
+                                key,
+                                'json_dict',
+                                'Isovelocity segment timing & stimulation (optional)',
+                                help_text=ISOVELOCITY_STIM_JSON_HELP,
+                            )
+                        elif key == 'isovelocity_stim_overrides':
+                            updates[key] = _render_field(
+                                b,
+                                key,
+                                'json_dict',
+                                'Stim routing overrides (advanced)',
+                                help_text=ISOVELOCITY_STIM_OVERRIDES_HELP,
+                            )
+                        elif key == 'recruitment':
+                            skr = _widget_key('recruitment')
+                            cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
+                            if skr not in st.session_state:
+                                st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
+                            updates[key] = st.selectbox(
+                                'recruitment',
+                                list(RECRUITMENT_OPTIONS),
+                                key=skr,
+                                help=RECRUITMENT_FIELD_HELP,
+                            )
+                        elif key == 'lateral_mode':
+                            skl = _widget_key('lateral_mode')
+                            if skl not in st.session_state:
+                                st.session_state[skl] = str(_get_session_value(b, key) or '')
+                            updates[key] = st.text_input(
+                                LATERAL_MODE_LABEL, key=skl, help=ISOVELOCITY_FIELD_HELP.get('lateral_mode')
+                            )
+                        elif key in ('bilateral_mirror_motor',):
+                            updates[key] = _render_field(
+                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                            )
+                        elif key == 'bilateral_sequential_left_frac':
+                            updates[key] = _render_field(
+                                b, key, 'float', key, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                            )
+                        elif key == 'isovelocity_starting_strain_mode':
+                            modes = list(ALL_AMPS_MODE_OPTIONS)
+                            skm = _widget_key('isovelocity_starting_strain_mode')
+                            cur_m = str(_get_session_value(b, key, 'strain'))
+                            if skm not in st.session_state:
+                                st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                            updates[key] = st.selectbox(
+                                ISOVELOCITY_WIDGET_LABEL.get(
+                                    key, 'isovelocity_starting_strain_mode (unit for isovelocity_starting_strain)'
+                                ),
+                                modes,
+                                key=skm,
+                                format_func=_format_strain_or_amp_mode,
+                                help=ISOVELOCITY_FIELD_HELP.get(key),
+                            )
+                        elif 'random_seed' in key:
+                            sks = _widget_key(key)
+                            if sks not in st.session_state:
+                                v0 = _get_session_value(b, key)
+                                st.session_state[sks] = '' if v0 is None else str(v0)
+                            s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
+                            if not str(s).strip():
+                                updates[key] = None
+                            else:
+                                try:
+                                    updates[key] = int(s)
+                                except ValueError:
+                                    _st_error_actions(
+                                        'Random seed invalid.',
+                                        ['Use whole number only', 'Or leave field blank'],
+                                    )
+                                    updates[key] = None
+                        else:
+                            kind = 'bool' if 'randomize' in key else 'float'
+                            lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                            updates[key] = _render_field(
+                                b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                            )
+
+                elif tt == 'calibration':
+                    st.markdown('**Required**')
+                    bases = [x for x in test_types if x != 'calibration']
+                    cur = _get_session_value(b, 'calibration_base_test_type', 'dynamic')
+                    if cur not in bases:
+                        cur = 'dynamic'
+                    sk_cal = _widget_key('calibration_base_test_type')
+                    if sk_cal not in st.session_state:
+                        st.session_state[sk_cal] = cur
+                    if st.session_state[sk_cal] not in bases:
+                        st.session_state[sk_cal] = bases[0]
+                    updates['calibration_base_test_type'] = st.selectbox(
+                        'calibration_base_test_type', bases, key=sk_cal
+                    )
+                    st.info(
+                        'Calibration runs the **base** motion protocol. Set **test_type** to that base '
+                        '(e.g. dynamic), click **Apply** in **section 4** or **6** (and **Refresh preview** if you use it), '
+                        'then switch back to **calibration** before running.'
+                    )
+                    st.markdown('**Optional**')
+                    for key in schema['calibration_optional']:
+                        sko = _widget_key(key)
+                        if sko not in st.session_state:
+                            st.session_state[sko] = str(_get_session_value(b, key) or '')
+                        updates[key] = st.text_input(key, key=sko)
+
+                elif tt in MOTION_TYPES:
+                    st.markdown('**Motion-series parameters** (procedure-specific)')
+                    if tt == 'dynamic':
+                        st.caption(
+                            'Timeline length follows **cycles** (freq × cycles_per_step + end cycles), not **Duration**. '
+                            'If `period_by_cycle` is not set yet, call **organize_cycles** from a notebook/script after **Apply**.'
+                        )
+                    elif tt == 'step_change':
+                        st.caption('Motion length is computed inside **make_cycles_step_change**; **Duration** does not apply.')
+                    fields = _motion_parameter_rows(tt)
+                    for name, kind, label in fields:
+                        updates[name] = _render_field(
+                            b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
+                        )
+
+                else:
+                    st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
+
+                st.divider()
+                st.markdown('**Save current procedure as template**')
+                st.caption(
+                    '**Save** stores the current **experiment type** and all **procedure fields** for that type '
+                    '(dynamic / sweeps / steps / isometric / isovelocity / calibration). **Section 2** (data path) and '
+                    '**section 3** biometrics are not included—use **Save biometrics** there. For **calibration**, the template '
+                    'can also embed the **base protocol** from the Bender object (e.g. frequencies & strains) if you **Apply** '
+                    'that base type before saving. Use **Protocol templates (load)** above, then **Apply** and **Run**.'
+                )
+                st.text_input(
+                    'Template name',
+                    key='gui_protocol_new_name',
+                    placeholder='e.g. Protocol A (any test_type)',
+                )
+                st.text_area(
+                    'Description (optional)',
+                    key='gui_protocol_new_desc',
+                    height=70,
+                    placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz × strains (strain_pct); or calibration + base',
+                )
+                st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
+                st.caption(
+                    '**Apply procedure** or **Save template** commits all procedure fields above at once (no Enter in each box).'
+                )
+                _pc1, _pc2 = st.columns(2)
+                with _pc1:
+                    sub_proc_apply = st.form_submit_button(
+                        'Apply procedure',
+                        use_container_width=True,
+                        help='Copy procedure fields onto the experiment object (not **Run experiment**).',
+                    )
+                with _pc2:
+                    sub_proc_save = st.form_submit_button('Save template', use_container_width=True)
+
+            if sub_proc_apply:
+                _apply_procedure_form_to_bender(b, updates, tt)
+                st.toast('Settings applied.')
+            if sub_proc_save:
                 _name = str(st.session_state.get('gui_protocol_new_name') or '').strip()
                 _desc = str(st.session_state.get('gui_protocol_new_desc') or '').strip()
                 _stem = sanitize_template_filename_stem(_name or 'protocol')
@@ -3691,18 +4456,6 @@ def main():
 
             _touch_proc_apply_baseline_if_clean()
 
-        ap1, ap2 = st.columns([1, 4])
-        with ap1:
-            if st.button(
-                'Apply procedure',
-                key='gui_exp_apply',
-                help='Copy procedure fields onto the experiment object (not **Run experiment**).',
-            ):
-                _apply_procedure_form_to_bender(b, updates, tt)
-                st.toast('Settings applied.')
-        with ap2:
-            st.caption('Same as **Apply procedure** in section 6.')
-
         st.checkbox(
             'Hide section (values stay; unhide to edit)',
             key='gui_exp_hide',
@@ -3714,7 +4467,8 @@ def main():
         st.subheader('5 · Experiment preview (table & plot, no DAQ)')
         st.caption(
             'Uses the same motion math as a real run for **commanded** angle / velocity. '
-            '**Refresh preview** copies the form onto the experiment object, then recomputes commands. '
+            '**Refresh preview** uses procedure values after you click **Apply procedure** inside **section 4 · Procedure fields** '
+            '(that submit commits typed numbers without pressing Enter in each box). '
             'For **dynamic**, preview calls **organize_cycles** and updates `period_by_cycle`, so a following **Run** '
             'matches the preview if you do not overwrite those arrays elsewhere. '
             'Set **test_segment_length_mm** and **xsec_width** in **section 3** (or **Apply** there) so preview matches strain geometry.'
@@ -3884,7 +4638,10 @@ def main():
             with c1:
                 if st.button(
                     'Apply procedure',
-                    help='Copy procedure fields to the experiment object (no DAQ).',
+                    help=(
+                        'Copy procedure fields to the experiment object (no DAQ). After editing in **section 4 · Procedure fields**, '
+                        'prefer **Apply procedure** there first so the latest typed values are committed.'
+                    ),
                 ):
                     _apply_procedure_form_to_bender(b, updates, tt)
                     st.toast('Settings applied.')
