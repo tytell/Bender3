@@ -189,8 +189,8 @@ def _inject_accessibility_theme() -> None:
   outline-offset: 2px;
 }}
 /* Focus visibility */
-section[data-testid="stMain"] button:focus-visible,
-section[data-testid="stMain"] a:focus-visible,
+[data-testid="stMain"] button:focus-visible,
+[data-testid="stMain"] a:focus-visible,
 [data-testid="stSidebar"] button:focus-visible,
 [data-testid="stSidebar"] a:focus-visible {{
   outline: 3px solid #2563eb !important;
@@ -204,14 +204,14 @@ body:has(.bnd-theme-warm) [data-testid="stSidebar"] {{
   background-color: #f3eee6 !important;
   border-right: 1px solid #d6cfc4 !important;
 }}
-body:has(.bnd-theme-warm) section[data-testid="stMain"] .block-container {{
+body:has(.bnd-theme-warm) [data-testid="stMain"] .block-container {{
   background-color: #fffefb !important;
 }}
-body:has(.bnd-theme-warm) section[data-testid="stMain"] p,
-body:has(.bnd-theme-warm) section[data-testid="stMain"] li,
-body:has(.bnd-theme-warm) section[data-testid="stMain"] h1,
-body:has(.bnd-theme-warm) section[data-testid="stMain"] h2,
-body:has(.bnd-theme-warm) section[data-testid="stMain"] h3,
+body:has(.bnd-theme-warm) [data-testid="stMain"] p,
+body:has(.bnd-theme-warm) [data-testid="stMain"] li,
+body:has(.bnd-theme-warm) [data-testid="stMain"] h1,
+body:has(.bnd-theme-warm) [data-testid="stMain"] h2,
+body:has(.bnd-theme-warm) [data-testid="stMain"] h3,
 body:has(.bnd-theme-warm) [data-testid="stCaption"],
 body:has(.bnd-theme-warm) [data-testid="stWidgetLabel"] p {{
   color: #1c1917 !important;
@@ -229,14 +229,14 @@ body:has(.bnd-theme-cool) [data-testid="stSidebar"] {{
   background-color: #e2e8f0 !important;
   border-right: 1px solid #cbd5e1 !important;
 }}
-body:has(.bnd-theme-cool) section[data-testid="stMain"] .block-container {{
+body:has(.bnd-theme-cool) [data-testid="stMain"] .block-container {{
   background-color: #f8fafc !important;
 }}
-body:has(.bnd-theme-cool) section[data-testid="stMain"] p,
-body:has(.bnd-theme-cool) section[data-testid="stMain"] li,
-body:has(.bnd-theme-cool) section[data-testid="stMain"] h1,
-body:has(.bnd-theme-cool) section[data-testid="stMain"] h2,
-body:has(.bnd-theme-cool) section[data-testid="stMain"] h3,
+body:has(.bnd-theme-cool) [data-testid="stMain"] p,
+body:has(.bnd-theme-cool) [data-testid="stMain"] li,
+body:has(.bnd-theme-cool) [data-testid="stMain"] h1,
+body:has(.bnd-theme-cool) [data-testid="stMain"] h2,
+body:has(.bnd-theme-cool) [data-testid="stMain"] h3,
 body:has(.bnd-theme-cool) [data-testid="stCaption"],
 body:has(.bnd-theme-cool) [data-testid="stWidgetLabel"] p {{
   color: #0f172a !important;
@@ -254,14 +254,14 @@ body:has(.bnd-theme-slateivory) [data-testid="stSidebar"] {{
   background-color: #1e293b !important;
   border-right: 1px solid #0f172a !important;
 }}
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] .block-container {{
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] .block-container {{
   background-color: #fffff7 !important;
 }}
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] p,
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] li,
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] h1,
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] h2,
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] h3,
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] p,
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] li,
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] h1,
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] h2,
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] h3,
 body:has(.bnd-theme-slateivory) [data-testid="stCaption"],
 body:has(.bnd-theme-slateivory) [data-testid="stWidgetLabel"] p {{
   color: #0f172a !important;
@@ -272,34 +272,34 @@ body:has(.bnd-theme-slateivory) [data-testid="stSidebar"] label {{
   color: #e2e8f0 !important;
 }}
 /* —— Larger text —— */
-body:has(.bnd-a11y-large-text) section[data-testid="stMain"] .block-container {{
+body:has(.bnd-a11y-large-text) [data-testid="stMain"] .block-container {{
   font-size: 1.125rem !important;
 }}
 body:has(.bnd-a11y-large-text) [data-testid="stSidebar"] {{
   font-size: 1.0625rem !important;
 }}
 /* —— Workflow: main column white (all themes); logo strip matches —— */
-body:has(.bnd-workflow-active) section[data-testid="stMain"],
-body:has(.bnd-workflow-active) section[data-testid="stMain"] .block-container {{
+body:has(.bnd-workflow-active) [data-testid="stMain"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] .block-container {{
   background-color: #ffffff !important;
 }}
-body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stImage"],
-body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stImage"] > div {{
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stImage"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stImage"] > div {{
   background-color: #ffffff !important;
 }}
 /* Light touch: main panel labels and subheaders read a bit clearer without heavy chrome */
-body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stWidgetLabel"] p {{
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stWidgetLabel"] p {{
   color: #334155 !important;
 }}
-body:has(.bnd-workflow-active):has(.bnd-theme-warm) section[data-testid="stMain"] [data-testid="stWidgetLabel"] p {{
+body:has(.bnd-workflow-active):has(.bnd-theme-warm) [data-testid="stMain"] [data-testid="stWidgetLabel"] p {{
   color: #44403c !important;
 }}
-body:has(.bnd-workflow-active) section[data-testid="stMain"] h2,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] h3 {{
+body:has(.bnd-workflow-active) [data-testid="stMain"] h2,
+body:has(.bnd-workflow-active) [data-testid="stMain"] h3 {{
   color: #334155 !important;
 }}
-body:has(.bnd-workflow-active):has(.bnd-theme-warm) section[data-testid="stMain"] h2,
-body:has(.bnd-workflow-active):has(.bnd-theme-warm) section[data-testid="stMain"] h3 {{
+body:has(.bnd-workflow-active):has(.bnd-theme-warm) [data-testid="stMain"] h2,
+body:has(.bnd-workflow-active):has(.bnd-theme-warm) [data-testid="stMain"] h3 {{
   color: #44403c !important;
 }}
 </style>
@@ -312,8 +312,9 @@ def _inject_load_save_button_theme() -> None:
     """Inject CSS for persistent action buttons.
 
     Visual tiers (main panel, workflow):
-    - **Load/Save (black, full width):** `_load_save_button` — same as other primary actions (white on black).
-    - **Mode / branch:** `_hardware_configuration_mode_toggle` — Streamlit primary/secondary, styled black/white below.
+    - **Primary:** red fill, white label; hover brightens and adds a soft red glow.
+    - **Secondary:** white fill, slate border and text; hover tints toward light red.
+    - **Load/Save:** `_load_save_button` uses primary styling (red).
     """
     st.markdown(
         """
@@ -328,124 +329,357 @@ body:has(.bnd-workflow-active) [data-testid="stSidebar"] {
     background-color: #ffffff !important;
     border-right: 1px solid #e2e8f0 !important;
 }
-/* Sidebar buttons (same black / white as main) */
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] div.stButton button,
+/* Sidebar — primary: red / white; secondary: white / slate (hover lights up) */
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"],
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"],
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"],
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
-    background-color: #000000 !important;
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
+    background-color: #dc2626 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #262626 !important;
+    border: 1px solid #b91c1c !important;
     font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button p,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] div.stButton button p,
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"] p,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"] p,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] p,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] p,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button span,
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"] span,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"] span {
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] span {
     color: #ffffff !important;
 }
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button:hover,
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"]:hover,
-body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:hover {
-    background-color: #171717 !important;
-    border-color: #404040 !important;
-}
-/* Main panel: all Streamlit buttons → black, label text white */
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
-    background-color: #000000 !important;
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:hover {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
     background-image: none !important;
-    color: #ffffff !important;
-    border: 1px solid #262626 !important;
+    filter: none !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
     font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;
 }
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button span,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button span,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] span {
-    color: #ffffff !important;
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"] span,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] span {
+    color: #334155 !important;
 }
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button:hover,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button:hover,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
-    background-color: #171717 !important;
-    border-color: #404040 !important;
-    color: #ffffff !important;
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {
+    background-color: #fff1f2 !important;
+    border-color: #fb7185 !important;
+    color: #991b1b !important;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.18) !important;
 }
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button:hover p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button:hover span,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button:hover p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button:hover span {
-    color: #ffffff !important;
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:hover span,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover span {
+    color: #991b1b !important;
 }
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"],
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"],
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"],
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] {
-    background-color: #000000 !important;
+/* Main panel — match Streamlit primary / secondary */
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-primary"] {
+    background-color: #dc2626 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #262626 !important;
+    border: 1px solid #b91c1c !important;
     font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"] p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"] p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] p,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"] span,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"] span,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] span,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] span {
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"] span {
     color: #ffffff !important;
 }
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"]:hover,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover {
-    background-color: #171717 !important;
-    border-color: #404040 !important;
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:hover {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
     color: #ffffff !important;
+    background-image: none !important;
+    filter: none !important;
 }
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"]:disabled,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"]:disabled,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"]:disabled,
-body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:disabled {
-    background-color: #525252 !important;
-    border-color: #737373 !important;
-    color: #fafafa !important;
-    opacity: 0.85 !important;
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"],
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-secondary"],
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-secondary"] {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;
 }
-/* Load/Save full-width actions (same black treatment; marker div .bnd-ls-action) */
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"],
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"] {
-    background-color: #000000 !important;
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"] span {
+    color: #334155 !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"]:hover {
+    background-color: #fff1f2 !important;
+    border-color: #fb7185 !important;
+    color: #991b1b !important;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.18) !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:hover span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"]:hover span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"]:hover span {
+    color: #991b1b !important;
+}
+/* role=button fallbacks (match primary) */
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
+    background-color: #dc2626 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #262626 !important;
+    border: 1px solid #b91c1c !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:hover,
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:hover {
-    background-color: #171717 !important;
-    border-color: #404040 !important;
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] span {
     color: #ffffff !important;
 }
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:focus-visible,
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:focus-visible {
-    box-shadow: 0 0 0 0.2rem rgba(0, 0, 0, 0.25) !important;
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] {
+    background-color: #dc2626 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #b91c1c !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] span {
+    color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"] {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-secondary"] span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"] span {
+    color: #334155 !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover {
+    background-color: #fff1f2 !important;
+    border-color: #fb7185 !important;
+    color: #991b1b !important;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.18) !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover span,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover p,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover span {
+    color: #991b1b !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"]:disabled,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:disabled {
+    background-color: #fca5a5 !important;
+    border-color: #f87171 !important;
+    color: #fef2f2 !important;
+    box-shadow: none !important;
+    opacity: 0.9 !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-secondary"]:disabled,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:disabled {
+    background-color: #f1f5f9 !important;
+    border-color: #cbd5e1 !important;
+    color: #94a3b8 !important;
+    box-shadow: none !important;
+    opacity: 0.9 !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"]:disabled,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:disabled {
+    background-color: #fca5a5 !important;
+    border-color: #f87171 !important;
+    opacity: 0.9 !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:disabled,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:disabled {
+    background-color: #f1f5f9 !important;
+    border-color: #cbd5e1 !important;
+    opacity: 0.9 !important;
+}
+/* Primary labels: Streamlit nests div/label under <button>; theme can color those. */
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[kind="primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[kind="primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[kind="primary"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+    stroke: #ffffff !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:hover * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+/* Hover when pointer is on wrapper / column gutter: match inner button from parent :hover */
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stButton"]:hover button[kind="primary"],
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    filter: none !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stButton"]:hover button[kind="primary"] *,
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] [data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"]:hover [role="button"] {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"]:hover [role="button"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+/* Load/Save full-width actions (marker div .bnd-ls-action); default is primary = red */
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"],
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"] {
+    background-color: #dc2626 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #b91c1c !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:hover,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"]:hover,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="baseButton-primary"],
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="stBaseButton-primary"] {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    color: #ffffff !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"] *,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"] *,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="baseButton-primary"] *,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="stBaseButton-primary"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"],
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-secondary"] {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;
+}
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:hover,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-secondary"]:hover {
+    background-color: #fff1f2 !important;
+    border-color: #fb7185 !important;
+    color: #991b1b !important;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.18) !important;
+}
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:focus-visible,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"]:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #dc2626 !important;
+}
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:focus-visible,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-secondary"]:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #94a3b8 !important;
 }
 /* Bordered layout panels (Streamlit container border=True) — white on white page */
-section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     border-width: 2px !important;
     border-color: #94a3b8 !important;
     border-radius: 10px !important;
@@ -454,34 +688,34 @@ section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     margin-bottom: 0.75rem !important;
 }
 /* Alert blocks: clearer frame */
-section[data-testid="stMain"] div[data-testid="stAlert"] {
+[data-testid="stMain"] div[data-testid="stAlert"] {
     border: 1px solid #cbd5e1 !important;
     border-radius: 8px !important;
 }
 /* Theme-tinted panel borders (background stays white in workflow via rule below) */
-body:has(.bnd-theme-warm) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+body:has(.bnd-theme-warm) [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #fffefb !important;
     border-color: #d6cfc4 !important;
 }
-body:has(.bnd-theme-warm) section[data-testid="stMain"] div[data-testid="stAlert"] {
+body:has(.bnd-theme-warm) [data-testid="stMain"] div[data-testid="stAlert"] {
     border-color: #c4b8a8 !important;
 }
-body:has(.bnd-theme-cool) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+body:has(.bnd-theme-cool) [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #f8fafc !important;
     border-color: #94a3b8 !important;
 }
-body:has(.bnd-theme-cool) section[data-testid="stMain"] div[data-testid="stAlert"] {
+body:has(.bnd-theme-cool) [data-testid="stMain"] div[data-testid="stAlert"] {
     border-color: #94a3b8 !important;
 }
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #fffff7 !important;
     border-color: #64748b !important;
 }
-body:has(.bnd-theme-slateivory) section[data-testid="stMain"] div[data-testid="stAlert"] {
+body:has(.bnd-theme-slateivory) [data-testid="stMain"] div[data-testid="stAlert"] {
     border-color: #64748b !important;
 }
 /* Workflow: always white bordered panels (wins over theme panel tint) */
-body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #ffffff !important;
     border-color: #cbd5e1 !important;
 }
@@ -500,25 +734,25 @@ body:has(.bnd-stepwise-active) .main .block-container {
     padding-top: 0.35rem !important;
     padding-bottom: 0.65rem !important;
 }
-body:has(.bnd-stepwise-active) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+body:has(.bnd-stepwise-active) [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     padding: 0.4rem 0.55rem 0.5rem 0.55rem !important;
     margin-bottom: 0.35rem !important;
 }
-body:has(.bnd-stepwise-active) section[data-testid="stMain"] [data-testid="stProgress"] {
+body:has(.bnd-stepwise-active) [data-testid="stMain"] [data-testid="stProgress"] {
     margin-top: 0 !important;
     margin-bottom: 0.3rem !important;
 }
-body:has(.bnd-stepwise-active) section[data-testid="stMain"] [data-testid="stImage"] {
+body:has(.bnd-stepwise-active) [data-testid="stMain"] [data-testid="stImage"] {
     margin-top: 0 !important;
     margin-bottom: 0 !important;
 }
-body:has(.bnd-stepwise-active) section[data-testid="stMain"] h1,
-body:has(.bnd-stepwise-active) section[data-testid="stMain"] h2,
-body:has(.bnd-stepwise-active) section[data-testid="stMain"] h3 {
+body:has(.bnd-stepwise-active) [data-testid="stMain"] h1,
+body:has(.bnd-stepwise-active) [data-testid="stMain"] h2,
+body:has(.bnd-stepwise-active) [data-testid="stMain"] h3 {
     margin-top: 0.4rem !important;
     margin-bottom: 0.25rem !important;
 }
-body:has(.bnd-stepwise-active) section[data-testid="stMain"] [data-testid="stHeader"] {
+body:has(.bnd-stepwise-active) [data-testid="stMain"] [data-testid="stHeader"] {
     margin-top: 0.25rem !important;
 }
 </style>
@@ -2536,7 +2770,7 @@ def _render_landing_page() -> None:
     st.markdown(
         """
 <style>
-#root .bnd-landing-hero-wrap {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-hero-wrap {
     position: relative;
     width: 100%;
     box-sizing: border-box;
@@ -2545,8 +2779,8 @@ def _render_landing_page() -> None:
     margin-bottom: 0.35rem;
     padding-bottom: 0.35rem;
 }
-#root .bnd-landing-hero-text { display: block; }
-#root .bnd-landing-hero-logo {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-hero-text { display: block; }
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-hero-logo {
     position: absolute;
     top: 0;
     right: 0;
@@ -2560,7 +2794,7 @@ def _render_landing_page() -> None:
     background: #ffffff;
     border-radius: 12px;
 }
-#root .bnd-landing-hero-logo-img {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-hero-logo-img {
     display: block;
     max-width: 100%;
     max-height: 100%;
@@ -2629,19 +2863,19 @@ def _render_landing_page() -> None:
         st.markdown('<div style="height:0.5rem"></div>', unsafe_allow_html=True)
         ba, bb, bc = st.columns(3)
         with ba:
-            if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='secondary'):
+            if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='primary'):
                 st.session_state['gui_app_route'] = 'scratch'
                 st.session_state.pop('gui_stepwise_step', None)
                 st.rerun()
         with bb:
-            if st.button('Template workflow', key='land_templates', use_container_width=True, type='secondary'):
+            if st.button('Template workflow', key='land_templates', use_container_width=True, type='primary'):
                 st.session_state['gui_app_route'] = 'templates'
                 st.session_state.pop('gui_stepwise_step', None)
                 st.session_state.pop('gui_tpl_bio_done', None)
                 st.session_state.pop('gui_tpl_cfg_autoloaded', None)
                 st.rerun()
         with bc:
-            if st.button('Step-by-step', key='land_stepwise', use_container_width=True, type='secondary'):
+            if st.button('Step-by-step', key='land_stepwise', use_container_width=True, type='primary'):
                 st.session_state['gui_app_route'] = 'stepwise'
                 st.session_state['gui_stepwise_step'] = 0
                 st.rerun()
@@ -2659,7 +2893,7 @@ def _render_landing_page() -> None:
             'experiment workflow.</p>',
             unsafe_allow_html=True,
         )
-        if st.button('Open H5 data explorer', key='land_h5_explorer', use_container_width=True, type='secondary'):
+        if st.button('Open H5 data explorer', key='land_h5_explorer', use_container_width=True, type='primary'):
             st.session_state['gui_app_route'] = 'h5_explorer'
             st.rerun()
 
@@ -2682,30 +2916,30 @@ def _render_landing_page() -> None:
         st.caption('The sidebar is hidden on this page. Adjust theme and text size here; they apply after you open a workflow.')
         _render_display_preferences_sidebar()
 
-    # Landing-only overrides (this function runs only on the home route). Avoid CSS :has() here —
-    # some Edge / Streamlit DOM shapes treat it unreliably. Use #root (Streamlit mount) to beat theme
-    # specificity. st.html keeps <style> in the live document (markdown path can drop or scope styles).
+    # Landing-only overrides (this function runs only on the home route). Selectors use
+    # :is(#root, body:has(.bnd-landing-page)) because some Streamlit builds have no #root id.
+    # st.html keeps <style> in the live document (markdown path can drop or scope styles).
     _landing_style = """
 <style>
-#root .stApp,
-#root [data-testid="stAppViewContainer"],
-#root section[data-testid="stMain"],
-#root section[data-testid="stMain"] > div,
-#root section[data-testid="stMain"] .block-container {
+:is(#root, body:has(.bnd-landing-page)) .stApp,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stAppViewContainer"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] > div,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .block-container {
     background: #ffffff !important;
     background-color: #ffffff !important;
 }
-#root section[data-testid="stMain"] .block-container {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .block-container {
     padding-top: 0.35rem !important;
     padding-bottom: 2rem !important;
     max-width: 52rem !important;
     margin-left: auto !important;
     margin-right: auto !important;
 }
-#root section[data-testid="stMain"] [data-testid="stVerticalBlock"] > div:first-child {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stVerticalBlock"] > div:first-child {
     margin-top: 0 !important;
 }
-#root section[data-testid="stMain"] h1 {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] h1 {
     font-weight: 700 !important;
     letter-spacing: -0.03em !important;
     color: #334155 !important;
@@ -2714,14 +2948,14 @@ def _render_landing_page() -> None:
     margin-bottom: 0.35rem !important;
     font-size: clamp(2.45rem, 5.2vw, 3.45rem) !important;
 }
-#root .bnd-landing-tagline {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-tagline {
     font-size: 1.32rem !important;
     line-height: 1.48 !important;
     color: #64748b !important;
     margin: 0.1rem 0 0.2rem 0 !important;
     font-weight: 450;
 }
-#root .bnd-landing-hero-rule {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-hero-rule {
     height: 0;
     margin: 0.85rem 0 0.55rem 0;
     clear: both;
@@ -2731,24 +2965,24 @@ def _render_landing_page() -> None:
     background: none;
     opacity: 0.85;
 }
-#root .bnd-landing-eom-box {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-eom-box {
     background: linear-gradient(145deg, #e2f4f0 0%, #dff4f8 50%, #e4e8f5 100%);
     border-radius: 14px;
     padding: 1rem 1.2rem 1.05rem;
     margin: 1.95rem 0 1.05rem 0;
     border-left: 4px solid #0d9488;
 }
-#root .bnd-eom-heading { margin: 0 0 0.45rem 0; font-size: 0.98rem; color: #475569; }
-#root .bnd-eom-eq {
+:is(#root, body:has(.bnd-landing-page)) .bnd-eom-heading { margin: 0 0 0.45rem 0; font-size: 0.98rem; color: #475569; }
+:is(#root, body:has(.bnd-landing-page)) .bnd-eom-eq {
     margin: 0 0 0.55rem 0;
     font-family: Georgia, 'Times New Roman', serif;
     font-size: 1.22rem;
     line-height: 1.45;
     color: #334155;
 }
-#root .bnd-eom-note { margin: 0; font-size: 0.92rem; line-height: 1.5; color: #64748b; }
-#root .bnd-landing-section-sub.bnd-landing-what-section-sub { margin-bottom: 1.15rem !important; }
-#root .bnd-landing-section-title {
+:is(#root, body:has(.bnd-landing-page)) .bnd-eom-note { margin: 0; font-size: 0.92rem; line-height: 1.5; color: #64748b; }
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-section-sub.bnd-landing-what-section-sub { margin-bottom: 1.15rem !important; }
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-section-title {
     text-align: center !important;
     width: 100%;
     margin: 0.1rem 0 0.35rem 0 !important;
@@ -2757,22 +2991,22 @@ def _render_landing_page() -> None:
     color: #475569 !important;
     letter-spacing: -0.02em;
 }
-#root .bnd-landing-section-sub {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-section-sub {
     text-align: center;
     color: #64748b;
     font-size: 1.08rem;
     line-height: 1.5;
     margin: 0 0 0.9rem 0;
 }
-#root .bnd-landing-learn-intro {
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-learn-intro {
     font-size: 1.02rem;
     line-height: 1.55;
     color: #64748b !important;
     margin: 0 0 0.65rem 0;
 }
-#root section[data-testid="stMain"] [data-testid="stCaption"] { color: #64748b !important; }
-#root .bnd-landing-between-sections { height: 1.65rem; }
-#root [data-testid="stVerticalBlockBorderWrapper"] {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stCaption"] { color: #64748b !important; }
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-between-sections { height: 1.65rem; }
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stVerticalBlockBorderWrapper"] {
     padding: 1.05rem 1.05rem 1.2rem !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
@@ -2781,70 +3015,254 @@ def _render_landing_page() -> None:
     border-radius: 14px !important;
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
 }
-#root [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] p,
-#root [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] li {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] li {
     color: #475569 !important;
 }
-/* st.button → .stButton + data-testid=stButton; Base Web may nest button or role=button */
-#root section[data-testid="stMain"] div[data-testid="stButton"] button,
-#root section[data-testid="stMain"] div.stButton button,
-#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
+/* st.button — primary red / secondary white; hover brightens (see workflow theme). */
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] {
     min-height: 3rem !important;
-    background-color: #000000 !important;
+    background-color: #dc2626 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #262626 !important;
+    border: 1px solid #b91c1c !important;
     font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
-#root section[data-testid="stMain"] div[data-testid="stButton"] button p,
-#root section[data-testid="stMain"] div.stButton button p,
-#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] p,
-#root section[data-testid="stMain"] div[data-testid="stButton"] button span,
-#root section[data-testid="stMain"] div.stButton button span,
-#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] span {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"] span {
     color: #ffffff !important;
 }
-#root section[data-testid="stMain"] div[data-testid="stButton"] button:hover,
-#root section[data-testid="stMain"] div.stButton button:hover,
-#root section[data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
-    border-color: #404040 !important;
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:hover {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
     color: #ffffff !important;
-    background-color: #171717 !important;
+    background-image: none !important;
+    filter: none !important;
 }
-#root section[data-testid="stMain"] div[data-testid="stButton"] button:hover p,
-#root section[data-testid="stMain"] div[data-testid="stButton"] button:hover span,
-#root section[data-testid="stMain"] div.stButton button:hover p,
-#root section[data-testid="stMain"] div.stButton button:hover span {
-    color: #ffffff !important;
-}
-#root section[data-testid="stMain"] div[data-testid="stButton"] button:focus-visible,
-#root section[data-testid="stMain"] div.stButton button:focus-visible {
-    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #000000 !important;
-}
-#root section[data-testid="stMain"] button[data-testid="baseButton-primary"],
-#root section[data-testid="stMain"] button[data-testid="baseButton-secondary"],
-#root section[data-testid="stMain"] button[data-testid="stBaseButton-primary"],
-#root section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="baseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"] {
     min-height: 3rem !important;
-    background-color: #000000 !important;
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"] span {
+    color: #334155 !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"]:hover {
+    background-color: #fff1f2 !important;
+    border-color: #fb7185 !important;
+    color: #991b1b !important;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.18) !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:hover p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:hover span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"]:hover p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"]:hover span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"]:hover p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"]:hover span {
+    color: #991b1b !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
+    min-height: 3rem !important;
+    background-color: #dc2626 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #262626 !important;
+    border: 1px solid #b91c1c !important;
     font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
-#root section[data-testid="stMain"] button[data-testid="baseButton-primary"] p,
-#root section[data-testid="stMain"] button[data-testid="baseButton-secondary"] p,
-#root section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] p,
-#root section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] p,
-#root section[data-testid="stMain"] button[data-testid="baseButton-primary"] span,
-#root section[data-testid="stMain"] button[data-testid="baseButton-secondary"] span,
-#root section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] span,
-#root section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] span {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] span {
     color: #ffffff !important;
 }
-#root [data-testid="stSidebar"],
-#root [data-testid="stSidebarCollapsedControl"],
-#root [data-testid="collapsedControl"] {
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"]:focus-visible,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:focus-visible,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:focus-visible,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #dc2626 !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:focus-visible,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:focus-visible,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-secondary"]:focus-visible,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-secondary"]:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #94a3b8 !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] {
+    min-height: 3rem !important;
+    background-color: #dc2626 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #b91c1c !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"] {
+    min-height: 3rem !important;
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #334155 !important;
+    border: 1px solid #cbd5e1 !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover {
+    background-color: #fff1f2 !important;
+    border-color: #fb7185 !important;
+    color: #991b1b !important;
+    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.18) !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] span {
+    color: #ffffff !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-secondary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-secondary"] span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"] p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"] span {
+    color: #334155 !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover span,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover p,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover span {
+    color: #991b1b !important;
+}
+/* Landing primary: white nested labels; parent-hover + kind=primary (Streamlit variance) */
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[kind="primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[kind="primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-primary"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+    stroke: #ffffff !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"]:hover *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:hover *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:hover *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:hover *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"]:hover *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stButton"]:hover button[kind="primary"],
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    filter: none !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stButton"]:hover button[kind="primary"] *,
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) .stApp div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"]:hover button[data-testid="baseButton-primary"] *,
+:is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"]:hover [role="button"] {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"]:hover [role="button"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stSidebar"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stSidebarCollapsedControl"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="collapsedControl"] {
     display: none !important;
 }
 </style>
