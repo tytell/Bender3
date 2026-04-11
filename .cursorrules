@@ -31,7 +31,7 @@ All new Streamlit UI that should match the product look must **plug into the exi
 
 ## Streamlit layout and navigation
 
-- **Routing** uses `st.session_state['gui_app_route']`: `landing`, `scratch`, `templates`, `stepwise`, `h5_explorer`.
+- **Routing** uses `st.session_state['gui_app_route']`: `landing`, `scratch`, `templates`, `stepwise`, `sim_compare` (offline Simulation & Comparison), `h5_explorer`.
 - **Landing**: sidebar hidden; hero + “Choose Workflow” cards; **Settings** in an expander (theme + text size); entry to H5 explorer.
 - **Workflows**: scratch (full layout), templates (disk-backed hardware + biometrics), stepwise (numbered steps 1–5, progress UI).
 - **User-facing triad** (use consistently): **Hardware configuration**, **Biometrics**, **Protocol** (avoid mixing “procedure” vs “protocol” elsewhere).

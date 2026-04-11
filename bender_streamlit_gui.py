@@ -64,6 +64,13 @@ from bender_config_builder import (  # noqa: E402
 )
 from bender_functions import Bender  # noqa: E402
 from bender_gui_preview import build_protocol_preview  # noqa: E402
+from bender_simulation import (  # noqa: E402
+    cantilever_stiffness_N_per_m_for_geometry,
+    force_displacement_comparison_curve,
+    force_displacement_series,
+    oscillatory_viscoelastic_timeseries,
+    static_stiffness_comparison_delta_grid,
+)
 from bender_biometrics_templates import (  # noqa: E402
     apply_biometrics_template_to_session,
     biometrics_template_display_label,
@@ -718,6 +725,34 @@ body:has(.bnd-theme-slateivory) [data-testid="stMain"] div[data-testid="stAlert"
 body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #ffffff !important;
     border-color: #cbd5e1 !important;
+}
+/* Simulation & Comparison — tighter controls beside plots (workbench layout) */
+body:has(.bnd-sim-compare-active) [data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    padding: 0.45rem 0.6rem 0.5rem 0.6rem !important;
+    margin-bottom: 0.4rem !important;
+}
+body:has(.bnd-sim-compare-active) [data-testid="stMain"] [data-testid="stSlider"] {
+    margin-top: 0 !important;
+    margin-bottom: 0.15rem !important;
+}
+body:has(.bnd-sim-compare-active) [data-testid="stMain"] [data-testid="stSelectbox"] {
+    margin-bottom: 0.25rem !important;
+}
+body:has(.bnd-sim-compare-active) [data-testid="stMain"] [data-testid="stCheckbox"] {
+    margin-bottom: 0.35rem !important;
+}
+/* Simulation & Comparison — oscillatory mode banner (navy accent, distinct from live hardware CTAs) */
+body:has(.bnd-workflow-active) [data-testid="stMain"] .bnd-sim-osc-banner {
+    border-left: 4px solid #1e3a5f !important;
+    background: linear-gradient(90deg, #f1f5f9 0%, #ffffff 100%) !important;
+    padding: 0.65rem 1rem !important;
+    border-radius: 10px !important;
+    margin: 0 0 0.85rem 0 !important;
+    color: #0f172a !important;
+    font-weight: 600 !important;
+    font-size: 0.98rem !important;
+    border: 1px solid #cbd5e1 !important;
+    border-left-width: 4px !important;
 }
 </style>
 """,
@@ -1945,6 +1980,41 @@ def _render_sidebar_input_checks() -> None:
     st.divider()
 
 
+def _render_simulation_sidebar() -> None:
+    """Simulation mode: numpy stand-in for DAQ; material affects cantilever stiffness in :meth:`Bender.run`."""
+    st.session_state.setdefault('gui_simulation_mode', False)
+    st.session_state.setdefault('gui_simulation_material', 'polyurethane')
+    st.markdown('### Simulation mode')
+    st.caption(
+        'Run the app **without NI hardware**: a solid 25.4 mm OD tube cantilever model drives synthetic '
+        'force/torque channels (polyurethane vs silicone Young\'s modulus).'
+    )
+    with st.container(border=True):
+        st.markdown('<div class="bnd-simulation-panel" aria-hidden="true"></div>', unsafe_allow_html=True)
+        st.checkbox(
+            'Enable simulation mode (no DAQ)',
+            key='gui_simulation_mode',
+            help='Bypasses NI-DAQmx in **Run experiment**; use **Refresh preview** below for force–displacement plots.',
+        )
+        _sim_on = bool(st.session_state.get('gui_simulation_mode', False))
+        st.selectbox(
+            'Simulated tube material',
+            options=['polyurethane', 'silicone'],
+            format_func=lambda k: {
+                'polyurethane': 'Polyurethane (E ≈ 35 MPa — stiffer)',
+                'silicone': 'Silicone (E ≈ 3 MPa — softer)',
+            }[k],
+            key='gui_simulation_material',
+            disabled=not _sim_on,
+            help='Sets E in k = 3EI/L³ (viscous term η·dδ/dt adds mild rate dependence).',
+        )
+    b = st.session_state.get('bender')
+    if b is not None:
+        b.simulation_mode = bool(st.session_state.get('gui_simulation_mode', False))
+        b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
+    st.divider()
+
+
 def _seed_cfg_build_from_base(base: str) -> None:
     """Fill ``gui_cfg_bld_*`` widget defaults from an existing config module."""
     try:
@@ -2880,6 +2950,22 @@ def _render_landing_page() -> None:
                 st.session_state['gui_stepwise_step'] = 0
                 st.rerun()
 
+        st.markdown(
+            '<p class="bnd-landing-sim-cta-sub">Offline exploration (no NI hardware)</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="bnd-land-sim-btn-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
+        if st.button(
+            'Simulate Bending Mechanics',
+            key='land_sim_compare',
+            use_container_width=True,
+            type='secondary',
+            help='Compare two cantilever specimens (material + geometry) using numpy only — no NI-DAQ.',
+        ):
+            st.session_state['gui_app_route'] = 'sim_compare'
+            st.session_state.pop('gui_stepwise_step', None)
+            st.rerun()
+
     st.markdown('<div class="bnd-landing-between-sections"></div>', unsafe_allow_html=True)
 
     with st.container(border=True):
@@ -2961,9 +3047,8 @@ def _render_landing_page() -> None:
     clear: both;
     padding: 0;
     border: none;
-    border-top: 2px dotted #c2410c;
+    border-top: 4px solid #c2410c;
     background: none;
-    opacity: 0.85;
 }
 :is(#root, body:has(.bnd-landing-page)) .bnd-landing-eom-box {
     background: linear-gradient(145deg, #e2f4f0 0%, #dff4f8 50%, #e4e8f5 100%);
@@ -3265,6 +3350,42 @@ def _render_landing_page() -> None:
 :is(#root, body:has(.bnd-landing-page)) [data-testid="collapsedControl"] {
     display: none !important;
 }
+/* Fourth workflow CTA — deep slate / navy (distinct from live red primaries) */
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-sim-cta-sub {
+    text-align: center;
+    font-size: 0.95rem;
+    color: #475569;
+    margin: 1.65rem 0 0.5rem 0;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="baseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="stBaseButton-secondary"],
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] [role="button"] {
+    min-height: 3rem !important;
+    background: linear-gradient(180deg, #1e3a5f 0%, #0f172a 100%) !important;
+    background-image: none !important;
+    color: #f8fafc !important;
+    border: 1px solid #334155 !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="baseButton-secondary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="stBaseButton-secondary"] *,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] [role="button"] * {
+    color: #f8fafc !important;
+    fill: #f8fafc !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="baseButton-secondary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:hover,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"]:hover [role="button"] {
+    background: linear-gradient(180deg, #2563eb 0%, #1e3a5f 55%, #0f172a 100%) !important;
+    border-color: #38bdf8 !important;
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.35) !important;
+    filter: none !important;
+}
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="baseButton-secondary"]:focus-visible,
+:is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-sim-btn-marker ~ div [data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:focus-visible {
+    box-shadow: 0 0 0 2px #f8fafc, 0 0 0 4px #38bdf8 !important;
+}
 </style>
 """
     st.markdown(_landing_style, unsafe_allow_html=True)
@@ -3275,6 +3396,434 @@ def _render_landing_page() -> None:
 def _cb_h5_explorer_trial_changed() -> None:
     st.session_state.pop('gui_h5_explore_catalog', None)
     st.session_state.pop('gui_h5_explore_notes', None)
+
+
+_SIM_CMP_COLOR_PAIRS = (
+    ('Navy', '#0f172a'),
+    ('Blue', '#2563eb'),
+    ('Teal', '#0d9488'),
+    ('Orange', '#ea580c'),
+    ('Green', '#16a34a'),
+    ('Purple', '#7c3aed'),
+    ('Coral', '#f43f5e'),
+    ('Slate', '#475569'),
+)
+_SIM_CMP_COLOR_LABELS = [p[0] for p in _SIM_CMP_COLOR_PAIRS]
+_SIM_CMP_COLOR_HEX = {p[0]: p[1] for p in _SIM_CMP_COLOR_PAIRS}
+
+_SIM_CMP_OSC_VAR_OPTS = (
+    ('t', 'Time (s)'),
+    ('delta_mm', 'Tip displacement δ (mm)'),
+    ('F', 'Force F (N)'),
+    ('theta_deg', 'Bending angle θ (deg)'),
+    ('M', 'Root moment M (N·m)'),
+    ('kappa', 'Curvature κ (1/m)'),
+    ('delta_dot_mm_s', 'Tip velocity δ̇ (mm/s)'),
+)
+_SIM_CMP_OSC_VAR_LABELS = {k: v for k, v in _SIM_CMP_OSC_VAR_OPTS}
+
+_SIM_CMP_QS_VAR_OPTS = (
+    ('index', 'Sample index'),
+    ('delta_mm', 'Tip displacement δ (mm)'),
+    ('F', 'Force F (N)'),
+    ('theta_deg', 'Bending angle θ (deg)'),
+    ('M', 'Root moment M (N·m)'),
+    ('kappa', 'Curvature κ (1/m)'),
+)
+_SIM_CMP_QS_VAR_LABELS = {k: v for k, v in _SIM_CMP_QS_VAR_OPTS}
+
+
+def _sim_cmp_resolve_osc_series(s: dict, var_id: str) -> np.ndarray:
+    if var_id == 'delta_dot_mm_s':
+        return np.asarray(s['delta_dot_m_s'], dtype=float) * 1000.0
+    return np.asarray(s[var_id], dtype=float)
+
+
+def _sim_cmp_qs_series_bundle(
+    *,
+    length_mm: float,
+    width_mm: float,
+    material_key: str,
+    d_mm: np.ndarray,
+    F: np.ndarray,
+) -> dict:
+    d_mm = np.asarray(d_mm, dtype=float)
+    F = np.asarray(F, dtype=float)
+    L_m = max(float(length_mm), 1.0) / 1000.0
+    k, E, I = cantilever_stiffness_N_per_m_for_geometry(
+        length_mm=length_mm,
+        width_mm=width_mm,
+        material_key=material_key,
+    )
+    d_m = d_mm / 1000.0
+    theta_rad = d_m / max(L_m, 1e-12)
+    theta_deg = np.rad2deg(theta_rad)
+    M = F * L_m
+    kappa = M / (E * I + 1e-30)
+    return {
+        'index': np.arange(len(d_mm), dtype=float),
+        'delta_mm': d_mm,
+        'F': F,
+        'theta_deg': theta_deg,
+        'M': M,
+        'kappa': kappa,
+    }
+
+
+def _render_simulation_comparison_page() -> None:
+    """
+    Community / teaching view: two independent cantilever simulations (Specimen 1 & 2),
+    same axes, numpy-only (no Bender / NI-DAQ).
+    """
+    st.session_state.setdefault('gui_sim_cmp_a_mat', 'polyurethane')
+    st.session_state.setdefault('gui_sim_cmp_b_mat', 'silicone')
+    st.session_state.setdefault('gui_sim_cmp_L_a', 30)
+    st.session_state.setdefault('gui_sim_cmp_L_b', 45)
+    st.session_state.setdefault('gui_sim_cmp_w_a', 25.4)
+    st.session_state.setdefault('gui_sim_cmp_w_b', 25.4)
+    st.session_state.setdefault('gui_sim_cmp_delta_max', 10.0)
+    st.session_state.setdefault('gui_sim_cmp_noise', 0.025)
+    st.session_state.setdefault('gui_sim_cmp_oscillatory', False)
+    st.session_state.setdefault('gui_sim_cmp_freq_hz', 1.0)
+    st.session_state.setdefault('gui_sim_cmp_amp_mm', 2.0)
+    st.session_state.setdefault('gui_sim_cmp_cycles', 3.5)
+    st.session_state.setdefault('gui_sim_cmp_ppc', 200)
+    st.session_state.setdefault('gui_sim_cmp_color_a', 'Navy')
+    st.session_state.setdefault('gui_sim_cmp_color_b', 'Blue')
+    st.session_state.setdefault('gui_sim_cmp_osc_x', 'delta_mm')
+    st.session_state.setdefault('gui_sim_cmp_osc_y', 'F')
+    st.session_state.setdefault('gui_sim_cmp_qs_x', 'delta_mm')
+    st.session_state.setdefault('gui_sim_cmp_qs_y', 'F')
+
+    st.subheader('Simulation & Comparison')
+    st.caption(
+        '**Workbench layout:** parameters on the **left**, plots on the **right** — they update together on each slider '
+        'change. Widen the browser so both columns stay side-by-side.'
+    )
+
+    _mat_labels = {
+        'polyurethane': 'Polyurethane (E ≈ 35 MPa)',
+        'silicone': 'Silicone (E ≈ 3 MPa)',
+    }
+
+    st.checkbox(
+        'Oscillatory viscoelastic mode',
+        key='gui_sim_cmp_oscillatory',
+        help='Sinusoidal δ(t); Kelvin–Voigt F = kδ + cδ̇ with material-dependent damping (PU = wide loop, silicone = thin).',
+    )
+    _osc = bool(st.session_state.get('gui_sim_cmp_oscillatory', False))
+    if _osc:
+        st.markdown(
+            '<div class="bnd-sim-osc-banner">Oscillatory mode — try **Frequency** and **Amplitude** on the left; use **X / Y** '
+            'below the table to compare variables. Higher f tends to open the loop (more viscous work per cycle).</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption('Quasi-static ramp: **F ≈ k·δ** with noise. Stiffness **k ∝ D⁴/L³** (solid circular section).')
+
+    try:
+        c_lo, c_hi = st.columns([0.36, 0.64], gap='small')
+    except TypeError:
+        c_lo, c_hi = st.columns([0.36, 0.64])
+
+    with c_lo:
+        st.markdown('<div class="bnd-sim-compare-workbench" aria-hidden="true"></div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown('**Specimen 1**')
+            st.selectbox(
+                'Material',
+                options=['polyurethane', 'silicone'],
+                key='gui_sim_cmp_a_mat',
+                format_func=lambda k: _mat_labels[k],
+            )
+            st.slider('L₁ length (mm)', min_value=5.0, max_value=150.0, step=0.5, key='gui_sim_cmp_L_a')
+            st.slider('D₁ tube OD (mm)', min_value=2.0, max_value=50.0, step=0.1, key='gui_sim_cmp_w_a')
+            st.selectbox(
+                'Line color (Specimen 1)',
+                options=_SIM_CMP_COLOR_LABELS,
+                key='gui_sim_cmp_color_a',
+                format_func=lambda x: x,
+            )
+        with st.container(border=True):
+            st.markdown('**Specimen 2**')
+            st.selectbox(
+                'Material ',
+                options=['polyurethane', 'silicone'],
+                key='gui_sim_cmp_b_mat',
+                format_func=lambda k: _mat_labels[k],
+            )
+            st.slider('L₂ length (mm)', min_value=5.0, max_value=150.0, step=0.5, key='gui_sim_cmp_L_b')
+            st.slider('D₂ tube OD (mm)', min_value=2.0, max_value=50.0, step=0.1, key='gui_sim_cmp_w_b')
+            st.selectbox(
+                'Line color (Specimen 2)',
+                options=_SIM_CMP_COLOR_LABELS,
+                key='gui_sim_cmp_color_b',
+                format_func=lambda x: x,
+            )
+        with st.container(border=True):
+            if _osc:
+                st.markdown('**Oscillatory drive**')
+                st.slider('Frequency f (Hz)', min_value=0.1, max_value=8.0, step=0.05, key='gui_sim_cmp_freq_hz')
+                st.slider('Amplitude A (mm, peak)', min_value=0.2, max_value=12.0, step=0.1, key='gui_sim_cmp_amp_mm')
+                st.slider('Cycles shown', min_value=2.0, max_value=10.0, step=0.5, key='gui_sim_cmp_cycles')
+                st.slider('Samples / cycle', min_value=80, max_value=400, step=20, key='gui_sim_cmp_ppc')
+                st.slider('Force noise σ (N)', min_value=0.0, max_value=0.2, step=0.005, key='gui_sim_cmp_noise')
+            else:
+                st.markdown('**Quasi-static sweep**')
+                st.slider('Max tip δ (mm)', min_value=0.5, max_value=25.0, step=0.5, key='gui_sim_cmp_delta_max')
+                st.slider('Force noise σ (N)', min_value=0.0, max_value=0.2, step=0.005, key='gui_sim_cmp_noise')
+
+    La = float(st.session_state['gui_sim_cmp_L_a'])
+    Lb = float(st.session_state['gui_sim_cmp_L_b'])
+    wa = float(st.session_state['gui_sim_cmp_w_a'])
+    wb = float(st.session_state['gui_sim_cmp_w_b'])
+    ma = str(st.session_state['gui_sim_cmp_a_mat'])
+    mb = str(st.session_state['gui_sim_cmp_b_mat'])
+    sigma = float(st.session_state['gui_sim_cmp_noise'])
+
+    k_a, _, _ = cantilever_stiffness_N_per_m_for_geometry(length_mm=La, width_mm=wa, material_key=ma)
+    k_b, _, _ = cantilever_stiffness_N_per_m_for_geometry(length_mm=Lb, width_mm=wb, material_key=mb)
+    _kr = (k_a / k_b) if k_b > 1e-30 else float('nan')
+
+    with c_hi:
+        if _osc:
+            f_hz = float(st.session_state['gui_sim_cmp_freq_hz'])
+            amp_mm = float(st.session_state['gui_sim_cmp_amp_mm'])
+            n_cyc = float(st.session_state['gui_sim_cmp_cycles'])
+            ppc = int(st.session_state['gui_sim_cmp_ppc'])
+
+            rng_a = np.random.default_rng(201)
+            rng_b = np.random.default_rng(202)
+            sa = oscillatory_viscoelastic_timeseries(
+                length_mm=La,
+                width_mm=wa,
+                material_key=ma,
+                freq_hz=f_hz,
+                amplitude_mm=amp_mm,
+                n_cycles_shown=n_cyc,
+                points_per_cycle=ppc,
+                noise_std_N=max(sigma, 0.0),
+                rng=rng_a,
+            )
+            sb = oscillatory_viscoelastic_timeseries(
+                length_mm=Lb,
+                width_mm=wb,
+                material_key=mb,
+                freq_hz=f_hz,
+                amplitude_mm=amp_mm,
+                n_cycles_shown=n_cyc,
+                points_per_cycle=ppc,
+                noise_std_N=max(sigma, 0.0),
+                rng=rng_b,
+            )
+
+            _e1 = sa['energy_dissipated_last_cycle_J']
+            _e2 = sb['energy_dissipated_last_cycle_J']
+            st.markdown('**Results** (updates with sliders)')
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            'Spec': '1',
+                            'k (N/m)': f'{k_a:,.0f}',
+                            'c (N·s/m)': f'{sa["c"]:,.0f}',
+                            'φ (°)': f'{sa["phase_lag_deg"]:.1f}',
+                            'J/cycle': f'{_e1:.4f}' if np.isfinite(_e1) else '—',
+                            'tan φ': f'{sa["tan_delta"]:.3f}' if np.isfinite(sa['tan_delta']) else '—',
+                        },
+                        {
+                            'Spec': '2',
+                            'k (N/m)': f'{k_b:,.0f}',
+                            'c (N·s/m)': f'{sb["c"]:,.0f}',
+                            'φ (°)': f'{sb["phase_lag_deg"]:.1f}',
+                            'J/cycle': f'{_e2:.4f}' if np.isfinite(_e2) else '—',
+                            'tan φ': f'{sb["tan_delta"]:.3f}' if np.isfinite(sb['tan_delta']) else '—',
+                        },
+                        {'Spec': 'k1/k2', 'k (N/m)': f'{_kr:.3f}', 'c (N·s/m)': '—', 'φ (°)': '—', 'J/cycle': '—', 'tan φ': '—'},
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            _osc_ids = [p[0] for p in _SIM_CMP_OSC_VAR_OPTS]
+            _px, _py = st.columns(2, gap='small')
+            with _px:
+                st.selectbox(
+                    'X axis',
+                    options=_osc_ids,
+                    key='gui_sim_cmp_osc_x',
+                    format_func=lambda i: _SIM_CMP_OSC_VAR_LABELS[i],
+                )
+            with _py:
+                st.selectbox(
+                    'Y axis',
+                    options=_osc_ids,
+                    key='gui_sim_cmp_osc_y',
+                    format_func=lambda i: _SIM_CMP_OSC_VAR_LABELS[i],
+                )
+
+            _xid = str(st.session_state.get('gui_sim_cmp_osc_x') or 'delta_mm')
+            _yid = str(st.session_state.get('gui_sim_cmp_osc_y') or 'F')
+            if _xid not in _SIM_CMP_OSC_VAR_LABELS:
+                _xid = 'delta_mm'
+            if _yid not in _SIM_CMP_OSC_VAR_LABELS:
+                _yid = 'F'
+
+            _c1 = _SIM_CMP_COLOR_HEX.get(str(st.session_state.get('gui_sim_cmp_color_a', 'Navy')), '#0f172a')
+            _c2 = _SIM_CMP_COLOR_HEX.get(str(st.session_state.get('gui_sim_cmp_color_b', 'Blue')), '#2563eb')
+            _xa = _sim_cmp_resolve_osc_series(sa, _xid)
+            _ya = _sim_cmp_resolve_osc_series(sa, _yid)
+            _xb = _sim_cmp_resolve_osc_series(sb, _xid)
+            _yb = _sim_cmp_resolve_osc_series(sb, _yid)
+
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=_xa,
+                    y=_ya,
+                    mode='lines',
+                    name='Specimen 1',
+                    line=dict(color=_c1, width=2.2),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=_xb,
+                    y=_yb,
+                    mode='lines',
+                    name='Specimen 2',
+                    line=dict(color=_c2, width=2.2),
+                )
+            )
+            fig.update_layout(
+                title=dict(
+                    text=f'Oscillatory · f = {f_hz:.2f} Hz, A = {amp_mm:.2f} mm',
+                    font=dict(size=14, color='#0f172a'),
+                ),
+                xaxis_title=_SIM_CMP_OSC_VAR_LABELS[_xid],
+                yaxis_title=_SIM_CMP_OSC_VAR_LABELS[_yid],
+                height=480,
+                margin=dict(l=52, r=28, t=52, b=44),
+                paper_bgcolor='#ffffff',
+                plot_bgcolor='#f8fafc',
+                hovermode='closest',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            )
+            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
+
+            with st.expander('Equations & model detail (oscillatory)', expanded=False):
+                st.markdown(
+                    '- **δ(t) = A sin(2πft)**. **F = kδ + cδ̇** (Kelvin–Voigt); **c** is much larger for polyurethane than '
+                    'silicone (wider hysteresis).\n'
+                    '- **Phase lag:** **F** lags **δ** by **φ = arctan(cω/k)**.\n'
+                    '- **Dissipation:** **J/cycle** ≈ ∫ F δ̇ dt over the last full period.\n'
+                    '- **M = F·L**, **θ ≈ δ/L**, **κ = M/(EI)**.'
+                )
+
+        else:
+            dmax = float(st.session_state['gui_sim_cmp_delta_max'])
+            st.markdown('**Results** (updates with sliders)')
+            st.caption(f'k1 = {k_a:,.0f} N/m · k2 = {k_b:,.0f} N/m · k1/k2 = {_kr:.3f}')
+
+            rng_a = np.random.default_rng(201)
+            rng_b = np.random.default_rng(202)
+            d1, F1 = force_displacement_comparison_curve(
+                length_mm=La,
+                width_mm=wa,
+                material_key=ma,
+                delta_max_mm=dmax,
+                n_points=180,
+                noise_std_N=max(sigma, 0.0),
+                rng=rng_a,
+            )
+            d2, F2 = force_displacement_comparison_curve(
+                length_mm=Lb,
+                width_mm=wb,
+                material_key=mb,
+                delta_max_mm=dmax,
+                n_points=180,
+                noise_std_N=max(sigma, 0.0),
+                rng=rng_b,
+            )
+
+            _ba = _sim_cmp_qs_series_bundle(
+                length_mm=La, width_mm=wa, material_key=ma, d_mm=d1, F=F1
+            )
+            _bb = _sim_cmp_qs_series_bundle(
+                length_mm=Lb, width_mm=wb, material_key=mb, d_mm=d2, F=F2
+            )
+
+            _qs_ids = [p[0] for p in _SIM_CMP_QS_VAR_OPTS]
+            _qx, _qy = st.columns(2, gap='small')
+            with _qx:
+                st.selectbox(
+                    'X axis',
+                    options=_qs_ids,
+                    key='gui_sim_cmp_qs_x',
+                    format_func=lambda i: _SIM_CMP_QS_VAR_LABELS[i],
+                )
+            with _qy:
+                st.selectbox(
+                    'Y axis',
+                    options=_qs_ids,
+                    key='gui_sim_cmp_qs_y',
+                    format_func=lambda i: _SIM_CMP_QS_VAR_LABELS[i],
+                )
+
+            _qxid = str(st.session_state.get('gui_sim_cmp_qs_x') or 'delta_mm')
+            _qyid = str(st.session_state.get('gui_sim_cmp_qs_y') or 'F')
+            if _qxid not in _SIM_CMP_QS_VAR_LABELS:
+                _qxid = 'delta_mm'
+            if _qyid not in _SIM_CMP_QS_VAR_LABELS:
+                _qyid = 'F'
+
+            _qc1 = _SIM_CMP_COLOR_HEX.get(str(st.session_state.get('gui_sim_cmp_color_a', 'Navy')), '#0f172a')
+            _qc2 = _SIM_CMP_COLOR_HEX.get(str(st.session_state.get('gui_sim_cmp_color_b', 'Blue')), '#2563eb')
+            _qxa = np.asarray(_ba[_qxid], dtype=float)
+            _qya = np.asarray(_ba[_qyid], dtype=float)
+            _qxb = np.asarray(_bb[_qxid], dtype=float)
+            _qyb = np.asarray(_bb[_qyid], dtype=float)
+
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=_qxa,
+                    y=_qya,
+                    mode='lines',
+                    name='Specimen 1',
+                    line=dict(color=_qc1, width=2.2),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=_qxb,
+                    y=_qyb,
+                    mode='lines',
+                    name='Specimen 2',
+                    line=dict(color=_qc2, width=2.2),
+                )
+            )
+            fig.update_layout(
+                title='Quasi-static comparison (choose X / Y above)',
+                xaxis_title=_SIM_CMP_QS_VAR_LABELS[_qxid],
+                yaxis_title=_SIM_CMP_QS_VAR_LABELS[_qyid],
+                height=440,
+                margin=dict(l=52, r=28, t=48, b=44),
+                hovermode='x unified',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                paper_bgcolor='#ffffff',
+                plot_bgcolor='#f8fafc',
+            )
+            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
+
+            with st.expander('Model detail (quasi-static)', expanded=False):
+                st.markdown(
+                    '- **Geometry:** solid circle, diameter D (mm) → I = πD⁴/64.\n'
+                    '- **Material:** E from polyurethane (~35 MPa) or silicone (~3 MPa).\n'
+                    '- **Stiffness:** k = 3EI/L³ with L in meters.\n'
+                    '- **Curve:** F = k·δ (δ in m) + Normal(0, σ) on F in newtons.'
+                )
 
 
 def _render_h5_explorer() -> None:
@@ -3485,6 +4034,8 @@ def _render_app_chrome() -> None:
         '<div class="bnd-workflow-active" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
+    if _nav_route() == 'sim_compare':
+        st.markdown('<div class="bnd-sim-compare-active" aria-hidden="true"></div>', unsafe_allow_html=True)
     if _nav_route() == 'stepwise':
         st.markdown('<div class="bnd-stepwise-active" aria-hidden="true"></div>', unsafe_allow_html=True)
         _inject_stepwise_compact_layout_css()
@@ -3522,6 +4073,8 @@ def _render_app_chrome() -> None:
             st.caption('Full workflow — all sections below are visible.')
         elif _mode == 'templates':
             st.caption('Template mode — checklist at top controls which sections appear.')
+        elif _mode == 'sim_compare':
+            st.caption('Simulation & Comparison — numpy cantilever mechanics only; no NI-DAQ.')
         elif _mode == 'h5_explorer':
             st.caption('H5 data explorer — plot saved trial series (no experiment workflow).')
     with h2:
@@ -3544,9 +4097,23 @@ def _render_app_chrome() -> None:
 def _render_sidebar() -> None:
     """Sidebar: stepwise progress, status check, emergency stop."""
     with st.sidebar:
+        if _nav_route() == 'sim_compare':
+            st.markdown('### Simulation & Comparison')
+            st.caption('This path does not use NI-DAQ or the live experiment stack. Use **Settings** for display options.')
+            _render_sidebar_settings_expander(leading_divider=False)
+            return
         if _nav_route() == 'stepwise':
             _render_sidebar_stepwise_progress()
         _render_sidebar_input_checks()
+        # No simulation-mode toggle on NI-DAQ experiment workflows (real hardware path only).
+        _route = _nav_route()
+        if _route in ('stepwise', 'scratch', 'templates'):
+            st.session_state['gui_simulation_mode'] = False
+            _b = st.session_state.get('bender')
+            if _b is not None:
+                _b.simulation_mode = False
+        else:
+            _render_simulation_sidebar()
         st.markdown('### Emergency stop')
         st.caption(
             'Resets the NI-DAQ device (stops tasks and clears analog/digital outputs). With a loaded experiment, only '
@@ -3856,6 +4423,10 @@ def main():
 
     if _nav_route() == 'h5_explorer':
         _render_h5_explorer()
+        return
+
+    if _nav_route() == 'sim_compare':
+        _render_simulation_comparison_page()
         return
 
     if _nav_route() == 'templates':
@@ -5108,6 +5679,64 @@ def main():
                                 legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
                             )
                         st.plotly_chart(fig, use_container_width=True)
+                        if bool(st.session_state.get('gui_simulation_mode', False)) and prev.get('t') is not None:
+                            t_prev = np.asarray(prev['t'], dtype=float).reshape(-1)
+                            ang_prev = np.asarray(prev['angle'], dtype=float).reshape(-1)
+                            av_prev = prev.get('anglevel')
+                            if av_prev is None:
+                                av_prev = np.zeros_like(ang_prev)
+                            else:
+                                av_prev = np.asarray(av_prev, dtype=float).reshape(-1)
+                            n_prev = min(t_prev.size, ang_prev.size, av_prev.size)
+                            if n_prev >= 2:
+                                Lpv = getattr(b, 'dclamp', None) or getattr(b, 'test_segment_length_mm', None)
+                                mat = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
+                                d_mm, F_N = force_displacement_series(
+                                    ang_prev[:n_prev],
+                                    av_prev[:n_prev],
+                                    length_mm=Lpv,
+                                    material_key=mat,
+                                    max_points=int(pv_pts),
+                                )
+                                fig_fd = go.Figure()
+                                fig_fd.add_trace(
+                                    go.Scatter(
+                                        x=d_mm,
+                                        y=F_N,
+                                        mode='lines',
+                                        name='Simulated F(δ) along protocol',
+                                    )
+                                )
+                                fig_fd.update_layout(
+                                    title='Simulation preview: bending force vs tip displacement (25.4 mm OD cantilever)',
+                                    xaxis_title='Tip displacement δ (mm)',
+                                    yaxis_title='Bending reaction F (N)',
+                                    height=420,
+                                    margin=dict(l=48, r=48, t=48, b=40),
+                                    legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                                )
+                                st.markdown(
+                                    '**Simulation · force–displacement** (material from sidebar; span from **section 3 · clamp length**). '
+                                    'Cyclic protocols trace a path (hysteresis-like from η·dδ/dt).'
+                                )
+                                st.plotly_chart(fig_fd, use_container_width=True)
+                                dm, Fpu, Fsi = static_stiffness_comparison_delta_grid(Lpv)
+                                fig_cmp = go.Figure()
+                                fig_cmp.add_trace(
+                                    go.Scatter(x=dm, y=Fpu, mode='lines', name='Polyurethane (E ≈ 35 MPa)')
+                                )
+                                fig_cmp.add_trace(
+                                    go.Scatter(x=dm, y=Fsi, mode='lines', name='Silicone (E ≈ 3 MPa)')
+                                )
+                                fig_cmp.update_layout(
+                                    title='Quasi-static comparison (same δ; polyurethane is much steeper)',
+                                    xaxis_title='Tip displacement δ (mm)',
+                                    yaxis_title='Elastic force F = kδ (N)',
+                                    height=380,
+                                    margin=dict(l=48, r=48, t=48, b=40),
+                                    legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                                )
+                                st.plotly_chart(fig_cmp, use_container_width=True)
                     elif prev.get('table') and tt in ('isometric', 'isovelocity'):
                         st.caption(
                             'Step protocols: table lists setpoints; refresh preview after fixing errors to see the plot.'
@@ -5127,6 +5756,11 @@ def main():
         if st.session_state.get('gui_sec5_hide'):
             st.caption('Run controls hidden. Uncheck **Hide section** below.')
         else:
+            if bool(st.session_state.get('gui_simulation_mode', False)):
+                st.info(
+                    '**Simulation mode** is enabled in the sidebar: **Run experiment** uses numpy only (no NI-DAQ). '
+                    'Section 5 **Refresh preview** shows the simulated force–displacement curve.'
+                )
             if _procedure_apply_dirty() or _bio_apply_dirty():
                 _soft_apply_reminder()
             if st.button('View current settings'):
@@ -5203,14 +5837,21 @@ def main():
                             'Required fields missing.',
                             _missing_fields_to_actions(list(rep['missing'])),
                         )
-            daq_ok = st.checkbox('Hardware: I intend to run DAQ', value=False)
+            _sim_run = bool(st.session_state.get('gui_simulation_mode', False))
+            daq_ok = st.checkbox(
+                'Hardware: I intend to run DAQ',
+                value=False,
+                disabled=_sim_run,
+                help='Confirm before **Run experiment** starts NI-DAQ acquisition.',
+            )
+            run_hw_ok = _sim_run or daq_ok
             bio_confirm = st.checkbox(
                 'Biometrics applied (section 3)',
                 value=False,
                 key='gui_run_biometrics_confirm',
                 help='Confirm you used **Apply** in each edited block (identity, intrinsic, experimental conditions, clamp, profile) or **Apply all**.',
             )
-            needs_cal_confirm = _needs_missing_calibration_confirmation(b)
+            needs_cal_confirm = _needs_missing_calibration_confirmation(b) and not _sim_run
             if needs_cal_confirm:
                 st.warning('No calibration file detected. Are you sure you wish to proceed?')
             ok_wo_cal = st.checkbox(
@@ -5237,8 +5878,8 @@ def main():
                     'Run experiment',
                     type='primary',
                     use_container_width=True,
-                    disabled=not daq_ok or not bio_confirm or _run_dest_block,
-                    help='Starts DAQ acquisition.',
+                    disabled=not run_hw_ok or not bio_confirm or _run_dest_block,
+                    help='Starts NI-DAQ acquisition.',
                 ):
                     _sync_biometric_flags_from_session(b)
                     _apply_form_updates(b, updates, tt)
@@ -5256,11 +5897,18 @@ def main():
                         st.info('Run canceled. Set **section 2** or check "Yes, proceed without section 2 save path".')
                         return
                     try:
+                        b.simulation_mode = bool(st.session_state.get('gui_simulation_mode', False))
+                        b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
+                        _acq_label = (
+                            'Simulating acquisition (no DAQ)…'
+                            if b.simulation_mode
+                            else 'Acquiring (DAQ)…'
+                        )
                         _status_factory = getattr(st, 'status', None)
                         if callable(_status_factory):
                             with _status_factory('Run in progress…', expanded=True) as run_status:
-                                run_status.write('DAQ…')
-                                with st.spinner('Acquiring (DAQ)…'):
+                                run_status.write('Acquisition…')
+                                with st.spinner(_acq_label):
                                     b.run_experiment(test_type=tt)
                                 st.success('Acquisition finished.')
                                 run_status.write('HDF5…')
@@ -5287,7 +5935,7 @@ def main():
                                 else:
                                     st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
                         else:
-                            with st.spinner('Acquiring (DAQ)…'):
+                            with st.spinner(_acq_label):
                                 b.run_experiment(test_type=tt)
                             st.success('Acquisition finished.')
                             with st.spinner('Writing data file (.h5)…'):

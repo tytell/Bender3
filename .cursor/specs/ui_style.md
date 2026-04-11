@@ -15,6 +15,8 @@ Reference for layout, styling, and UX tone when changing `bender_streamlit_gui.p
 
 ## Information architecture (user-facing language)
 
+**App routes** (see `gui_app_route`): `landing`, `scratch`, `templates`, `stepwise`, `sim_compare` (Simulation & Comparison — offline numpy), `h5_explorer`.
+
 Use this **single triad** consistently in labels and section titles:
 
 | Pillar | Role |
@@ -33,6 +35,8 @@ Stepwise flows use **numbered steps (1–5)** and short subheaders (e.g. `1 · �
 |--------|---------|
 | `.bnd-landing-page` | Landing only: hide sidebar, custom shell |
 | `.bnd-workflow-active` | Inside a workflow: white app chrome; primary red / secondary white buttons |
+| `.bnd-sim-compare-active` | **Simulation & Comparison** route (`sim_compare`): numpy-only teaching view; no NI-DAQ; **workbench** = ~36/64 columns (controls left, plots right) |
+| `.bnd-sim-osc-banner` | Oscillatory viscoelastic mode callout on `sim_compare` (navy left accent, slate wash) |
 | `.bnd-stepwise-active` | Stepwise layout: tighter vertical rhythm |
 | `.bnd-ui-theme` + `bnd-theme-warm` / `bnd-theme-cool` / `bnd-theme-slateivory` | User-chosen background tint (Settings) |
 | `.bnd-a11y-large-text` | Slightly larger base font |
@@ -70,9 +74,10 @@ Stepwise flows use **numbered steps (1–5)** and short subheaders (e.g. `1 · �
 
 ### Landing page accents
 
+- **Simulation & Comparison CTA:** deep slate / navy gradient (`#1e3a5f` → `#0f172a`), light text `#f8fafc`, hover cyan accent — scoped via `.bnd-land-sim-btn-marker` (sibling of the Streamlit button row) so live workflow primaries stay red.
 - **Headings:** `#334155`
 - **Tagline / secondary text:** `#64748b` (tagline ~`1.32rem`, weight ~450)
-- **Hero rule (below hero):** dotted `2px`, `#c2410c`, ~85% opacity
+- **Hero rule (below hero):** solid `4px`, `#c2410c`
 - **Bordered cards:** white `#ffffff`, border `#cbd5e1`, radius **14px**, light shadow `rgba(15, 23, 42, 0.06)`; inner body text `#475569`
 - **Equation / “learn” callout (EOM box):** teal gradient panel, left accent `#0d9488`
 
@@ -88,7 +93,7 @@ Stepwise flows use **numbered steps (1–5)** and short subheaders (e.g. `1 · �
 
 - **Landing main column:** `max-width` ~**52rem**, centered; moderate vertical padding on `.block-container`
 - **Between major landing blocks:** spacer class ~**1.65rem** height
-- **Hero with logo:** reserve right space (`padding-right` ~`min(38%, 15rem)`); logo column ~`min(34%, 13.5rem)`; **hero `min-height`** ~**11rem** so logo and dotted rule do not overlap; logo image **`max-height: 100%`** inside the hero box (avoid fixed `11rem` on the img if it exceeds the box)
+- **Hero with logo:** reserve right space (`padding-right` ~`min(38%, 15rem)`); logo column ~`min(34%, 13.5rem)`; **hero `min-height`** ~**11rem** so logo and hero rule do not overlap; logo image **`max-height: 100%`** inside the hero box (avoid fixed `11rem` on the img if it exceeds the box)
 - **Stepwise (`bnd-stepwise-active`):** reduced block padding, tighter bordered panels (`~0.4–0.55rem` padding, smaller `margin-bottom`), compact `h1–h3` margins
 
 Prefer **consistent vertical rhythm** (smaller gaps in rails, slightly roomier on marketing/landing).

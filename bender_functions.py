@@ -20,7 +20,9 @@ try:
     from nidaqmx.constants import TerminalConfiguration
 except ImportError:
     logging.warning('No DAQmx available')
-    
+    Task = None  # type: ignore
+    daq = None  # type: ignore
+
 import xml.etree.ElementTree as ElementTree
 
 import h5py
@@ -287,6 +289,12 @@ class Bender:
             self.loadCalibration(self.forcetorque_calibration_file)
         except Exception as e:
             print(f"⚠️ WARNING: Calibration failed to load: {e}")
+        if not hasattr(self, 'calibration') or self.calibration is None:
+            self.calibration = np.eye(6, dtype=float)
+
+        # Simulation mode (set by GUI): :meth:`run` uses numpy instead of NI-DAQmx.
+        self.simulation_mode = False
+        self.simulation_material = 'polyurethane'
 
         # 5. Placeholders (to prevent NoneType/0-channel errors)
         self.t = np.array([0.0, 1.0/self.daq_ai_sample_rate_hz])
@@ -888,6 +896,10 @@ class Bender:
 
         # Run the experiment using 'self'
         self.aidata = self.run(device_name=self.device_name)
+        if getattr(self, 'simulation_mode', False):
+            self.h5_protocol_metadata['simulation_mode'] = True
+            self.h5_protocol_metadata['simulation_material'] = str(getattr(self, 'simulation_material', ''))
+            self.h5_protocol_metadata['simulation_model'] = 'cantilever_solid_tube_OD_25.4mm'
 
         # --- 1. Process Force/Torque (Always assumed to exist) ---
         # Find exactly where the 6 SG channels are, regardless of order
@@ -1610,7 +1622,89 @@ class Bender:
         )
         return self.i_total_system
 
+    def _align_vector_to_t(self, arr, n: int, *, fill: float = 0.0):
+        """Reshape to length ``n`` (trim or pad with edge/fill) to match ``self.t``."""
+        a = np.asarray(arr, dtype=float).reshape(-1)
+        if a.size >= n:
+            return np.array(a[:n], dtype=float, copy=True)
+        out = np.full(n, float(fill), dtype=float)
+        if a.size > 0:
+            out[: a.size] = a
+            out[a.size :] = float(a[-1])
+        return out
+
+    def _simulate_daq_acquisition(self):
+        """
+        Populate ``aidata`` / encoder traces without NI-DAQmx using cantilever tube physics
+        (see ``bender_simulation``). Raw voltages are chosen so existing calibration reproduces
+        the simulated wrench.
+        """
+        from bender_simulation import (
+            forcetorque_six_from_bending,
+            forcetorque_to_raw_voltages,
+            simulated_bending_force,
+            specimen_effective_length_m,
+        )
+
+        n = int(np.asarray(self.t, dtype=float).size)
+        if n < 1:
+            raise ValueError('Simulation requires a non-empty timeline self.t.')
+
+        ang = self._align_vector_to_t(self.angle, n, fill=0.0)
+        av = self._align_vector_to_t(self.anglevel, n, fill=0.0)
+        L_mm = getattr(self, 'dclamp', None)
+        if L_mm is None:
+            L_mm = getattr(self, 'test_segment_length_mm', None)
+
+        rng = np.random.default_rng(
+            int(getattr(self, 'simulation_rng_seed', 0) or 0) % (2**32)
+        )
+        F, _, _ = simulated_bending_force(
+            ang,
+            av,
+            length_mm=L_mm,
+            material_key=getattr(self, 'simulation_material', 'polyurethane'),
+            rng=rng,
+        )
+        L_m = specimen_effective_length_m(L_mm)
+        ft = forcetorque_six_from_bending(F, L_m)
+        raw6 = forcetorque_to_raw_voltages(ft, np.asarray(self.calibration, dtype=float))
+
+        n_ch = len(self.input_channels)
+        self.aidata = np.zeros((n_ch, n), dtype=np.float64)
+        sg_order = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
+        for row, name in enumerate(sg_order):
+            if name in self.input_channel_names:
+                chi = self.input_channel_names.index(name)
+                self.aidata[chi, :] = raw6[row, :]
+
+        for i, nm in enumerate(self.input_channel_names):
+            low = str(nm).lower()
+            if 'sono' in low:
+                self.aidata[i, :] = 0.02 * rng.standard_normal(n)
+            if low == 'stim_monitor':
+                s1 = np.asarray(getattr(self, 'S1stimcmd', np.zeros(n)), dtype=float).reshape(-1)
+                s2 = np.asarray(getattr(self, 'S2stimcmd', np.zeros(n)), dtype=float).reshape(-1)
+                s1 = self._align_vector_to_t(s1, n, fill=0.0)
+                s2 = self._align_vector_to_t(s2, n, fill=0.0)
+                self.aidata[i, :] = 0.5 * (s1 + s2) * 0.02
+
+        enc_noise = 0.02 * rng.standard_normal(n)
+        self.angledata = ang + enc_noise
+        self.angle_measured = np.array(self.angledata, copy=True)
+        self.endTime = datetime.now()
+        return self.aidata
+
     def run(self, device_name):
+        if getattr(self, 'simulation_mode', False):
+            return self._simulate_daq_acquisition()
+
+        if Task is None:
+            raise RuntimeError(
+                'NI-DAQmx is not available. Enable **Simulation mode** in the Streamlit sidebar to run without hardware, '
+                'or install NI-DAQmx and the nidaqmx Python package.'
+            )
+
         ai_hz = float(self.daq_ai_sample_rate_hz)
         ao_hz = float(self.daq_ao_do_sample_rate_hz)
         if not np.isfinite(ai_hz) or ai_hz <= 0:
