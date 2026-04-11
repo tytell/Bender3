@@ -311,39 +311,146 @@ body:has(.bnd-workflow-active):has(.bnd-theme-warm) section[data-testid="stMain"
 def _inject_load_save_button_theme() -> None:
     """Inject CSS for persistent action buttons.
 
-    Visual tiers (main panel):
-    - **Load/Save (red, full width):** `_load_save_button` — commits that read/write disk or
-      apply hardware + paths (e.g. Load hardware configuration and data path, Write config file and load).
-    - **Mode / branch (default Streamlit primary + secondary, two columns):**
-      `_hardware_configuration_mode_toggle` — mutually exclusive setup paths only; not file I/O.
+    Visual tiers (main panel, workflow):
+    - **Load/Save (black, full width):** `_load_save_button` — same as other primary actions (white on black).
+    - **Mode / branch:** `_hardware_configuration_mode_toggle` — Streamlit primary/secondary, styled black/white below.
     """
     st.markdown(
         """
 <style>
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"],
-section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"] {
-    background-color: #f87171 !important;
+/* Workflow: white shell (overrides Streamlit default gray and optional theme tints) */
+body:has(.bnd-workflow-active) .stApp,
+body:has(.bnd-workflow-active) [data-testid="stAppViewContainer"],
+body:has(.bnd-workflow-active) [data-testid="stHeader"] {
+    background-color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] {
+    background-color: #ffffff !important;
+    border-right: 1px solid #e2e8f0 !important;
+}
+/* Sidebar buttons (same black / white as main) */
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] div.stButton button,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
+    background-color: #000000 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #fca5a5 !important;
+    border: 1px solid #262626 !important;
+    font-weight: 600 !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] div.stButton button p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] p,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button span,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"] span,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"] span {
+    color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] div[data-testid="stButton"] button:hover,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:hover {
+    background-color: #171717 !important;
+    border-color: #404040 !important;
+}
+/* Main panel: all Streamlit buttons → black, label text white */
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
+    background-color: #000000 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #262626 !important;
+    font-weight: 600 !important;
+}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button span,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button span,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"] span {
+    color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button:hover,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button:hover,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
+    background-color: #171717 !important;
+    border-color: #404040 !important;
+    color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button:hover p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div[data-testid="stButton"] button:hover span,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button:hover p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] div.stButton button:hover span {
+    color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"],
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] {
+    background-color: #000000 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #262626 !important;
+    font-weight: 600 !important;
+}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"] p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"] p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] p,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"] span,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"] span,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"] span,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"] span {
+    color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"]:hover,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"]:hover,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:hover {
+    background-color: #171717 !important;
+    border-color: #404040 !important;
+    color: #ffffff !important;
+}
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-primary"]:disabled,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="baseButton-secondary"]:disabled,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-primary"]:disabled,
+body:has(.bnd-workflow-active) section[data-testid="stMain"] button[data-testid="stBaseButton-secondary"]:disabled {
+    background-color: #525252 !important;
+    border-color: #737373 !important;
+    color: #fafafa !important;
+    opacity: 0.85 !important;
+}
+/* Load/Save full-width actions (same black treatment; marker div .bnd-ls-action) */
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"],
+section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"] {
+    background-color: #000000 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #262626 !important;
 }
 section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:hover,
 section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:hover {
-    background-color: #fb7185 !important;
-    border-color: #fda4af !important;
+    background-color: #171717 !important;
+    border-color: #404040 !important;
     color: #ffffff !important;
 }
 section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:focus-visible,
 section[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:focus-visible {
-    box-shadow: 0 0 0 0.2rem rgba(248, 113, 113, 0.45) !important;
+    box-shadow: 0 0 0 0.2rem rgba(0, 0, 0, 0.25) !important;
 }
-/* Bordered layout panels (Streamlit container border=True) — light frame */
+/* Bordered layout panels (Streamlit container border=True) — white on white page */
 section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     border-width: 2px !important;
     border-color: #94a3b8 !important;
     border-radius: 10px !important;
     padding: 0.65rem 0.85rem 0.85rem 0.85rem !important;
-    background: #f8fafc !important;
+    background: #ffffff !important;
     margin-bottom: 0.75rem !important;
 }
 /* Alert blocks: clearer frame */
@@ -351,7 +458,7 @@ section[data-testid="stMain"] div[data-testid="stAlert"] {
     border: 1px solid #cbd5e1 !important;
     border-radius: 8px !important;
 }
-/* Theme-tinted bordered panels (after default panel rules above) */
+/* Theme-tinted panel borders (background stays white in workflow via rule below) */
 body:has(.bnd-theme-warm) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
     background: #fffefb !important;
     border-color: #d6cfc4 !important;
@@ -372,6 +479,11 @@ body:has(.bnd-theme-slateivory) section[data-testid="stMain"] [data-testid="stVe
 }
 body:has(.bnd-theme-slateivory) section[data-testid="stMain"] div[data-testid="stAlert"] {
     border-color: #64748b !important;
+}
+/* Workflow: always white bordered panels (wins over theme panel tint) */
+body:has(.bnd-workflow-active) section[data-testid="stMain"] [data-testid="stVerticalBlockBorderWrapper"] {
+    background: #ffffff !important;
+    border-color: #cbd5e1 !important;
 }
 </style>
 """,
@@ -418,7 +530,7 @@ body:has(.bnd-stepwise-active) section[data-testid="stMain"] [data-testid="stHea
 def _load_save_button(
     label: str, *, key: str, help: Optional[str] = None, button_type: str = 'primary', **kwargs
 ) -> bool:
-    """Full-width Load/Save-style action; pair with `_inject_load_save_button_theme` for red styling."""
+    """Full-width Load/Save-style action; styled black/white via `_inject_load_save_button_theme`."""
     kwargs.pop('use_container_width', None)
     with st.container():
         st.markdown(_BND_LS_ACTION_MARK, unsafe_allow_html=True)
@@ -2420,17 +2532,57 @@ def _render_landing_page() -> None:
         '<div class="bnd-landing-page" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
+    # Hero/logo layout must load before the <img> or the PNG paints at intrinsic size and then jumps.
+    st.markdown(
+        """
+<style>
+#root .bnd-landing-hero-wrap {
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    padding-right: min(38%, 15rem);
+    min-height: 0;
+}
+#root .bnd-landing-hero-text { display: block; }
+#root .bnd-landing-hero-logo {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(34%, 13.5rem);
+    max-width: 13.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    background: #ffffff;
+    border-radius: 12px;
+}
+#root .bnd-landing-hero-logo-img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    pointer-events: auto;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
     if os.path.isfile(_LOGO_PATH):
         _logo_uri = _img_data_uri(_LOGO_PATH)
         st.markdown(
             f'<div class="bnd-landing-hero-wrap">'
             f'<div class="bnd-landing-hero-text">'
             f'<h1>The CritterGripper App</h1>'
-            f'<p class="bnd-landing-tagline">Non-destructive <strong>bending-mechanics</strong> workflows for small '
-            f'organisms — instrument control, specimen metadata, protocols, and structured HDF5 data.</p>'
+            f'<p class="bnd-landing-tagline">Non-destructive bending biomechanics</p>'
             f'</div>'
             f'<div class="bnd-landing-hero-logo">'
-            f'<img class="bnd-landing-hero-logo-img" src="{_logo_uri}" alt="Laboratory logo"/>'
+            f'<img class="bnd-landing-hero-logo-img" src="{_logo_uri}" alt="Laboratory logo" '
+            f'style="max-width:min(100%,13.5rem);max-height:11rem;width:auto;height:auto;object-fit:contain;display:block;" '
+            f'decoding="async" fetchpriority="high"/>'
             f'</div>'
             f'</div>',
             unsafe_allow_html=True,
@@ -2438,8 +2590,7 @@ def _render_landing_page() -> None:
     else:
         st.title('The CritterGripper App')
         st.markdown(
-            '<p class="bnd-landing-tagline">Non-destructive <strong>bending-mechanics</strong> workflows for small '
-            'organisms — instrument control, specimen metadata, protocols, and structured HDF5 data.</p>',
+            '<p class="bnd-landing-tagline">Non-destructive bending biomechanics</p>',
             unsafe_allow_html=True,
         )
 
@@ -2549,10 +2700,6 @@ def _render_landing_page() -> None:
     margin-left: auto !important;
     margin-right: auto !important;
 }
-#root .bnd-landing-hero-logo {
-    background: #ffffff !important;
-    border-radius: 12px !important;
-}
 #root section[data-testid="stMain"] [data-testid="stVerticalBlock"] > div:first-child {
     margin-top: 0 !important;
 }
@@ -2571,33 +2718,6 @@ def _render_landing_page() -> None:
     color: #64748b !important;
     margin: 0.1rem 0 0.2rem 0 !important;
     font-weight: 450;
-}
-#root .bnd-landing-hero-wrap {
-    position: relative;
-    width: 100%;
-    box-sizing: border-box;
-    padding-right: min(38%, 15rem);
-}
-#root .bnd-landing-hero-text { display: block; }
-#root .bnd-landing-hero-logo {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(34%, 13.5rem);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-}
-#root .bnd-landing-hero-logo-img {
-    display: block;
-    max-height: 100%;
-    max-width: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    pointer-events: auto;
 }
 #root .bnd-landing-hero-rule {
     height: 0;
@@ -2653,7 +2773,7 @@ def _render_landing_page() -> None:
     padding: 1.05rem 1.05rem 1.2rem !important;
     margin-top: 0 !important;
     margin-bottom: 0 !important;
-    background: #f1f5f9 !important;
+    background: #ffffff !important;
     border: 1px solid #cbd5e1 !important;
     border-radius: 14px !important;
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
