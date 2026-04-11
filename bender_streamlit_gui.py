@@ -2541,7 +2541,9 @@ def _render_landing_page() -> None:
     width: 100%;
     box-sizing: border-box;
     padding-right: min(38%, 15rem);
-    min-height: 0;
+    min-height: 11rem;
+    margin-bottom: 0.35rem;
+    padding-bottom: 0.35rem;
 }
 #root .bnd-landing-hero-text { display: block; }
 #root .bnd-landing-hero-logo {
@@ -2581,7 +2583,7 @@ def _render_landing_page() -> None:
             f'</div>'
             f'<div class="bnd-landing-hero-logo">'
             f'<img class="bnd-landing-hero-logo-img" src="{_logo_uri}" alt="Laboratory logo" '
-            f'style="max-width:min(100%,13.5rem);max-height:11rem;width:auto;height:auto;object-fit:contain;display:block;" '
+            f'style="max-width:min(100%,13.5rem);max-height:100%;width:auto;height:auto;object-fit:contain;display:block;" '
             f'decoding="async" fetchpriority="high"/>'
             f'</div>'
             f'</div>',
@@ -2721,7 +2723,8 @@ def _render_landing_page() -> None:
 }
 #root .bnd-landing-hero-rule {
     height: 0;
-    margin: 0.55rem 0 0.55rem 0;
+    margin: 0.85rem 0 0.55rem 0;
+    clear: both;
     padding: 0;
     border: none;
     border-top: 2px dotted #c2410c;
