@@ -34,6 +34,7 @@ from bender_gui_preview import build_protocol_preview
 from bender_h5_export import export_primary_h5, save_universal_qc_figure
 from bender_h5_explore import (
     align_xy,
+    build_series_catalog_generic,
     build_series_catalog_legacy,
     build_series_catalog_v2,
     detect_h5_schema,
@@ -1032,6 +1033,10 @@ def h5_explorer_section() -> None:
             ui.select({t: t for t in trials}, label='Trial', value=cur, on_change=_trial_changed).classes('w-full mb-2')
     cat = state.sess.get('gui_h5_explore_catalog') or {}
     if not cat:
+        if str(state.sess.get('gui_h5_explore_schema') or '') == 'browse':
+            ui.markdown(
+                '**Browse mode:** use the **Streamlit** H5 data explorer to navigate the file tree and plot.'
+            ).classes(CAPTION)
         return
     keys = sorted(cat.keys())
     ui.select({k: k for k in keys}, label='X').classes('w-full').bind_value(state.sess, 'gui_h5_explore_x')
@@ -1077,8 +1082,16 @@ def _on_h5_load() -> None:
             state.sess['gui_h5_explore_trial'] = ''
             cat, n2 = build_series_catalog_legacy(chosen)
             notes.extend(n2)
+        elif schema == 'generic':
+            state.sess['gui_h5_explore_trial'] = ''
+            cat, n2 = build_series_catalog_generic(chosen)
+            notes.extend(n2)
+        elif schema == 'browse':
+            state.sess['gui_h5_explore_trial'] = ''
+            cat, n2 = {}, ['Browse mode: use Streamlit H5 explorer for the interactive HDF5 tree.']
+            notes.extend(n2)
         else:
-            ui.notify('Unknown H5 schema.', type='negative')
+            ui.notify('Could not open this file as HDF5.', type='negative')
             return
         state.sess['gui_h5_explore_loaded_path'] = chosen
         state.sess['gui_h5_explore_schema'] = schema

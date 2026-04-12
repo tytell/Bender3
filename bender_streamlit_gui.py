@@ -13,13 +13,14 @@ when hardware is ready.
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib
 import json
 import math
 import os
 import sys
 import tempfile
-from typing import Optional
+from typing import Optional, Tuple
 
 import h5py
 import numpy as np
@@ -92,11 +93,18 @@ from bender_protocol_templates import (  # noqa: E402
     template_display_label,
 )
 from bender_h5_explore import (  # noqa: E402
-    align_xy,
+    FT_ROW_LABELS,
+    align_xy as align_h5_catalog_xy,
+    build_series_catalog_generic,
     build_series_catalog_legacy,
     build_series_catalog_v2,
     detect_h5_schema,
+    h5_join_internal_path,
+    list_h5_attribute_rows,
+    list_h5_group_children,
     list_v2_trials,
+    read_h5_series_1d,
+    write_h5_user_attributes,
 )
 
 _BND_LS_ACTION_MARK = '<div class="bnd-ls-action" aria-hidden="true"></div>'
@@ -2974,12 +2982,12 @@ def _render_landing_page() -> None:
             unsafe_allow_html=True,
         )
         st.markdown(
-            '<p class="bnd-landing-section-sub">Open exported <code>.h5</code> files and plot 1D series (e.g. '
-            '<strong>time vs torque</strong> or <strong>curvature vs torque</strong>) without loading the full '
-            'experiment workflow.</p>',
+            '<p class="bnd-landing-section-sub">Open exported <code>.h5</code> files: <strong>Standard</strong> mode '
+            'lists CritterGripper series automatically; <strong>Custom</strong> mode uses dropdowns to navigate '
+            'the file tree for non-standard layouts. You can edit HDF5 attributes when metadata is wrong.</p>',
             unsafe_allow_html=True,
         )
-        if st.button('Open H5 data explorer', key='land_h5_explorer', use_container_width=True, type='primary'):
+        if st.button('Open Visualize Data', key='land_h5_explorer', use_container_width=True, type='primary'):
             st.session_state['gui_app_route'] = 'h5_explorer'
             st.rerun()
 
@@ -3826,15 +3834,358 @@ def _render_simulation_comparison_page() -> None:
                 )
 
 
+def _path_ch_axis_label(path: str, ch) -> str:
+    if not path:
+        return ''
+    if ch is None or ch == '':
+        return path
+    try:
+        i = int(ch)
+        if 0 <= i < len(FT_ROW_LABELS):
+            return f'{path} — {FT_ROW_LABELS[i]}'
+    except (TypeError, ValueError):
+        pass
+    return path
+
+
+def _h5_attr_row_token(name: str) -> str:
+    return hashlib.sha256(name.encode('utf-8', errors='replace')).hexdigest()[:16]
+
+
+def _h5_custom_axis_folder_suffix(axis: str, cwd: str) -> str:
+    """Per-axis + per-folder suffix so selectbox keys stay valid when folder or axis context changes."""
+    return hashlib.sha256(f'{axis}|{cwd or ""}'.encode('utf-8', errors='replace')).hexdigest()[:16]
+
+
+def _render_h5_custom_axis_browser(loaded: str, axis: str, heading: str) -> None:
+    """One column: independent cwd, subfolder nav, dataset pick, optional 6×N channel."""
+    cwd_key = f'gui_h5_custom_cwd_{axis}'
+    st.session_state.setdefault(cwd_key, '')
+    cwd = str(st.session_state.get(cwd_key) or '')
+
+    kids = list_h5_group_children(loaded, cwd)
+    if not kids and cwd:
+        st.session_state[cwd_key] = ''
+        cwd = ''
+        kids = list_h5_group_children(loaded, cwd)
+
+    groups = sorted([e['name'] for e in kids if e['kind'] == 'group'], key=str.lower)
+    ds_list = [e for e in kids if e['kind'] == 'dataset']
+    _ks = _h5_custom_axis_folder_suffix(axis, cwd)
+
+    st.markdown(f'**{heading}**')
+    st.caption('Folder: `' + (cwd or '/') + '`')
+
+    nav1, nav2, nav3 = st.columns(3)
+    with nav1:
+        pick = st.selectbox(
+            'Subfolder',
+            options=['—'] + groups,
+            key=f'gui_h5_custom_{axis}_sub_{_ks}',
+        )
+        if st.button('Enter', key=f'gui_h5_custom_{axis}_enter_{_ks}', disabled=pick == '—'):
+            st.session_state[cwd_key] = h5_join_internal_path(cwd, pick)
+            st.rerun()
+    with nav2:
+        if st.button('Up', key=f'gui_h5_custom_{axis}_up_{_ks}', disabled=not cwd):
+            parts = cwd.split('/')
+            st.session_state[cwd_key] = '/'.join(parts[:-1]) if parts else ''
+            st.rerun()
+    with nav3:
+        if st.button('Root', key=f'gui_h5_custom_{axis}_root_{_ks}'):
+            st.session_state[cwd_key] = ''
+            st.rerun()
+
+    plottable = [e for e in ds_list if e['plot'] in ('1d', 'six')]
+    opt = ['—'] + [e['name'] for e in plottable]
+
+    st.selectbox(
+        'Dataset',
+        options=opt,
+        key=f'gui_h5_custom_{axis}_ds_{_ks}',
+    )
+    ds_sel = str(st.session_state.get(f'gui_h5_custom_{axis}_ds_{_ks}', '—'))
+    plot_mode = next((e['plot'] for e in plottable if e['name'] == ds_sel), None) if ds_sel != '—' else None
+    if plot_mode == 'six':
+        ch_key = f'gui_h5_custom_{axis}_ch_{_ks}'
+        st.session_state.setdefault(ch_key, 5)
+        st.selectbox(
+            '6×N channel',
+            options=list(range(6)),
+            format_func=lambda i: FT_ROW_LABELS[i],
+            key=ch_key,
+        )
+
+
+def _h5_custom_swap_xy_session() -> None:
+    """Exchange X/Y folder, dataset, and channel widget state (custom hierarchy mode)."""
+    cx = str(st.session_state.get('gui_h5_custom_cwd_x') or '')
+    cy = str(st.session_state.get('gui_h5_custom_cwd_y') or '')
+    ksx = _h5_custom_axis_folder_suffix('x', cx)
+    ksy = _h5_custom_axis_folder_suffix('y', cy)
+    ds_x = str(st.session_state.get(f'gui_h5_custom_x_ds_{ksx}', '—'))
+    ds_y = str(st.session_state.get(f'gui_h5_custom_y_ds_{ksy}', '—'))
+    ch_x = st.session_state.get(f'gui_h5_custom_x_ch_{ksx}', 5)
+    ch_y = st.session_state.get(f'gui_h5_custom_y_ch_{ksy}', 5)
+    try:
+        ch_x_i = int(ch_x)
+    except (TypeError, ValueError):
+        ch_x_i = 5
+    try:
+        ch_y_i = int(ch_y)
+    except (TypeError, ValueError):
+        ch_y_i = 5
+    ch_x_i = max(0, min(5, ch_x_i))
+    ch_y_i = max(0, min(5, ch_y_i))
+
+    st.session_state['gui_h5_custom_cwd_x'] = cy
+    st.session_state['gui_h5_custom_cwd_y'] = cx
+
+    ksx_new = _h5_custom_axis_folder_suffix('x', cy)
+    ksy_new = _h5_custom_axis_folder_suffix('y', cx)
+    st.session_state[f'gui_h5_custom_x_ds_{ksx_new}'] = ds_y
+    st.session_state[f'gui_h5_custom_y_ds_{ksy_new}'] = ds_x
+    st.session_state[f'gui_h5_custom_x_ch_{ksx_new}'] = ch_y_i
+    st.session_state[f'gui_h5_custom_y_ch_{ksy_new}'] = ch_x_i
+
+
+def _h5_custom_resolve_axis_path(loaded: str, axis: str) -> Tuple[str, Optional[int], Optional[str]]:
+    """Return ``(internal_dataset_path, channel_or_none, plot_mode)`` for axis ``'x'`` or ``'y'``."""
+    cwd_key = f'gui_h5_custom_cwd_{axis}'
+    cwd = str(st.session_state.get(cwd_key) or '')
+    kids = list_h5_group_children(loaded, cwd)
+    if not kids and cwd:
+        cwd = ''
+        kids = list_h5_group_children(loaded, cwd)
+    ds_list = [e for e in kids if e['kind'] == 'dataset']
+    plottable = [e for e in ds_list if e['plot'] in ('1d', 'six')]
+    opt_names = [e['name'] for e in plottable]
+    _ks = _h5_custom_axis_folder_suffix(axis, cwd)
+    ds_sel = str(st.session_state.get(f'gui_h5_custom_{axis}_ds_{_ks}', '—'))
+    if ds_sel != '—' and ds_sel not in opt_names:
+        ds_sel = '—'
+    plot_mode = next((e['plot'] for e in plottable if e['name'] == ds_sel), None) if ds_sel != '—' else None
+    ch: Optional[int] = None
+    if plot_mode == 'six':
+        ch = int(st.session_state.get(f'gui_h5_custom_{axis}_ch_{_ks}', 5))
+    path = h5_join_internal_path(cwd, ds_sel) if ds_sel != '—' else ''
+    return path, ch, plot_mode
+
+
+def _render_h5_custom_hierarchy_dropdowns(loaded: str) -> None:
+    """Non-standard HDF5: **X** and **Y** each have their own folder navigation and dataset pick."""
+    st.caption(
+        '**X** and **Y** use **separate folders**. In each column: open subfolders with **Enter**, pick a **Dataset**, '
+        'and set **6×N channel** when needed (Fx…Tz).'
+    )
+    cx, cy = st.columns(2)
+    with cx:
+        _render_h5_custom_axis_browser(loaded, 'x', 'X axis (horizontal)')
+    with cy:
+        _render_h5_custom_axis_browser(loaded, 'y', 'Y axis (vertical)')
+
+    _sw1, _sw2, _sw3 = st.columns([2, 1, 2])
+    with _sw2:
+        if st.button(
+            'Swap X ↔ Y',
+            key='gui_h5_custom_swap_xy',
+            help='Exchange X and Y (each column’s folder, dataset, and 6×N channel).',
+        ):
+            _h5_custom_swap_xy_session()
+            st.rerun()
+
+    st.divider()
+    x_path, xch, _ = _h5_custom_resolve_axis_path(loaded, 'x')
+    y_path, ych, _ = _h5_custom_resolve_axis_path(loaded, 'y')
+    if not x_path or not y_path:
+        st.info('Choose a **Dataset** for both **X** and **Y** (each in its own folder column above).')
+        return
+
+    x_title = _path_ch_axis_label(x_path, xch)
+    y_title = _path_ch_axis_label(y_path, ych)
+    try:
+        xa = read_h5_series_1d(loaded, x_path, xch)
+        ya = read_h5_series_1d(loaded, y_path, ych)
+    except Exception as e:
+        st.error(str(e))
+        return
+
+    x_data, y_data = align_xy(xa, ya)
+    n = int(min(x_data.size, y_data.size))
+    if n <= 0:
+        st.warning('Selected series are empty or trimming produced zero samples.')
+        return
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x_data,
+            y=y_data,
+            mode='lines',
+            name=y_title,
+            line=dict(width=1.2),
+        )
+    )
+    fig.update_layout(
+        title=f'{y_title} vs {x_title} (n={n})',
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+        margin=dict(l=48, r=24, t=48, b=48),
+        hovermode='x unified',
+        height=520,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_h5_attribute_editor(loaded: str) -> None:
+    """Edit scalar HDF5 attributes on file root, a group, or a dataset (writable file)."""
+    with st.expander('Edit HDF5 attributes', expanded=False):
+        st.caption(
+            'Fix wrong metadata (e.g. **dclamp**, sample rate). Requires **write permission** on the file path. '
+            'Back up important data first; arrays and opaque types are read-only here.'
+        )
+        st.text_input(
+            'Path inside the file (blank = file root)',
+            key='gui_h5_attr_path_typed',
+            placeholder='e.g. Calibrated or 02_TimeSeries/trial_1',
+            help='Use forward slashes. Leave empty to edit attributes on the file itself.',
+        )
+        if st.button('Load attributes', key='gui_h5_attr_load_btn', type='secondary'):
+            st.session_state['gui_h5_attr_edit_target'] = str(
+                st.session_state.get('gui_h5_attr_path_typed') or ''
+            ).strip()
+            st.rerun()
+
+        if 'gui_h5_attr_edit_target' not in st.session_state:
+            st.info('Enter a path (or leave blank for file root) and click **Load attributes**.')
+            return
+
+        ap = str(st.session_state.get('gui_h5_attr_edit_target') or '').strip()
+        try:
+            rows = list_h5_attribute_rows(loaded, ap)
+        except Exception as e:
+            st.error(f'Could not read attributes: {e}')
+            return
+
+        st.markdown(f'Editing **`{ap or "/"}`** — {len(rows)} attribute(s)')
+        for row in rows:
+            name = row['name']
+            tok = _h5_attr_row_token(f'{ap}::{name}')
+            r1, r2 = st.columns([5, 1])
+            with r1:
+                if row['editable']:
+                    sk = f'gui_h5_attr_v_{tok}'
+                    if sk not in st.session_state:
+                        st.session_state[sk] = row['value_text']
+                    st.text_input(name, key=sk)
+                else:
+                    st.text_input(
+                        f'{name} (read-only: {row["kind"]})',
+                        value=row['value_text'],
+                        disabled=True,
+                        key=f'gui_h5_attr_ro_{tok}',
+                    )
+            with r2:
+                st.checkbox('Delete', key=f'gui_h5_attr_d_{tok}', value=False)
+
+        st.divider()
+        st.markdown('**Add attribute**')
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            st.text_input('New name', key='gui_h5_attr_new_name')
+        with a2:
+            st.text_input('New value', key='gui_h5_attr_new_val')
+        with a3:
+            st.selectbox(
+                'Type',
+                options=['str', 'float', 'int', 'bool'],
+                key='gui_h5_attr_new_kind',
+            )
+
+        if not st.button('Apply changes to file', key='gui_h5_attr_apply', type='primary'):
+            return
+
+        deletes: list = []
+        final_updates: dict = {}
+        for row in rows:
+            name = row['name']
+            tok = _h5_attr_row_token(f'{ap}::{name}')
+            if st.session_state.get(f'gui_h5_attr_d_{tok}', False):
+                deletes.append(name)
+            elif row['editable']:
+                final_updates[name] = (
+                    row['kind'],
+                    str(st.session_state.get(f'gui_h5_attr_v_{tok}', row['value_text'])),
+                )
+
+        nn = str(st.session_state.get('gui_h5_attr_new_name') or '').strip()
+        adds: Optional[list] = None
+        if nn:
+            adds = [
+                (
+                    nn,
+                    str(st.session_state.get('gui_h5_attr_new_kind') or 'str'),
+                    str(st.session_state.get('gui_h5_attr_new_val') or ''),
+                )
+            ]
+
+        try:
+            notes = write_h5_user_attributes(
+                loaded,
+                ap,
+                updates=final_updates,
+                delete_names=deletes,
+                additions=adds,
+            )
+        except OSError as e:
+            st.error(f'Could not write (read-only or locked file?): {e}')
+            return
+        except Exception as e:
+            st.error(str(e))
+            return
+
+        st.success('Attributes written. Refreshing series from file…')
+        for line in notes:
+            st.caption(line)
+        try:
+            fresh = list_h5_attribute_rows(loaded, ap)
+            for row in fresh:
+                if row['editable']:
+                    tt = _h5_attr_row_token(f'{ap}::{row["name"]}')
+                    st.session_state[f'gui_h5_attr_v_{tt}'] = row['value_text']
+        except OSError:
+            pass
+        st.session_state.pop('gui_h5_explore_schema', None)
+        st.session_state.pop('gui_h5_explore_catalog', None)
+        st.session_state.pop('gui_h5_explore_notes', None)
+        st.rerun()
+
+
 def _render_h5_explorer() -> None:
-    """Standalone HDF5 viewer: path or upload, trial pick (v2), X/Y series, Plotly chart."""
-    st.subheader('H5 data explorer')
-    st.caption('Paths are read on this machine (Streamlit server). Use a full path to your `.h5` file, or upload a copy.')
+    """Visualize Data: HDF5 path or upload; standard auto-series or custom hierarchy; optional attr edit."""
+    st.subheader('Visualize Data')
+    st.caption(
+        'Paths are read on this machine (Streamlit server). Use **Standard** for CritterGripper exports, '
+        'or **Custom** to drill into any layout. Edit attributes at the bottom if metadata is wrong.'
+    )
 
     st.session_state.setdefault('gui_h5_explore_path', '')
     st.session_state.setdefault('gui_h5_explore_trial', '')
     st.session_state.setdefault('gui_h5_explore_x', 'Time (s)')
     st.session_state.setdefault('gui_h5_explore_y', 'Primary torque corrected (N·m)')
+
+    st.session_state.setdefault('gui_h5_explore_ui_mode', 'standard')
+    st.radio(
+        'File Type',
+        options=['standard', 'custom'],
+        format_func=lambda x: (
+            'Standard — auto series (v2 / legacy / generic)'
+            if x == 'standard'
+            else 'Custom — navigate folders + X/Y dropdowns'
+        ),
+        horizontal=True,
+        key='gui_h5_explore_ui_mode',
+    )
 
     with st.container(border=True):
         path_in = st.text_input(
@@ -3852,11 +4203,13 @@ def _render_h5_explorer() -> None:
                 with open(tmp_path, 'wb') as wf:
                     wf.write(up.getbuffer())
                 st.session_state['gui_h5_explore_upload_path'] = tmp_path
-                st.caption(f'Uploaded copy → `{tmp_path}`')
+                st.caption('Temporary upload saved on the server — click **Load file** below.')
+                with st.expander('Show temporary file path', expanded=False):
+                    st.code(str(tmp_path))
             except Exception as e:
                 st.error(f'Could not save upload: {e}')
 
-        if st.button('Load file & refresh series', key='gui_h5_explore_load', type='primary'):
+        if st.button('Load file', key='gui_h5_explore_load', type='primary'):
             pin = str(st.session_state.get('gui_h5_explore_path') or '').strip()
             upl = str(st.session_state.get('gui_h5_explore_upload_path') or '').strip()
             chosen = ''
@@ -3872,45 +4225,92 @@ def _render_h5_explorer() -> None:
             st.session_state.pop('gui_h5_explore_catalog', None)
             st.session_state.pop('gui_h5_explore_notes', None)
             st.session_state.pop('gui_h5_explore_schema', None)
+            for k in (
+                'gui_h5_custom_cwd_x',
+                'gui_h5_custom_cwd_y',
+                'gui_h5_attr_edit_target',
+            ):
+                st.session_state.pop(k, None)
             st.rerun()
 
     loaded = str(st.session_state.get('gui_h5_explore_loaded_path') or '').strip()
     if not loaded or not os.path.isfile(loaded):
         if loaded:
-            st.warning('File not found. Check the path or upload again, then **Load file & refresh series**.')
+            st.warning('File not found. Check the path or upload again, then **Load file**.')
         st.info('Load an `.h5` file to list series and plot.')
         return
 
+    mode = str(st.session_state.get('gui_h5_explore_ui_mode') or 'standard')
+    prev_mode = st.session_state.get('_h5_explore_mode_prev')
+    if prev_mode is not None and prev_mode != mode:
+        st.session_state.pop('gui_h5_explore_schema', None)
+        st.session_state.pop('gui_h5_explore_catalog', None)
+        st.session_state.pop('gui_h5_explore_notes', None)
+    st.session_state['_h5_explore_mode_prev'] = mode
+
     if st.session_state.get('gui_h5_explore_schema') is None or st.session_state.get('gui_h5_explore_catalog') is None:
-        schema = detect_h5_schema(loaded)
-        st.session_state['gui_h5_explore_schema'] = schema
-        notes: list = []
-        if schema == 'v2':
-            trials = list_v2_trials(loaded)
-            if not trials:
-                st.error('Schema v2 file has no `02_TimeSeries/trial_*` groups.')
+        if mode == 'custom':
+            try:
+                with h5py.File(loaded, 'r'):
+                    pass
+            except OSError:
+                st.error('Could not open this file as HDF5 (missing, corrupted, or invalid format).')
                 return
-            tid = str(st.session_state.get('gui_h5_explore_trial') or trials[0])
-            if tid not in trials:
-                tid = trials[0]
-            st.session_state['gui_h5_explore_trial'] = tid
-            cat, n2 = build_series_catalog_v2(loaded, tid)
-            notes.extend(n2)
-        elif schema == 'legacy':
-            st.session_state['gui_h5_explore_trial'] = ''
-            cat, n2 = build_series_catalog_legacy(loaded)
-            notes.extend(n2)
+            st.session_state['gui_h5_explore_schema'] = 'custom'
+            st.session_state['gui_h5_explore_catalog'] = {}
+            st.session_state['gui_h5_explore_notes'] = []
         else:
-            st.error('Could not read this file as CritterGripper schema v2 or legacy HDF5.')
-            return
-        st.session_state['gui_h5_explore_catalog'] = cat
-        st.session_state['gui_h5_explore_notes'] = notes
+            schema = detect_h5_schema(loaded)
+            st.session_state['gui_h5_explore_schema'] = schema
+            notes: list = []
+            if schema == 'v2':
+                trials = list_v2_trials(loaded)
+                if not trials:
+                    st.error('Schema v2 file has no `02_TimeSeries/trial_*` groups.')
+                    return
+                tid = str(st.session_state.get('gui_h5_explore_trial') or trials[0])
+                if tid not in trials:
+                    tid = trials[0]
+                st.session_state['gui_h5_explore_trial'] = tid
+                cat, n2 = build_series_catalog_v2(loaded, tid)
+                notes.extend(n2)
+            elif schema == 'legacy':
+                st.session_state['gui_h5_explore_trial'] = ''
+                cat, n2 = build_series_catalog_legacy(loaded)
+                notes.extend(n2)
+            elif schema == 'generic':
+                st.session_state['gui_h5_explore_trial'] = ''
+                cat, n2 = build_series_catalog_generic(loaded)
+                notes.extend(n2)
+            elif schema == 'browse':
+                st.session_state['gui_h5_explore_trial'] = ''
+                cat, n2 = {}, [
+                    'No structured series list detected — use **Custom hierarchy** mode to plot.'
+                ]
+                notes.extend(n2)
+            else:
+                st.error('Could not open this file as HDF5 (missing, corrupted, or invalid format).')
+                return
+            st.session_state['gui_h5_explore_catalog'] = cat
+            st.session_state['gui_h5_explore_notes'] = notes
 
     schema = str(st.session_state.get('gui_h5_explore_schema') or '')
-    cat: dict = dict(st.session_state.get('gui_h5_explore_catalog') or {})
+    cat = dict(st.session_state.get('gui_h5_explore_catalog') or {})
     notes = list(st.session_state.get('gui_h5_explore_notes') or [])
+
+    if mode == 'custom':
+        st.success(f'Loaded `{os.path.basename(loaded)}` — **custom hierarchy** mode.')
+        with st.expander('File notes', expanded=False):
+            st.caption('Use the **X** and **Y** columns to open different folders and pick one dataset each.')
+        _render_h5_custom_hierarchy_dropdowns(loaded)
+        _render_h5_attribute_editor(loaded)
+        return
+
     if not cat:
-        st.warning('No plottable 1D series found in this file.')
+        st.warning(
+            'No auto-detected series for this file. Switch to **Custom — navigate folders + X/Y dropdowns** above.'
+        )
+        _render_h5_attribute_editor(loaded)
         return
 
     st.success(f'Loaded `{os.path.basename(loaded)}` — **{schema}** schema, **{len(cat)}** series.')
@@ -3951,14 +4351,8 @@ def _render_h5_explorer() -> None:
         else:
             st.session_state['gui_h5_explore_y'] = keys[min(1, len(keys) - 1)]
 
-    c1, c2 = st.columns(2)
-    with c1:
-        x_key = st.selectbox('X axis', options=keys, key='gui_h5_explore_x')
-    with c2:
-        y_key = st.selectbox('Y axis', options=keys, key='gui_h5_explore_y')
-
-    st.caption('Quick presets (sets X and Y in the dropdowns above on next run):')
-    pr1, pr2, pr3 = st.columns(3)
+    st.caption('Quick presets — click to set X and Y (axis dropdowns below).')
+    pr1, pr2, pr3, pr4 = st.columns(4)
     with pr1:
         if st.button('Time → torque (primary)', key='gui_h5_preset_tt'):
             st.session_state['gui_h5_explore_x'] = 'Time (s)' if 'Time (s)' in keys else keys[0]
@@ -3992,9 +4386,26 @@ def _render_h5_explorer() -> None:
             elif 'z Torque (N·m)' in keys:
                 st.session_state['gui_h5_explore_y'] = 'z Torque (N·m)'
             st.rerun()
+    with pr4:
+        if st.button(
+            'Swap X ↔ Y',
+            key='gui_h5_preset_swap_xy',
+            help='Exchange the X and Y axis series.',
+        ):
+            sx = st.session_state.get('gui_h5_explore_x')
+            sy = st.session_state.get('gui_h5_explore_y')
+            st.session_state['gui_h5_explore_x'] = sy
+            st.session_state['gui_h5_explore_y'] = sx
+            st.rerun()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        x_key = st.selectbox('X axis', options=keys, key='gui_h5_explore_x')
+    with c2:
+        y_key = st.selectbox('Y axis', options=keys, key='gui_h5_explore_y')
 
     try:
-        x_data, y_data, n = align_xy(cat, x_key, y_key)
+        x_data, y_data, n = align_h5_catalog_xy(cat, x_key, y_key)
     except KeyError as e:
         st.error(str(e))
         return
@@ -4026,6 +4437,8 @@ def _render_h5_explorer() -> None:
     with st.expander('Series lengths', expanded=False):
         rows = [{'Series': k, 'Length': int(v.size)} for k, v in sorted(cat.items(), key=lambda kv: kv[0])]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    _render_h5_attribute_editor(loaded)
 
 
 def _render_app_chrome() -> None:
@@ -4076,7 +4489,7 @@ def _render_app_chrome() -> None:
         elif _mode == 'sim_compare':
             st.caption('Simulation & Comparison — numpy cantilever mechanics only; no NI-DAQ.')
         elif _mode == 'h5_explorer':
-            st.caption('H5 data explorer — plot saved trial series (no experiment workflow).')
+            st.caption('Visualize Data — plot HDF5 series; standard or custom layout; optional attribute edits.')
     with h2:
         if os.path.isfile(_LOGO_PATH):
             try:
