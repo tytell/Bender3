@@ -60,6 +60,20 @@ def render_procedure_fields(
                 ui.textarea(key.replace('_', ' '), value=sess.get(sk, '{}')).classes('w-full').bind_value(sess, sk).props(
                     'rows=4'
                 )
+            elif key in ('bilateral_mirror_motor',):
+                ui.checkbox(BILATERAL_MIRROR_LABEL).props(f'title="{h}"' if h else '').bind_value(sess, sk)
+            elif key == 'isometric_mirror_target_left':
+                use_sk = f'{sk}_use'
+                ui.checkbox('Bilateral LEFT-hold target (enable)').classes('w-full').bind_value(sess, use_sk).props(
+                    f'title="{h}"' if h else ''
+                )
+                ui.number('isometric_mirror_target_left', format='%.6g').classes('w-full').bind_value(sess, sk)
+            elif key == 'isometric_mirror_target_right':
+                use_sk = f'{sk}_use'
+                ui.checkbox('Bilateral RIGHT-hold target (enable)').classes('w-full').bind_value(sess, use_sk).props(
+                    f'title="{h}"' if h else ''
+                )
+                ui.number('isometric_mirror_target_right', format='%.6g').classes('w-full').bind_value(sess, sk)
             elif key == 'recruitment':
                 ui.select(
                     {x: x for x in RECRUITMENT_OPTIONS},
@@ -68,8 +82,6 @@ def render_procedure_fields(
                 ).classes('w-full').bind_value(sess, sk)
             elif key == 'lateral_mode':
                 ui.input(LATERAL_MODE_LABEL).classes('w-full').bind_value(sess, sk)
-            elif key in ('bilateral_mirror_motor',):
-                ui.checkbox(BILATERAL_MIRROR_LABEL).bind_value(sess, sk)
             elif key == 'bilateral_sequential_left_frac':
                 ui.number(key, format='%.6g').classes('w-full').bind_value(sess, sk)
             elif key == 'isometric_mode':
@@ -102,12 +114,12 @@ def render_procedure_fields(
                 ui.textarea(key.replace('_', ' '), value=sess.get(sk, '{}')).classes('w-full').bind_value(sess, sk).props(
                     'rows=4'
                 )
+            elif key in ('bilateral_mirror_motor',):
+                ui.checkbox(BILATERAL_MIRROR_LABEL).bind_value(sess, sk)
             elif key == 'recruitment':
                 ui.select({x: x for x in RECRUITMENT_OPTIONS}, label='recruitment').classes('w-full').bind_value(sess, sk)
             elif key == 'lateral_mode':
                 ui.input(LATERAL_MODE_LABEL).classes('w-full').bind_value(sess, sk)
-            elif key in ('bilateral_mirror_motor',):
-                ui.checkbox(BILATERAL_MIRROR_LABEL).bind_value(sess, sk)
             elif key == 'bilateral_sequential_left_frac':
                 ui.number(key, format='%.6g').classes('w-full').bind_value(sess, sk)
             elif key == 'isovelocity_starting_strain_mode':

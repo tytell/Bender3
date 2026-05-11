@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 PROTOCOL_TEMPLATE_VERSION = 2
+_PROTOCOL_TEMPLATE_DIR = 'TemplateProtocols'
+_LEGACY_PROTOCOL_TEMPLATE_DIR = 'ProtocolTemplates'
 
 # Motion-series keys per test_type (must match ``_motion_parameter_rows`` in ``bender_streamlit_gui``).
 _MOTION_STIM = (
@@ -87,7 +89,7 @@ LIST_INT_KEYS = frozenset(
 
 
 def default_templates_dir(project_root: str) -> str:
-    return os.path.normpath(os.path.join(project_root, 'ProtocolTemplates'))
+    return os.path.normpath(os.path.join(project_root, _PROTOCOL_TEMPLATE_DIR))
 
 
 def sanitize_template_filename_stem(name: str) -> str:
@@ -103,8 +105,18 @@ def sanitize_template_filename_stem(name: str) -> str:
 def list_template_files(folder: str) -> List[str]:
     """Sorted paths to ``*.json`` in ``folder`` (non-recursive)."""
     d = str(folder or '').strip()
-    if not d or not os.path.isdir(d):
+    if not d:
         return []
+    if not os.path.isdir(d):
+        # Backward-compatible read path for repos still using the old folder name.
+        if os.path.basename(os.path.normpath(d)) == _PROTOCOL_TEMPLATE_DIR:
+            legacy = os.path.join(os.path.dirname(os.path.normpath(d)), _LEGACY_PROTOCOL_TEMPLATE_DIR)
+            if os.path.isdir(legacy):
+                d = legacy
+            else:
+                return []
+        else:
+            return []
     out = []
     for n in sorted(os.listdir(d)):
         if not n.lower().endswith('.json'):

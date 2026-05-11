@@ -13,6 +13,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 BIOMETRICS_TEMPLATE_VERSION = 1
+_BIOMETRICS_TEMPLATE_DIR = 'TemplateBiometrics'
+_LEGACY_BIOMETRICS_TEMPLATE_DIR = 'BiometricsTemplates'
+
+# Protocol templates (section 4) use this version and a ``procedure`` block — not biometrics.
+_PROTOCOL_TEMPLATE_VERSION = 2
 
 # Keys saved/loaded (Streamlit widget session keys).
 BIOMETRICS_SESSION_KEYS = (
@@ -43,8 +48,54 @@ BIOMETRICS_SESSION_KEYS = (
 )
 
 
+def _coerce_biometrics_version(raw: Any) -> Optional[int]:
+    """Accept ``1``, ``1.0``, ``"1"`` from JSON; return ``None`` if missing or unusable."""
+    if raw is None or raw is False:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return int(raw)
+    if isinstance(raw, float) and raw == raw and abs(raw - round(raw)) < 1e-9:
+        return int(round(raw))
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s.isdigit() or (s.startswith('-') and s[1:].isdigit()):
+            return int(s)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _looks_like_protocol_template(data: Dict[str, Any]) -> bool:
+    """Heuristic: saved **procedure** JSON, not a biometrics snapshot."""
+    if not isinstance(data, dict):
+        return False
+    if 'procedure' in data and 'test_type' in data:
+        return True
+    ver = _coerce_biometrics_version(data.get('version'))
+    if ver == _PROTOCOL_TEMPLATE_VERSION:
+        return True
+    return False
+
+
+def _extract_biometrics_session_dict(data: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Return ``(session_dict, None)`` or ``(None, error_message)``.
+    Supports normal ``{"session": {...}}``, legacy files without ``version``, and flat top-level ``bio_*`` keys.
+    """
+    sess = data.get('session')
+    if isinstance(sess, dict):
+        return sess, None
+    flat = {k: data[k] for k in BIOMETRICS_SESSION_KEYS if k in data}
+    if flat:
+        return flat, None
+    return None, 'Template missing a "session" object (and no biometrics fields like bio_dclamp at the top level).'
+
+
 def default_biometrics_templates_dir(project_root: str) -> str:
-    return os.path.normpath(os.path.join(project_root, 'BiometricsTemplates'))
+    return os.path.normpath(os.path.join(project_root, _BIOMETRICS_TEMPLATE_DIR))
 
 
 def sanitize_biometrics_filename_stem(name: str) -> str:
@@ -59,7 +110,7 @@ def sanitize_biometrics_filename_stem(name: str) -> str:
 
 def biometrics_template_display_label(path: str) -> str:
     try:
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding='utf-8-sig') as f:
             d = json.load(f)
         n = str(d.get('name') or '').strip()
         return f'{n}  ·  {os.path.basename(path)}' if n else os.path.basename(path)
@@ -69,8 +120,18 @@ def biometrics_template_display_label(path: str) -> str:
 
 def list_biometrics_template_files(folder: str) -> List[str]:
     d = str(folder or '').strip()
-    if not d or not os.path.isdir(d):
+    if not d:
         return []
+    if not os.path.isdir(d):
+        # Backward-compatible read path for repos still using the old folder name.
+        if os.path.basename(os.path.normpath(d)) == _BIOMETRICS_TEMPLATE_DIR:
+            legacy = os.path.join(os.path.dirname(os.path.normpath(d)), _LEGACY_BIOMETRICS_TEMPLATE_DIR)
+            if os.path.isdir(legacy):
+                d = legacy
+            else:
+                return []
+        else:
+            return []
     out = []
     for n in sorted(os.listdir(d)):
         if not n.lower().endswith('.json'):
@@ -112,19 +173,44 @@ def save_biometrics_template(
 
 
 def load_biometrics_template(path: str) -> Dict[str, Any]:
-    with open(path, encoding='utf-8') as f:
+    # utf-8-sig strips a UTF-8 BOM if present (common for Notepad / Excel-exported JSON).
+    with open(path, encoding='utf-8-sig') as f:
         return json.load(f)
 
 
 def apply_biometrics_template_to_session(
     session_state: Any, data: Dict[str, Any]
 ) -> Tuple[bool, str]:
-    ver = data.get('version', 0)
-    if ver != BIOMETRICS_TEMPLATE_VERSION:
-        return False, f'Unsupported biometrics template version {ver!r} (expected {BIOMETRICS_TEMPLATE_VERSION}).'
-    sess = data.get('session')
-    if not isinstance(sess, dict):
-        return False, 'Template missing "session" object.'
+    if not isinstance(data, dict):
+        return False, 'Biometrics file root must be a JSON object `{ ... }`, not a list or bare value.'
+
+    if _looks_like_protocol_template(data):
+        return (
+            False,
+            'This JSON is a **protocol** template (experiment type + procedure), not a biometrics file. '
+            'Load it from **Protocol** using **Load template into form** (section 4), not from **Biometrics**. '
+            'Tip: files like `Mandytest.json` with `"version": 2`, `"test_type"`, and `"procedure"` are protocol files. '
+            'Biometrics files include `"version": 1` and a `"session"` object with keys like `bio_dclamp` and `bio_xsec`.',
+        )
+
+    sess, err = _extract_biometrics_session_dict(data)
+    if err or sess is None:
+        return False, err or 'Could not read biometrics fields from file.'
+
+    raw_ver = _coerce_biometrics_version(data.get('version'))
+    # Legacy exports without version, or version 0: accept if we have a session dict.
+    if raw_ver is None or raw_ver == 0:
+        effective_ver = BIOMETRICS_TEMPLATE_VERSION
+    else:
+        effective_ver = raw_ver
+
+    if effective_ver != BIOMETRICS_TEMPLATE_VERSION:
+        return (
+            False,
+            f'Unsupported biometrics template version {data.get("version")!r} (expected {BIOMETRICS_TEMPLATE_VERSION}). '
+            'If this is a protocol file, load it from section 4 instead.',
+        )
+
     n = 0
     for k, v in sess.items():
         if k in BIOMETRICS_SESSION_KEYS:
@@ -135,4 +221,11 @@ def apply_biometrics_template_to_session(
             if not str(session_state.get('gui_specimen_id') or '').strip():
                 session_state['gui_specimen_id'] = str(v).strip()
                 n += 1
+    if n == 0:
+        return (
+            False,
+            'No recognized biometrics keys in the file. Expected at least one of: '
+            + ', '.join(sorted(BIOMETRICS_SESSION_KEYS)[:6])
+            + ', … inside "session".',
+        )
     return True, f'Loaded {n} biometrics field(s) into the form. Use **Apply** in section 2 to update the experiment object.'

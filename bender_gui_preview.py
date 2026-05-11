@@ -180,7 +180,9 @@ def _preview_concat_isovelocity_timeline(
     rec = b._normalize_recruitment(
         sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
     )
-    mirror = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False))) and rec == 'bilateral_sequential'
+    bm = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False)))
+    rec = b._recruitment_with_bilateral_mirror_motor(rec, bm)
+    mirror = bm and rec == 'bilateral_sequential'
     seq_frac = float(
         sp.get('bilateral_sequential_left_frac', getattr(b, 'bilateral_sequential_left_frac', 0.5))
     )
@@ -283,7 +285,9 @@ def _isometric_stim_params_from_b(b: Any) -> dict:
     return sp
 
 
-def _preview_concat_isometric_timeline(b: Any, targets_deg: np.ndarray, sp: dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _preview_concat_isometric_timeline(
+    b: Any, targets_deg: np.ndarray, sp: dict, *, mode: str = 'strain'
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Match :meth:`Bender._run_force_length_steps` ramp/hold segments (and optional mirror path)."""
     targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
     num_steps = int(targets_deg.size)
@@ -296,7 +300,31 @@ def _preview_concat_isometric_timeline(b: Any, targets_deg: np.ndarray, sp: dict
     rec = b._normalize_recruitment(
         sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
     )
-    mirror = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False))) and rec == 'bilateral_sequential'
+    bm = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False)))
+    rec = b._recruitment_with_bilateral_mirror_motor(rec, bm)
+    mirror = bm and rec == 'bilateral_sequential'
+    dc = getattr(b, '_effective_dclamp_mm', lambda: None)()
+    xw = getattr(b, 'xsec_width', None)
+    mhl = mhr = None
+    if mirror and dc is not None:
+        ml_n = sp.get('isometric_mirror_target_left', getattr(b, 'isometric_mirror_target_left', None))
+        mr_n = sp.get('isometric_mirror_target_right', getattr(b, 'isometric_mirror_target_right', None))
+        if ml_n is not None and mr_n is not None:
+            try:
+                from bender_functions import convert_to_curvature
+
+                fL, fR = float(ml_n), float(mr_n)
+                if np.isfinite(fL) and np.isfinite(fR):
+                    kL = convert_to_curvature(np.asarray([fL]), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+                    kR = convert_to_curvature(np.asarray([fR]), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+                    mhl = float(
+                        np.abs(np.rad2deg(float(np.asarray(kL, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
+                    )
+                    mhr = float(
+                        np.abs(np.rad2deg(float(np.asarray(kR, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
+                    )
+            except (TypeError, ValueError):
+                mhl = mhr = None
 
     t_chunks: List[np.ndarray] = []
     a_chunks: List[np.ndarray] = []
@@ -316,7 +344,12 @@ def _preview_concat_isometric_timeline(b: Any, targets_deg: np.ndarray, sp: dict
         target = float(targets_deg[i])
         prev = float(targets_deg[i - 1]) if i > 0 else float(targets_deg[0])
         if mirror:
-            tloc, aloc, _wloc, _h1, _h2 = b._timeline_mirror_two_holds(prev, target, ramp, hold, daq_hz)
+            kw = {}
+            if mhl is not None:
+                kw['mirror_abs_deg_left'] = mhl
+            if mhr is not None:
+                kw['mirror_abs_deg_right'] = mhr
+            tloc, aloc, _wloc, _h1, _h2 = b._timeline_mirror_two_holds(prev, target, ramp, hold, daq_hz, **kw)
         else:
             tloc, aloc, _wloc = b._timeline_ramp_hold(prev, target, ramp, hold, daq_hz)
         t_chunks.append(tloc + toff)
@@ -372,9 +405,14 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         kappa = convert_to_curvature(vals, mode, dclamp_mm=float(dc), xsec_width_mm=xw)
         targets_deg = np.rad2deg(kappa * (float(dc) / 1000.0))
         sp = _isometric_stim_params_from_b(b)
+        for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
+            if k not in sp and getattr(b, k, None) is not None:
+                sp[k] = getattr(b, k)
         rec = b._normalize_recruitment(
             sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
         )
+        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False)))
+        rec = b._recruitment_with_bilateral_mirror_motor(rec, mirror_bm)
         uidx = b.recruitment_unilateral_lateral_index(rec)
         if uidx is not None:
             targets_deg = targets_deg * b.motor_command_sign_for_bend_toward_index(uidx)
@@ -391,7 +429,7 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
                 }
             )
         try:
-            t, angle, anglevel = _preview_concat_isometric_timeline(b, targets_deg, sp)
+            t, angle, anglevel = _preview_concat_isometric_timeline(b, targets_deg, sp, mode=str(mode))
         except Exception as e:
             r['error'] = f'Isometric timeline preview failed: {type(e).__name__}: {e}'
             return r

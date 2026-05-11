@@ -122,7 +122,11 @@ RANDOM_SEED_HELP = (
     'Only used when **randomize order** is checked. Enter an integer for a **reproducible** shuffle; leave empty for random.'
 )
 
-RECRUITMENT_FIELD_HELP = 'How stimulation and/or motor commands are routed across left vs right.'
+RECRUITMENT_FIELD_HELP = (
+    'How stimulation and/or motor commands are routed across left vs right. '
+    'With **Perform test on both sides**, simultaneous or unilateral modes are upgraded to **bilateral sequential** '
+    'at run time when needed.'
+)
 
 ISOVELOCITY_WIDGET_LABEL = {
     'isovelocity_min_vel': 'Minimum angular velocity (deg/s)',
@@ -148,7 +152,7 @@ ISOVELOCITY_FIELD_HELP = {
     'isovelocity_pre_hold_s': 'Time (s) at the starting posture before each trial’s constant-velocity segment begins.',
     'recruitment': RECRUITMENT_FIELD_HELP,
     'lateral_mode': 'Expert only. Leave **blank** unless you need a custom stim-router label.',
-    'bilateral_mirror_motor': 'When **recruitment** is **bilateral sequential**, mirror the commanded bend between halves.',
+    'bilateral_mirror_motor': 'Two constant-velocity bends per trial (left then right) with stim on each side; recruitment coerced when needed.',
     'bilateral_sequential_left_frac': 'Share of each step spent on the **left** side before the right (0–1).',
 }
 
@@ -162,7 +166,9 @@ ISOMETRIC_FIELD_HELP = {
     'isometric_inter_step_interval_s': 'Idle time after each step’s acquisition before the next ramp (0 = back-to-back).',
     'recruitment': RECRUITMENT_FIELD_HELP,
     'lateral_mode': 'Expert only. Leave **blank** unless you need a custom stim-router label.',
-    'bilateral_mirror_motor': 'Mirror hold/ramp between left and right halves of each step when recruitment is sequential.',
+    'bilateral_mirror_motor': 'Ramp/hold toward left then right with matched stimulation; recruitment coerced to sequential when needed.',
+    'isometric_mirror_target_left': 'Optional: explicit first-hold magnitude toward LEFT (same units as isometric mode); enable checkbox and set both left and right.',
+    'isometric_mirror_target_right': 'Optional: second-hold magnitude toward RIGHT; enable checkbox; use with left target.',
     'bilateral_sequential_left_frac': 'Share of each step on the **left** side before the right (0–1).',
 }
 

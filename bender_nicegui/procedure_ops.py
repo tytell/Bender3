@@ -66,6 +66,12 @@ def _seed_typed(b: Any, sess: Dict[str, Any], name: str, kind: str) -> None:
             sess[use_k] = cur is not None
         if sk not in sess:
             sess[sk] = int(cur) if cur is not None else 0
+    elif kind == 'optional_float':
+        use_k = f'{sk}_use'
+        if use_k not in sess:
+            sess[use_k] = cur is not None
+        if sk not in sess:
+            sess[sk] = float(cur) if cur is not None else 0.0
     elif kind == 'bool':
         if sk not in sess:
             sess[sk] = bool(cur) if cur is not None else False
@@ -113,6 +119,11 @@ def _read_typed(sess: Dict[str, Any], name: str, kind: str) -> Any:
         if not sess.get(use_k):
             return None
         return int(sess[sk])
+    if kind == 'optional_float':
+        use_k = f'{sk}_use'
+        if not sess.get(use_k):
+            return None
+        return float(sess[sk])
     if kind == 'bool':
         return bool(sess[sk])
     if kind == 'str':
@@ -136,6 +147,10 @@ def seed_procedure_fields(b: Any, tt: str, schema: Dict[str, Any], test_types: L
         for key in schema['isometric_optional']:
             if key in ('isometric_stim_params', 'isometric_stim_overrides'):
                 _seed_typed(b, sess, key, 'json_dict')
+            elif key in ('bilateral_mirror_motor',):
+                _seed_typed(b, sess, key, 'bool')
+            elif key in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
+                _seed_typed(b, sess, key, 'optional_float')
             elif key == 'recruitment':
                 skr = widget_key('recruitment')
                 cur_r = get_session_value(b, 'recruitment', 'bilateral_simultaneous')
@@ -145,8 +160,6 @@ def seed_procedure_fields(b: Any, tt: str, schema: Dict[str, Any], test_types: L
                 skl = widget_key('lateral_mode')
                 if skl not in sess:
                     sess[skl] = str(get_session_value(b, key) or '')
-            elif key in ('bilateral_mirror_motor',):
-                _seed_typed(b, sess, key, 'bool')
             elif key == 'bilateral_sequential_left_frac':
                 _seed_typed(b, sess, key, 'float')
             elif key == 'isometric_mode':
@@ -172,6 +185,8 @@ def seed_procedure_fields(b: Any, tt: str, schema: Dict[str, Any], test_types: L
         for key in schema['isovelocity_optional']:
             if key in ('isovelocity_stim_params', 'isovelocity_stim_overrides'):
                 _seed_typed(b, sess, key, 'json_dict')
+            elif key in ('bilateral_mirror_motor',):
+                _seed_typed(b, sess, key, 'bool')
             elif key == 'recruitment':
                 skr = widget_key('recruitment')
                 cur_r = get_session_value(b, 'recruitment', 'bilateral_simultaneous')
@@ -181,8 +196,6 @@ def seed_procedure_fields(b: Any, tt: str, schema: Dict[str, Any], test_types: L
                 skl = widget_key('lateral_mode')
                 if skl not in sess:
                     sess[skl] = str(get_session_value(b, key) or '')
-            elif key in ('bilateral_mirror_motor',):
-                _seed_typed(b, sess, key, 'bool')
             elif key == 'bilateral_sequential_left_frac':
                 _seed_typed(b, sess, key, 'float')
             elif key == 'isovelocity_starting_strain_mode':
@@ -232,12 +245,14 @@ def gather_procedure_updates(
             for key in schema['isometric_optional']:
                 if key in ('isometric_stim_params', 'isometric_stim_overrides'):
                     updates[key] = _read_typed(sess, key, 'json_dict')
+                elif key in ('bilateral_mirror_motor',):
+                    updates[key] = _read_typed(sess, key, 'bool')
+                elif key in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
+                    updates[key] = _read_typed(sess, key, 'optional_float')
                 elif key == 'recruitment':
                     updates[key] = str(sess[widget_key('recruitment')])
                 elif key == 'lateral_mode':
                     updates[key] = str(sess[widget_key('lateral_mode')])
-                elif key in ('bilateral_mirror_motor',):
-                    updates[key] = _read_typed(sess, key, 'bool')
                 elif key == 'bilateral_sequential_left_frac':
                     updates[key] = _read_typed(sess, key, 'float')
                 elif key == 'isometric_mode':
@@ -259,12 +274,12 @@ def gather_procedure_updates(
             for key in schema['isovelocity_optional']:
                 if key in ('isovelocity_stim_params', 'isovelocity_stim_overrides'):
                     updates[key] = _read_typed(sess, key, 'json_dict')
+                elif key in ('bilateral_mirror_motor',):
+                    updates[key] = _read_typed(sess, key, 'bool')
                 elif key == 'recruitment':
                     updates[key] = str(sess[widget_key('recruitment')])
                 elif key == 'lateral_mode':
                     updates[key] = str(sess[widget_key('lateral_mode')])
-                elif key in ('bilateral_mirror_motor',):
-                    updates[key] = _read_typed(sess, key, 'bool')
                 elif key == 'bilateral_sequential_left_frac':
                     updates[key] = _read_typed(sess, key, 'float')
                 elif key == 'isovelocity_starting_strain_mode':

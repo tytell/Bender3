@@ -340,6 +340,9 @@ class Bender:
         self.lateral_mode = None  # optional alias; merged into stim_params as recruitment
         self.bilateral_mirror_motor = False
         self.bilateral_sequential_left_frac = 0.5
+        # Optional native targets (same units as isometric_mode) for LEFT vs RIGHT hold when bilateral mirror is on.
+        self.isometric_mirror_target_left = None
+        self.isometric_mirror_target_right = None
         # Multiply geometric strain (κ·w/2) in plots/post-hoc by this after sono validation if
         # you want “positive = shortening on the recruited side” (typically ±1).
         self.strain_shortening_positive_display_sign = 1.0
@@ -888,6 +891,7 @@ class Bender:
                         motor_gear_ratio=self.motor_gear_ratio,
                         motor_full_steps_per_rev=self.motor_full_steps_per_rev
                     )
+        self._validate_pre_run_signals()
                             
 
         # Print file save location
@@ -1230,6 +1234,39 @@ class Bender:
     def record_stim_signal(self, S1stimcmd, S2stimcmd):
         self.S1stimcmd = S1stimcmd
         self.S2stimcmd = S2stimcmd
+
+    def _validate_pre_run_signals(self):
+        """Fail fast on invalid motion/stimulus buffers before any NI tasks start."""
+        t = np.asarray(getattr(self, 't', np.array([])), dtype=float).reshape(-1)
+        tout = np.asarray(getattr(self, 'tout', np.array([])), dtype=float).reshape(-1)
+        ang = np.asarray(getattr(self, 'angle', np.array([])), dtype=float).reshape(-1)
+        av = np.asarray(getattr(self, 'anglevel', np.array([])), dtype=float).reshape(-1)
+        stim_hi = np.asarray(getattr(self, 'stimcmdhi', np.array([])), dtype=float)
+        if t.size < 2:
+            raise ValueError('Run preflight failed: motion timeline must have at least 2 samples.')
+        if tout.size < 2:
+            raise ValueError('Run preflight failed: AO/DO timeline must have at least 2 samples.')
+        if ang.size != t.size or av.size != t.size:
+            raise ValueError(
+                f'Run preflight failed: angle/velocity lengths must match t ({t.size}); '
+                f'got angle={ang.size}, anglevel={av.size}.'
+            )
+        if not np.all(np.isfinite(t)) or not np.all(np.isfinite(tout)):
+            raise ValueError('Run preflight failed: timeline contains NaN/Inf.')
+        if not np.all(np.isfinite(ang)) or not np.all(np.isfinite(av)):
+            raise ValueError('Run preflight failed: motion command contains NaN/Inf.')
+        if stim_hi.ndim != 2 or stim_hi.shape[0] != 2 or stim_hi.shape[1] != tout.size:
+            raise ValueError(
+                'Run preflight failed: stimulus matrix must be shape (2, len(tout)); '
+                f'got {stim_hi.shape}.'
+            )
+        if not np.all(np.isfinite(stim_hi)):
+            raise ValueError('Run preflight failed: stimulus contains NaN/Inf.')
+        dig = np.asarray(getattr(self, 'dig', np.array([]))).reshape(-1)
+        if dig.size != tout.size:
+            raise ValueError(
+                f'Run preflight failed: digital buffer length must match tout ({tout.size}); got {dig.size}.'
+            )
 
     def _protocol_log(self, protocol, f0=None, f1=None, c0=None, c1=None, **extra):
         """Write compact protocol fields: frequency_hz, curvature_1_per_m (float or [lo, hi])."""
@@ -1833,6 +1870,11 @@ class Bender:
             except Exception:
                 _stop_run_tasks()
                 time.sleep(0.05)
+                try:
+                    from bender_daq_kill import daq_emergency_stop
+                    daq_emergency_stop(device_name)
+                except Exception:
+                    pass
                 raise
 
         return(self.aidata)
@@ -1876,6 +1918,22 @@ class Bender:
             f"Unknown recruitment/lateral_mode {name!r}; use left, right, bilateral_sequential, "
             "bilateral_simultaneous."
         )
+
+    def _recruitment_with_bilateral_mirror_motor(self, rec, mirror_bm):
+        """
+        When ``bilateral_mirror_motor`` is True, the motor timeline uses left-then-right postures
+        (see :meth:`_timeline_mirror_two_holds`), which requires **bilateral_sequential** stim routing.
+        If the user left recruitment at **bilateral_simultaneous** or a unilateral mode, upgrade to
+        **bilateral_sequential** so the checkbox matches the label “both sides”.
+        """
+        rec = self._normalize_recruitment(rec)
+        if not mirror_bm:
+            return rec
+        if rec == 'bilateral_simultaneous':
+            return 'bilateral_sequential'
+        if rec in ('left_unilateral', 'right_unilateral'):
+            return 'bilateral_sequential'
+        return rec
 
     def lateral_index_from_side_name(self, side):
         """Map ``'left'`` / ``'right'`` to specimen lateral index (from config)."""
@@ -2086,14 +2144,19 @@ class Bender:
         s = np.where(m, pulse, 0.0)
         return s, s.copy()
 
-    def _timeline_mirror_two_holds(self, prev_deg, mag_deg, ramp_s, hold_s_total, daq_hz):
+    def _timeline_mirror_two_holds(
+        self, prev_deg, mag_deg, ramp_s, hold_s_total, daq_hz, *, mirror_abs_deg_left=None, mirror_abs_deg_right=None
+    ):
         """
-        Ramp prev->T1, hold T1, ramp T1->T2, hold T2 with |T1|=|T2|=|mag_deg| and signs for left/right bend.
+        Ramp prev->T1, hold T1, ramp T1->T2, hold T2 with signed T1/T2 toward left/right specimen sides.
+        Default: |T1|=|T2|=|mag_deg|. Optional ``mirror_abs_deg_*`` set per-side hold magnitudes (unsigned deg).
         Each hold duration is hold_s_total/2. Used for bilateral_sequential + bilateral_mirror_motor.
         """
         h = float(hold_s_total) * 0.5
-        T1 = self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_left) * abs(float(mag_deg))
-        T2 = self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_right) * abs(float(mag_deg))
+        mL = abs(float(mirror_abs_deg_left)) if mirror_abs_deg_left is not None else abs(float(mag_deg))
+        mR = abs(float(mirror_abs_deg_right)) if mirror_abs_deg_right is not None else abs(float(mag_deg))
+        T1 = self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_left) * mL
+        T2 = self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_right) * mR
         t1, a1, w1 = self._timeline_ramp_hold(float(prev_deg), T1, float(ramp_s), h, daq_hz)
         t2, a2, w2 = self._timeline_ramp_hold(T1, T2, float(ramp_s), h, daq_hz)
         off = float(t1[-1])
@@ -2108,6 +2171,19 @@ class Bender:
         t_hold2_0 = off + float(ramp_s)
         t_hold2_1 = off + float(ramp_s) + h
         return t, angle, anglevel, (t_hold1_0, t_hold1_1), (t_hold2_0, t_hold2_1)
+
+    def _mirror_hold_deg_at_step(self, arr, step_index, num_steps):
+        """Scalar or length ``num_steps`` (or 1) array of unsigned motor magnitudes (deg) for mirror holds."""
+        if arr is None:
+            return None
+        a = np.atleast_1d(np.asarray(arr, dtype=float).reshape(-1))
+        if a.size == 1:
+            return float(a[0])
+        if int(a.size) != int(num_steps):
+            raise ValueError(
+                f"mirror hold degree targets: expected length 1 or {num_steps}, got {int(a.size)}."
+            )
+        return float(a[int(step_index)])
 
     def _timeline_ramp_hold(self, angle_start_deg, angle_end_deg, ramp_s, hold_s, daq_hz):
         """Piecewise-linear ramp then hold; returns (t, angle, anglevel) at AI rate."""
@@ -2153,6 +2229,8 @@ class Bender:
         recruitment=None,
         bilateral_mirror_motor=False,
         bilateral_sequential_left_frac=0.5,
+        mirror_hold_deg_left=None,
+        mirror_hold_deg_right=None,
     ):
         """Execute ramp–hold–stim–acquire for each target angle in ``targets_deg`` (degrees)."""
         targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
@@ -2170,7 +2248,9 @@ class Bender:
         rec = self._normalize_recruitment(
             recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
         )
-        mirror = bool(bilateral_mirror_motor) and rec == 'bilateral_sequential'
+        bm = bool(bilateral_mirror_motor)
+        rec = self._recruitment_with_bilateral_mirror_motor(rec, bm)
+        mirror = bm and rec == 'bilateral_sequential'
         seq_frac = float(
             bilateral_sequential_left_frac
             if bilateral_sequential_left_frac is not None
@@ -2189,8 +2269,15 @@ class Bender:
             target = float(targets_deg[i])
             prev = float(targets_deg[i - 1]) if i > 0 else float(targets_deg[0])
             if mirror:
+                kw = {}
+                ml = self._mirror_hold_deg_at_step(mirror_hold_deg_left, i, num_steps)
+                mr = self._mirror_hold_deg_at_step(mirror_hold_deg_right, i, num_steps)
+                if ml is not None:
+                    kw['mirror_abs_deg_left'] = ml
+                if mr is not None:
+                    kw['mirror_abs_deg_right'] = mr
                 t, angle, anglevel, h1, h2 = self._timeline_mirror_two_holds(
-                    prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz
+                    prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz, **kw
                 )
                 active_l = (t >= h1[0] + float(settle_before_stim_s)) & (t < h1[1])
                 active_r = (t >= h2[0] + float(settle_before_stim_s)) & (t < h2[1])
@@ -2372,7 +2459,9 @@ class Bender:
             Optional keys: ``ramp_duration_s``, ``hold_duration_s``, ``settle_before_stim_s``,
             ``stim_duration_s``, ``inter_step_interval_s`` (seconds of idle time after each step
             before the next begins; 0 = no pause), ``is_stim``, ``stim_pulse_rate``,
-            ``stim_voltage``, ``device_name``.
+            ``stim_voltage``, ``device_name``, ``recruitment``, ``bilateral_mirror_motor``,
+            ``isometric_mirror_target_left`` / ``isometric_mirror_target_right`` (same units as ``mode``;
+            when both set with bilateral mirror, per-hold magnitudes instead of the step sweep scalar).
             If ``inter_step_interval_s`` is omitted, :attr:`isometric_inter_step_interval_s` on
             the instance is used (default 0).
         **kwargs
@@ -2400,6 +2489,9 @@ class Bender:
         sp.update(kwargs)
         if sp.get('inter_step_interval_s', None) is None:
             sp['inter_step_interval_s'] = float(getattr(self, 'isometric_inter_step_interval_s', 0.0) or 0.0)
+        for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
+            if k not in sp and getattr(self, k, None) is not None:
+                sp[k] = getattr(self, k)
         vals = np.linspace(float(initial), float(final), int(num_steps))
         seq_idx = np.arange(vals.size, dtype=int)
         if bool(randomize) and vals.size > 1:
@@ -2417,11 +2509,31 @@ class Bender:
         rec = self._normalize_recruitment(
             sp.get('recruitment', sp.get('lateral_mode', getattr(self, 'recruitment', 'bilateral_simultaneous')))
         )
+        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
+        rec = self._recruitment_with_bilateral_mirror_motor(rec, mirror_bm)
         uidx = self.recruitment_unilateral_lateral_index(rec)
         if uidx is not None:
             targets_deg = targets_deg * self.motor_command_sign_for_bend_toward_index(uidx)
-        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
         seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5)))
+        ml_n = sp.get('isometric_mirror_target_left')
+        mr_n = sp.get('isometric_mirror_target_right')
+        mhl = None
+        mhr = None
+        if mirror_bm and ml_n is not None and mr_n is not None:
+            try:
+                fL, fR = float(ml_n), float(mr_n)
+                if np.isfinite(fL) and np.isfinite(fR):
+                    kL = convert_to_curvature(np.asarray([fL]), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+                    kR = convert_to_curvature(np.asarray([fR]), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+                    mhl = float(
+                        np.abs(np.rad2deg(float(np.asarray(kL, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
+                    )
+                    mhr = float(
+                        np.abs(np.rad2deg(float(np.asarray(kR, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
+                    )
+            except (TypeError, ValueError):
+                mhl = None
+                mhr = None
         out = self._run_force_length_steps(
             targets_deg,
             ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
@@ -2436,12 +2548,14 @@ class Bender:
             recruitment=rec,
             bilateral_mirror_motor=mirror_bm,
             bilateral_sequential_left_frac=seq_frac,
+            mirror_hold_deg_left=mhl,
+            mirror_hold_deg_right=mhr,
         )
         for i, e in enumerate(out):
             e['target_value_native'] = float(vals[i])
             e['curvature_1_per_m'] = float(kappa[i])
             e['sequence_index'] = int(seq_idx[i])
-        self.h5_protocol_metadata.update({
+        meta = {
             'recruitment': rec,
             'bilateral_mirror_motor': mirror_bm,
             'bilateral_sequential_left_frac': seq_frac,
@@ -2452,7 +2566,15 @@ class Bender:
             ),
             'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
             'unilateral_posture_lateral_index': uidx,
-        })
+        }
+        if ml_n is not None:
+            meta['isometric_mirror_target_left'] = ml_n
+        if mr_n is not None:
+            meta['isometric_mirror_target_right'] = mr_n
+        if mhl is not None and mhr is not None:
+            meta['isometric_mirror_hold_deg_left'] = mhl
+            meta['isometric_mirror_hold_deg_right'] = mhr
+        self.h5_protocol_metadata.update(meta)
         return out
 
     def test_force_length(self, initial, final, num_steps, mode='strain', stim_params=None, **kwargs):
@@ -2605,7 +2727,9 @@ class Bender:
         rec = self._normalize_recruitment(
             recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
         )
-        mirror = bool(bilateral_mirror_motor) and rec == 'bilateral_sequential'
+        bm = bool(bilateral_mirror_motor)
+        rec = self._recruitment_with_bilateral_mirror_motor(rec, bm)
+        mirror = bm and rec == 'bilateral_sequential'
         seq_frac = float(
             bilateral_sequential_left_frac
             if bilateral_sequential_left_frac is not None
@@ -2845,6 +2969,8 @@ class Bender:
         rec_iso = self._normalize_recruitment(
             sp.get('recruitment', sp.get('lateral_mode', getattr(self, 'recruitment', 'bilateral_simultaneous')))
         )
+        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
+        rec_iso = self._recruitment_with_bilateral_mirror_motor(rec_iso, mirror_bm)
         uidx0 = self.recruitment_unilateral_lateral_index(rec_iso)
         if uidx0 is not None:
             theta0 = theta0 * self.motor_command_sign_for_bend_toward_index(uidx0)
@@ -2855,7 +2981,6 @@ class Bender:
             rng = np.random.default_rng(None if random_seed is None else int(random_seed))
             rng.shuffle(seq_idx)
             vels = vels[seq_idx]
-        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
         seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5)))
         out = self._run_isovelocity_steps(
             theta0,
@@ -3653,7 +3778,9 @@ class Bender:
                 'isometric_mode', 'isometric_randomize', 'isometric_random_seed',
                 'isometric_inter_step_interval_s',
                 'isometric_stim_params', 'isometric_stim_overrides',
-                'recruitment', 'lateral_mode', 'bilateral_mirror_motor', 'bilateral_sequential_left_frac',
+                'bilateral_mirror_motor',
+                'isometric_mirror_target_left', 'isometric_mirror_target_right',
+                'recruitment', 'lateral_mode', 'bilateral_sequential_left_frac',
             ],
             'isovelocity_required': [
                 'isovelocity_min_vel', 'isovelocity_max_vel',
@@ -3664,7 +3791,8 @@ class Bender:
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
                 'isovelocity_pre_hold_s', 'isovelocity_stim_params',
                 'isovelocity_stim_overrides',
-                'recruitment', 'lateral_mode', 'bilateral_mirror_motor', 'bilateral_sequential_left_frac',
+                'bilateral_mirror_motor',
+                'recruitment', 'lateral_mode', 'bilateral_sequential_left_frac',
             ],
             'calibration_required': ['calibration_base_test_type'],
             'calibration_optional': ['inertial_calibration_file'],

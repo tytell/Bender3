@@ -27,8 +27,40 @@ MATERIALS: Dict[str, Dict[str, float]] = {
 }
 
 
+def _safe_float(value: Any, default: float, *, min_value: Optional[float] = None) -> float:
+    """Return finite float with optional lower bound."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        out = float(default)
+    if not np.isfinite(out):
+        out = float(default)
+    if min_value is not None:
+        out = max(out, float(min_value))
+    return out
+
+
+def _safe_int(value: Any, default: int, *, min_value: int = 1) -> int:
+    """Return bounded int parsed from common numeric-like inputs."""
+    try:
+        out = int(float(value))
+    except (TypeError, ValueError):
+        out = int(default)
+    if out < int(min_value):
+        out = int(min_value)
+    return out
+
+
+def _safe_1d_float_array(values: Any) -> np.ndarray:
+    try:
+        arr = np.asarray(values, dtype=float).reshape(-1)
+    except (TypeError, ValueError):
+        return np.zeros(0, dtype=float)
+    return arr[np.isfinite(arr)]
+
+
 def second_moment_solid_circle(diameter_m: float) -> float:
-    r = float(diameter_m) / 2.0
+    r = _safe_float(diameter_m, TUBE_OUTER_DIAMETER_M, min_value=1e-6) / 2.0
     return 0.25 * np.pi * r**4
 
 
@@ -40,8 +72,7 @@ def cantilever_linear_stiffness_N_per_m(E_Pa: float, I_m4: float, L_m: float) ->
 
 
 def _length_m_from_mm(length_mm: Optional[float], fallback_mm: float = 30.0) -> float:
-    Lmm = float(length_mm) if length_mm is not None and np.isfinite(length_mm) else float(fallback_mm)
-    Lmm = max(Lmm, 1.0)
+    Lmm = _safe_float(length_mm, fallback_mm, min_value=1.0)
     return Lmm / 1000.0
 
 
@@ -52,13 +83,13 @@ def specimen_effective_length_m(length_mm: Optional[float]) -> float:
 
 def tip_displacement_m(angle_deg: np.ndarray, L_m: float) -> np.ndarray:
     """Geometric proxy: δ ≈ L sin|θ| with sign(θ); θ is commanded bend angle (deg)."""
-    th = np.deg2rad(np.asarray(angle_deg, dtype=float).reshape(-1))
+    th = np.deg2rad(_safe_1d_float_array(angle_deg))
     return L_m * np.sin(np.abs(th)) * np.sign(th)
 
 
 def tip_velocity_m_s(angle_deg: np.ndarray, anglevel_deg_s: np.ndarray, L_m: float) -> np.ndarray:
-    th = np.deg2rad(np.asarray(angle_deg, dtype=float).reshape(-1))
-    wd = np.deg2rad(np.asarray(anglevel_deg_s, dtype=float).reshape(-1))
+    th = np.deg2rad(_safe_1d_float_array(angle_deg))
+    wd = np.deg2rad(_safe_1d_float_array(anglevel_deg_s))
     n = min(th.size, wd.size)
     th = th[:n]
     wd = wd[:n]
@@ -93,8 +124,8 @@ def simulated_bending_force(
     k = cantilever_linear_stiffness_N_per_m(mat['E_Pa'], I, L_m)
     eta = mat['eta_frac_of_k_ms'] * k * 0.001
 
-    ang = np.asarray(angle_deg, dtype=float).reshape(-1)
-    av = np.asarray(anglevel_deg_s, dtype=float).reshape(-1)
+    ang = _safe_1d_float_array(angle_deg)
+    av = _safe_1d_float_array(anglevel_deg_s)
     n = int(min(ang.size, av.size))
     ang = ang[:n]
     av = av[:n]
@@ -158,6 +189,7 @@ def force_displacement_series(
         material_key=material_key,
         rng=None,
     )
+    max_points = _safe_int(max_points, 8000, min_value=2)
     if F.size > max_points:
         idx = np.linspace(0, F.size - 1, num=max_points, dtype=int)
         return delta[idx] * 1000.0, F[idx]
@@ -175,7 +207,9 @@ def static_stiffness_comparison_delta_grid(
     """
     L_m = _length_m_from_mm(length_mm)
     I = second_moment_solid_circle(TUBE_OUTER_DIAMETER_M)
-    d_mm = np.linspace(0.0, float(delta_max_mm), int(n_points))
+    dmax = _safe_float(delta_max_mm, 8.0, min_value=0.0)
+    npts = _safe_int(n_points, 120, min_value=2)
+    d_mm = np.linspace(0.0, dmax, npts)
     d_m = d_mm / 1000.0
     k_pu = cantilever_linear_stiffness_N_per_m(MATERIALS['polyurethane']['E_Pa'], I, L_m)
     k_si = cantilever_linear_stiffness_N_per_m(MATERIALS['silicone']['E_Pa'], I, L_m)
@@ -195,8 +229,8 @@ def cantilever_stiffness_N_per_m_for_geometry(
     :math:`D^4` (stiffness grows sharply with diameter). Stiffness falls as :math:`1/L^3`.
     Returns ``(k_N_per_m, E_Pa, I_m4)``.
     """
-    L_m = max(float(length_mm), 1.0) / 1000.0
-    D_m = max(float(width_mm), 0.5) / 1000.0
+    L_m = _safe_float(length_mm, 30.0, min_value=1.0) / 1000.0
+    D_m = _safe_float(width_mm, 25.4, min_value=0.5) / 1000.0
     key = resolve_material_key(material_key)
     E = float(MATERIALS[key]['E_Pa'])
     I = float(second_moment_solid_circle(D_m))
@@ -224,11 +258,14 @@ def force_displacement_comparison_curve(
         width_mm=width_mm,
         material_key=material_key,
     )
-    d_mm = np.linspace(0.0, float(delta_max_mm), int(n_points))
+    dmax = _safe_float(delta_max_mm, 12.0, min_value=0.0)
+    npts = _safe_int(n_points, 160, min_value=2)
+    d_mm = np.linspace(0.0, dmax, npts)
     d_m = d_mm / 1000.0
     F = k * d_m
     gen = rng if rng is not None else np.random.default_rng(0)
-    F = F + gen.normal(0.0, float(noise_std_N), size=F.shape)
+    sig = _safe_float(noise_std_N, 0.025, min_value=0.0)
+    F = F + gen.normal(0.0, sig, size=F.shape)
     return d_mm, F
 
 
@@ -282,21 +319,24 @@ def oscillatory_viscoelastic_timeseries(
         width_mm=width_mm,
         material_key=material_key,
     )
-    f = max(float(freq_hz), 0.05)
+    f = _safe_float(freq_hz, 1.0, min_value=0.05)
     omega = 2.0 * np.pi * f
-    A_m = max(float(amplitude_mm), 0.01) / 1000.0
-    L_m = max(float(length_mm), 1.0) / 1000.0
+    A_m = _safe_float(amplitude_mm, 2.0, min_value=0.01) / 1000.0
+    L_m = _safe_float(length_mm, 30.0, min_value=1.0) / 1000.0
     c = viscous_damping_n_s_per_m(material_key, k)
 
-    n_tot = max(int(float(n_cycles_shown) * int(points_per_cycle)), 80)
-    t_end = float(n_cycles_shown) / f
+    n_cyc = _safe_float(n_cycles_shown, 4.0, min_value=1.0)
+    ppc = _safe_int(points_per_cycle, 200, min_value=20)
+    n_tot = max(int(n_cyc * ppc), 80)
+    t_end = n_cyc / f
     t = np.linspace(0.0, t_end, n_tot, endpoint=False)
 
     delta_m = A_m * np.sin(omega * t)
     delta_dot = A_m * omega * np.cos(omega * t)
     F = k * delta_m + c * delta_dot
-    if rng is not None and float(noise_std_N) > 0.0:
-        F = F + rng.normal(0.0, float(noise_std_N), size=F.shape)
+    sig = _safe_float(noise_std_N, 0.02, min_value=0.0)
+    if rng is not None and sig > 0.0:
+        F = F + rng.normal(0.0, sig, size=F.shape)
 
     theta_rad = delta_m / max(L_m, 1e-12)
     M_root = F * L_m
@@ -307,15 +347,18 @@ def oscillatory_viscoelastic_timeseries(
 
     T = 2.0 * np.pi / omega
     t_start_last = float(t[-1]) - T
-    mask = t >= t_start_last
+    mask = np.isfinite(t) & np.isfinite(F) & np.isfinite(delta_m) & (t >= t_start_last)
     if np.count_nonzero(mask) < 5:
         W_cycle = float('nan')
     else:
         tp = t[mask]
         Fp = F[mask]
         dm = delta_m[mask]
-        dp = np.gradient(dm, tp, edge_order=2)
-        W_cycle = _trapz(Fp * dp, tp)
+        if tp.size < 5 or np.nanmax(np.abs(np.diff(tp))) <= 0.0:
+            W_cycle = float('nan')
+        else:
+            dp = np.gradient(dm, tp, edge_order=2)
+            W_cycle = _trapz(Fp * dp, tp)
 
     return {
         't': t,
