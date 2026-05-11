@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "name": "Mandytest",
+  "description": "messing around with settings",
+  "saved_utc": "2026-04-13T21:22:08Z",
+  "test_type": "dynamic",
+  "procedure": {
+    "all_freqs": [
+      1.0,
+      3.0,
+      5.0
+    ],
+    "all_amps": [
+      10.0
+    ],
+    "all_amps_mode": "strain_pct",
+    "cycles_per_step": 5,
+    "n_end_cycles": 0,
+    "randomize": false,
+    "random_seed": null,
+    "stim_cycles_in_step": null,
+    "is_stim": false,
+    "stim_pulse_rate": 0.0,
+    "S1volts": 0.0,
+    "S2volts": 0.0
+  }
+}

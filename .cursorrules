@@ -1,10 +1,28 @@
 # CritterGripper / Bender — Cursor rules
 
+## Authority metadata
+
+- Purpose: Product-level agent policy and architecture constraints.
+- Authority level: Tier 1 (binding).
+- Scope: Entire repository, all agent tasks.
+- Owner: Project maintainer.
+- Last reviewed: 2026-04-23.
+
+## Instruction precedence and conflict handling
+
+- Tier 1 (binding): `.cursorrules` (this file).
+- Tier 2 (binding for Streamlit UI tasks): `.cursor/specs/ui_style.md`.
+- Tier 3 (hybrid backlog): `EVOLUTION_PLAN.md` (advisory by default; binding only when a task explicitly references it).
+- If two sources conflict, **stop and ask the user before proceeding**.
+- If the same conflict pattern repeats, propose a concise new rule snippet for approval.
+
 ## UI stack (non-negotiable)
 
 - **Ship the operator console on Streamlit** (`bender_streamlit_gui.py`). This is the supported path for CritterGripper.
 - **Do not migrate or duplicate the main workflow in NiceGUI** for this product. Other folders (e.g. `bender_nicegui/`) are experimental or auxiliary unless explicitly scoped in a task.
+- Non-Streamlit alternatives are allowed only with explicit task/user approval.
 - Prefer **small, focused edits** to `bender_streamlit_gui.py`; match existing patterns rather than introducing parallel styling systems.
+- Medium-sized refactors are allowed when needed to solve root-cause issues.
 
 ---
 
@@ -35,6 +53,7 @@ All new Streamlit UI that should match the product look must **plug into the exi
 - **Landing**: sidebar hidden; hero + “Choose Workflow” cards; **Settings** in an expander (theme + text size); entry to H5 explorer.
 - **Workflows**: scratch (full layout), templates (disk-backed hardware + biometrics), stepwise (numbered steps 1–5, progress UI).
 - **User-facing triad** (use consistently): **Hardware configuration**, **Biometrics**, **Protocol** (avoid mixing “procedure” vs “protocol” elsewhere).
+- If naming changes are requested, apply them consistently across affected UI/docs unless instructed otherwise.
 - **Hardware mode**: **Load existing** vs **Build new** — two **wide** column buttons (`_hardware_configuration_mode_toggle`), not a horizontal radio for that binary choice.
 - **Session state**: keys are generally prefixed `gui_*` or `gui_cfg_*` / `gui_h5_*`; follow existing naming when adding widgets.
 
@@ -99,3 +118,6 @@ All new Streamlit UI that should match the product look must **plug into the exi
 - Read neighboring code and **reuse** `_load_save_button`, `_hardware_configuration_mode_toggle`, and theme injectors.
 - After UI changes, sanity-check **landing**, **workflow**, and **stepwise** together.
 - For hardware or DAQ behavior, trace **`Bender`** and the loaded **config module** before changing defaults.
+- If uncertainty remains after reading instructions, ask before coding.
+- For DAQ/hardware-affecting edits, include a safety checklist in your change summary (stop/reset path, timeout behavior, stale-export prevention, user-visible warnings).
+- After substantive edits, run the full test suite by default; if blocked, report why and run the largest feasible subset.

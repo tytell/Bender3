@@ -1,5 +1,15 @@
 # CritterGripper / Bender — UI specification
 
+## Authority metadata
+
+- Purpose: Streamlit UI/UX style contract for CritterGripper.
+- Authority level: Tier 2 (binding for Streamlit UI tasks).
+- Scope: Visual style, interaction patterns, and naming consistency in Streamlit UI.
+- Owner: Project maintainer.
+- Last reviewed: 2026-04-23.
+
+This file does not override product architecture constraints in `.cursorrules` (Tier 1).
+
 Reference for layout, styling, and UX tone when changing `bender_streamlit_gui.py` or related UI. Implementation lives mainly in `_inject_accessibility_theme`, `_inject_load_save_button_theme`, `_inject_stepwise_compact_layout_css`, and `_landing_style`.
 
 ---
@@ -95,6 +105,8 @@ Stepwise flows use **numbered steps (1–5)** and short subheaders (e.g. `1 · �
 - **Between major landing blocks:** spacer class ~**1.65rem** height
 - **Hero with logo:** reserve right space (`padding-right` ~`min(38%, 15rem)`); logo column ~`min(34%, 13.5rem)`; **hero `min-height`** ~**11rem** so logo and hero rule do not overlap; logo image **`max-height: 100%`** inside the hero box (avoid fixed `11rem` on the img if it exceeds the box)
 - **Stepwise (`bnd-stepwise-active`):** reduced block padding, tighter bordered panels (`~0.4–0.55rem` padding, smaller `margin-bottom`), compact `h1–h3` margins
+- **Responsive landing cards/buttons:** below ~`980px`, workflow description cards and CTA button rows stack to full width (one per row)
+- **Responsive step tabs:** below ~`1100px`, step tab buttons use a wrapped two-column behavior with taller click targets
 
 Prefer **consistent vertical rhythm** (smaller gaps in rails, slightly roomier on marketing/landing).
 
@@ -106,6 +118,7 @@ Prefer **consistent vertical rhythm** (smaller gaps in rails, slightly roomier o
 2. **Mode / branch choice (e.g. Load existing vs Build new):** **two equal columns**, wide buttons; **selected = `primary`**, other = `secondary`** — **not** the load/save marker pattern; avoid horizontal `st.radio` for this binary choice.
 3. **Step navigation:** bordered panel with progress and **tab-like step controls**; disabled styling for current step; **Previous / Next** at full width where appropriate.
 4. **Landing primary CTAs:** same red / white / min-height **3rem** treatment as workflow (`_landing_style`).
+5. **Danger actions:** safety-critical actions (e.g., emergency stop) should live in their own bordered block for visual separation.
 
 ---
 
@@ -120,6 +133,7 @@ Prefer **consistent vertical rhythm** (smaller gaps in rails, slightly roomier o
 ## Implementation notes for agents
 
 - Global selectors should target **`[data-testid="stMain"]`** (not only `section`) for Streamlit DOM variance.
+- Selector policy is **guarded**: prefer existing hooks/selectors first, but resilient fallbacks are allowed when Streamlit DOM variance requires them; briefly explain the fallback in the change summary.
 - **Landing CSS** prefixes with **`:is(#root, body:has(.bnd-landing-page))`** — some Streamlit builds have no `#root` element, so `body:has(.bnd-landing-page)` keeps rules matching while the home marker is present.
 - Inject **hero/logo CSS before** the logo `<img>` to avoid layout flash.
 - When adding new full-width primary actions, reuse `_load_save_button` **or** document why a separate pattern is needed.

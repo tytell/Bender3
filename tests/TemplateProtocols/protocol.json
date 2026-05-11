@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "name": "protocol",
+  "description": "",
+  "saved_utc": "2026-04-13T15:22:20Z",
+  "test_type": "isometric",
+  "procedure": {
+    "isometric_initial": 0.0,
+    "isometric_final": 10.0,
+    "isometric_num_steps": 5,
+    "isometric_mode": "strain_pct",
+    "isometric_randomize": false,
+    "isometric_random_seed": null,
+    "isometric_inter_step_interval_s": 0.48,
+    "isometric_stim_params": {},
+    "isometric_stim_overrides": {},
+    "recruitment": "bilateral_simultaneous",
+    "lateral_mode": "",
+    "bilateral_mirror_motor": true,
+    "bilateral_sequential_left_frac": 0.5
+  }
+}

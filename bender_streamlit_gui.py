@@ -13,6 +13,7 @@ when hardware is ready.
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 import hashlib
 import importlib
 import json
@@ -20,6 +21,7 @@ import math
 import os
 import sys
 import tempfile
+import time
 from typing import Optional, Tuple
 
 import h5py
@@ -56,7 +58,6 @@ def _img_data_uri(path: str) -> str:
 from bender_daq_kill import daq_emergency_stop  # noqa: E402
 from bender_config_builder import (  # noqa: E402
     discover_config_modules,
-    effective_load_module_name,
     parse_comma_list,
     parse_n_floats,
     read_base_defaults,
@@ -798,6 +799,16 @@ body:has(.bnd-stepwise-active) [data-testid="stMain"] h3 {
 body:has(.bnd-stepwise-active) [data-testid="stMain"] [data-testid="stHeader"] {
     margin-top: 0.25rem !important;
 }
+@media (max-width: 1100px) {
+  body:has(.bnd-stepwise-active) [data-testid="stMain"] .bnd-stepwise-tab-marker ~ div [data-testid="column"] {
+    min-width: 48% !important;
+    flex: 1 1 48% !important;
+  }
+  body:has(.bnd-stepwise-active) [data-testid="stMain"] .bnd-stepwise-tab-marker ~ div [data-testid="stButton"] button {
+    min-height: 2.55rem !important;
+    white-space: normal !important;
+  }
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -817,38 +828,50 @@ def _load_save_button(
 
 
 def _hardware_configuration_mode_toggle() -> str:
-    """Load existing vs Build new: paired wide buttons (selected = primary), not red load/save styling."""
+    """Two-action setup: browse existing config or switch to build new."""
     st.session_state.setdefault('gui_config_setup_mode', 'Load existing')
     mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
     if mode not in ('Load existing', 'Build new'):
         mode = 'Load existing'
         st.session_state['gui_config_setup_mode'] = mode
-    st.caption('**Build new** writes a new `.py` from the fields below, then **Write config file and load**.')
     c1, c2 = st.columns(2)
     with c1:
-        sel_load = mode == 'Load existing'
         if st.button(
-            'Load existing',
-            key='gui_hw_cfg_mode_load',
+            'Browse…',
+            key='gui_hw_cfg_mode_browse',
             use_container_width=True,
-            type='primary' if sel_load else 'secondary',
-            help='Use a module already on disk (dropdown or typed name).',
+            type='secondary',
         ):
-            if not sel_load:
-                st.session_state['gui_config_setup_mode'] = 'Load existing'
-                st.rerun()
+            st.session_state['gui_config_setup_mode'] = 'Load existing'
+            _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+            _init_dir = _ROOT
+            if _sel:
+                _sel_path = os.path.join(_ROOT, _sel.replace('.', os.sep) + '.py')
+                _init_dir = os.path.dirname(_sel_path) if os.path.isfile(_sel_path) else _ROOT
+            picked, err = _pick_file_with_dialog(
+                _init_dir,
+                title='Select hardware config module',
+                filetypes=[('Python files', '*.py'), ('All files', '*.*')],
+            )
+            if err:
+                st.warning(f'File dialog unavailable: {err}')
+            elif picked:
+                rel_file = os.path.relpath(picked, _ROOT).replace('\\', '/')
+                if rel_file.startswith('..'):
+                    st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
+                else:
+                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
+                    st.toast(f"Selected `{st.session_state['gui_load_cfg_select']}`")
+                    st.rerun()
     with c2:
-        sel_build = mode == 'Build new'
         if st.button(
             'Build new',
             key='gui_hw_cfg_mode_build',
             use_container_width=True,
-            type='primary' if sel_build else 'secondary',
-            help='Fill channel and DAQ fields, then write a new `.py` and load it.',
+            type='primary' if mode == 'Build new' else 'secondary',
         ):
-            if not sel_build:
-                st.session_state['gui_config_setup_mode'] = 'Build new'
-                st.rerun()
+            st.session_state['gui_config_setup_mode'] = 'Build new'
+            st.rerun()
     return str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
 
 
@@ -860,6 +883,324 @@ def _shared_experiment_dir() -> str:
         if os.path.isdir(norm):
             return norm
     return os.path.normpath(default_templates_dir(_ROOT))
+
+
+def _session_snapshots_dir() -> str:
+    return os.path.normpath(os.path.join(_ROOT, 'SessionSnapshots'))
+
+
+_AUTOSAVE_SCHEMA_VERSION = 1
+_AUTOSAVE_PREFIXES = ('gui_', 'bio_', 'fld_')
+_AUTOSAVE_EXCLUDE_KEYS = {
+    'gui_autosave_last_saved_at',
+    'gui_autosave_last_sig',
+    'gui_autosave_bootstrapped',
+    'gui_autosave_last_error',
+    'gui_state_origin_map',
+    'gui_default_state_baseline',
+    'gui_recovered_state_baseline',
+    'gui_recovery_banner_message',
+    'gui_recovery_banner_level',
+    'gui_recovery_summary',
+    'gui_session_source',
+    'gui_setup_confirmed',
+    'gui_measurements_confirmed',
+    'gui_protocol_confirmed',
+    # Action button keys cannot be assigned via session_state.
+    'gui_nav_home_stepwise',
+    'gui_nav_home_main',
+    'gui_kill_daq',
+}
+
+
+def _json_safe(v):
+    if isinstance(v, (str, int, float, bool)) or v is None:
+        return v
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _json_safe(x) for k, x in v.items()}
+    return str(v)
+
+
+def _autosave_latest_path() -> str:
+    return os.path.join(_session_snapshots_dir(), 'autosave_latest.json')
+
+
+def _autosave_history_path(stamp: str) -> str:
+    return os.path.join(_session_snapshots_dir(), f'autosave_{stamp}.json')
+
+
+def _collect_persistable_state() -> dict[str, object]:
+    keys = [
+        k
+        for k in st.session_state.keys()
+        if k.startswith(_AUTOSAVE_PREFIXES) and k not in _AUTOSAVE_EXCLUDE_KEYS and _is_restore_safe_key(k)
+    ]
+    return {k: _json_safe(st.session_state.get(k)) for k in sorted(keys)}
+
+
+def _is_restore_safe_key(key: str) -> bool:
+    if key in _AUTOSAVE_EXCLUDE_KEYS:
+        return False
+    if key in {'gui_setup_confirmed', 'gui_measurements_confirmed', 'gui_protocol_confirmed', 'gui_session_source'}:
+        return False
+    # Buttons / transient actions should never be restored into session state.
+    if key.startswith('gui_'):
+        # Ephemeral Streamlit widget keys for data-folder dropdown (must follow ``gui_data_folder``).
+        if key.startswith('gui_data_folder_dd'):
+            return False
+        if '_apply_' in key and not key.startswith('gui_apply_tracking_'):
+            return False
+        action_suffixes = (
+            '_btn',
+            '_load',
+            '_save',
+            '_browse',
+            '_open',
+            '_run',
+            '_next',
+            '_back',
+            '_home',
+            '_bottom',
+            '_kill_daq',
+        )
+        if (
+            key.startswith('gui_nav_')
+            or key.startswith('gui_sw_')
+            or key.startswith('gui_hw_cfg_mode_')
+            or key.startswith('gui_recovery_')
+            or key.startswith('gui_kill_')
+            or 'upload' in key
+            or key.endswith(action_suffixes)
+        ):
+            return False
+    return True
+
+
+def _build_state_origin_map(state: dict[str, object]) -> dict[str, str]:
+    default_base = dict(st.session_state.get('gui_default_state_baseline') or {})
+    recovered_base = dict(st.session_state.get('gui_recovered_state_baseline') or {})
+    origin: dict[str, str] = {}
+    for k, v in state.items():
+        if k in recovered_base and _json_safe(recovered_base.get(k)) == v:
+            origin[k] = 'recovered'
+        elif k in default_base and _json_safe(default_base.get(k)) == v and k not in recovered_base:
+            origin[k] = 'default'
+        else:
+            origin[k] = 'user'
+    return origin
+
+
+def _build_snapshot_payload(*, source: str) -> dict[str, object]:
+    state = _collect_persistable_state()
+    provenance = _build_state_origin_map(state)
+    return {
+        'schema_version': _AUTOSAVE_SCHEMA_VERSION,
+        'source': source,
+        'saved_at': datetime.now().isoformat(timespec='seconds'),
+        'app_route': str(st.session_state.get('gui_app_route') or ''),
+        'state': state,
+        'provenance': provenance,
+    }
+
+
+def _state_signature(state: dict[str, object]) -> str:
+    raw = json.dumps(state, sort_keys=True, ensure_ascii=True, separators=(',', ':'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def _atomic_write_json(path: str, payload: dict[str, object]) -> None:
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='autosave_', suffix='.tmp', dir=parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _read_json_file(path: str) -> tuple[Optional[dict], Optional[str]]:
+    if not os.path.isfile(path):
+        return None, None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except Exception as e:
+        return None, f'{type(e).__name__}: {e}'
+    if not isinstance(raw, dict):
+        return None, 'JSON root must be an object.'
+    return raw, None
+
+
+def _write_snapshot_payload(*, source: str, update_latest: bool) -> tuple[bool, str]:
+    payload = _build_snapshot_payload(source=source)
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    hist_path = _autosave_history_path(stamp) if source == 'autosave' else os.path.join(
+        _session_snapshots_dir(), f'session_snapshot_{stamp}.json'
+    )
+    try:
+        _atomic_write_json(hist_path, payload)
+        if update_latest:
+            _atomic_write_json(_autosave_latest_path(), payload)
+        st.session_state['gui_autosave_last_saved_at'] = payload['saved_at']
+        st.session_state['gui_state_origin_map'] = dict(payload.get('provenance') or {})
+        st.session_state['gui_autosave_last_sig'] = _state_signature(dict(payload.get('state') or {}))
+        st.session_state.pop('gui_autosave_last_error', None)
+        return True, hist_path
+    except Exception as e:
+        msg = f'{type(e).__name__}: {e}'
+        st.session_state['gui_autosave_last_error'] = msg
+        return False, msg
+
+
+def _save_progress_snapshot() -> tuple[bool, str]:
+    """Save current in-app workflow state to JSON (separate from templates)."""
+    return _write_snapshot_payload(source='manual_snapshot', update_latest=False)
+
+
+def _load_latest_autosave() -> tuple[Optional[dict], Optional[str]]:
+    payload, err = _read_json_file(_autosave_latest_path())
+    if err:
+        return None, err
+    if payload is None:
+        return None, None
+    schema = int(payload.get('schema_version', 0) or 0)
+    if schema != _AUTOSAVE_SCHEMA_VERSION:
+        return None, f'Unsupported autosave schema version: {schema}.'
+    state = payload.get('state')
+    if not isinstance(state, dict):
+        return None, 'Autosave payload missing valid `state` object.'
+    return payload, None
+
+
+def _restore_autosave_payload(payload: dict) -> None:
+    state = dict(payload.get('state') or {})
+    for k, v in state.items():
+        if _is_restore_safe_key(k):
+            try:
+                st.session_state[k] = v
+            except Exception as e:
+                # Streamlit forbids assigning certain widget-managed keys (buttons/uploaders).
+                # Ignore those stale keys from older autosave payloads.
+                if 'cannot be set using `st.session_state`' not in str(e):
+                    raise
+    st.session_state['gui_recovered_state_baseline'] = {k: _json_safe(v) for k, v in state.items()}
+    st.session_state['gui_recovery_summary'] = {
+        'saved_at': str(payload.get('saved_at') or ''),
+        'app_route': str(payload.get('app_route') or ''),
+        'source': str(payload.get('source') or 'autosave'),
+    }
+    st.session_state['gui_recovery_banner_message'] = (
+        f"Recovered from autosave ({st.session_state['gui_recovery_summary']['saved_at'] or 'unknown time'})."
+    )
+    st.session_state['gui_recovery_banner_level'] = 'success'
+    st.session_state['gui_session_source'] = 'restored'
+    _repair_data_path_fields_from_session()
+
+
+def _bootstrap_autosave_recovery() -> None:
+    if st.session_state.get('gui_autosave_bootstrapped'):
+        return
+    st.session_state['gui_autosave_bootstrapped'] = True
+    payload, err = _load_latest_autosave()
+    if err:
+        st.session_state['gui_recovery_banner_message'] = f'Autosave ignored: {err}'
+        st.session_state['gui_recovery_banner_level'] = 'warning'
+        return
+    if payload is None:
+        st.session_state.setdefault('gui_session_source', 'fresh')
+        return
+    _restore_autosave_payload(payload)
+    cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+    if cfg_sel:
+        mods = discover_config_modules(_ROOT)
+        if cfg_sel not in mods:
+            st.session_state['gui_recovery_banner_message'] = (
+                f"Recovered session, but config module `{cfg_sel}` is missing. Choose a config in Setup."
+            )
+            st.session_state['gui_recovery_banner_level'] = 'warning'
+
+
+def _clear_latest_autosave_marker() -> None:
+    p = _autosave_latest_path()
+    if os.path.isfile(p):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+def _autosave_tick(*, force: bool = False) -> None:
+    if _nav_route() == 'landing' and not force:
+        return
+    # Do not call _repair_data_path_fields_from_session() here: it mutates widget keys
+    # (e.g. gui_data_filename) after those widgets may already exist this run.
+    state = _collect_persistable_state()
+    sig = _state_signature(state)
+    if not force and sig == str(st.session_state.get('gui_autosave_last_sig') or ''):
+        return
+    now = float(time.time())
+    last = float(st.session_state.get('gui_autosave_last_write_ts') or 0.0)
+    if not force and (now - last) < 1.0:
+        return
+    ok, _ = _write_snapshot_payload(source='autosave', update_latest=True)
+    if ok:
+        st.session_state['gui_autosave_last_write_ts'] = now
+
+
+def _render_recovery_status_ui() -> None:
+    lvl = str(st.session_state.get('gui_recovery_banner_level') or '')
+    msg = str(st.session_state.get('gui_recovery_banner_message') or '').strip()
+    if not msg:
+        return
+    with st.container(border=True):
+        if lvl == 'warning':
+            st.warning(msg)
+        else:
+            st.success(msg)
+        c1, c2, c3 = st.columns(3, gap='small')
+        with c1:
+            if st.button('Start fresh', key='gui_recovery_start_fresh', type='secondary', use_container_width=True):
+                _reset_workflow_session_to_home(clear_autosave=True, target_route=_nav_route())
+                st.rerun()
+        with c2:
+            with st.expander('Recovery details', expanded=False):
+                info = dict(st.session_state.get('gui_recovery_summary') or {})
+                st.caption(f"Saved at: `{info.get('saved_at', '(unknown)')}`")
+                st.caption(f"Route: `{info.get('app_route', '(unknown)')}`")
+        with c3:
+            if st.button('Dismiss', key='gui_recovery_dismiss', use_container_width=True):
+                st.session_state['gui_recovery_banner_message'] = ''
+
+
+def _update_state_origin_summary() -> None:
+    state = _collect_persistable_state()
+    origin = _build_state_origin_map(state)
+    st.session_state['gui_state_origin_map'] = origin
+    counts = {'default': 0, 'recovered': 0, 'user': 0}
+    for v in origin.values():
+        if v in counts:
+            counts[v] += 1
+    st.session_state['gui_state_origin_counts'] = counts
+
+
+def _reset_workflow_session_to_home(*, clear_autosave: bool = False, target_route: str = 'landing') -> None:
+    """Clear workflow state and route to target module."""
+    keep = {'gui_ui_theme', 'gui_ui_large_text'}
+    for k in list(st.session_state.keys()):
+        if k not in keep:
+            st.session_state.pop(k, None)
+    st.session_state['gui_app_route'] = str(target_route or 'landing')
+    st.session_state['gui_session_source'] = 'fresh'
+    if clear_autosave:
+        _clear_latest_autosave_marker()
 
 
 def _protocol_template_option_label(p: Optional[str]):
@@ -887,28 +1228,28 @@ MOTION_TYPES = frozenset(
 # Extra fields for motion-series protocols (not fully enumerated in get_dispatch_schema).
 MOTION_GUI_FIELDS = [
     ('duration', 'float', 'Duration (s)'),
-    ('all_freqs', 'list_float', 'Frequencies Hz (comma-separated, e.g. 1, 5)'),
+    ('all_freqs', 'list_float', 'Frequencies (Hz, comma-separated)'),
     (
         'all_amps',
         'list_float',
-        'Amplitudes (comma-separated; see all_amps_mode: strain=decimal ε, strain_pct=percent)',
+        'Amplitudes (comma-separated)',
     ),
-    ('all_amps_mode', 'select', 'Amplitude interpretation (strain vs strain_pct, etc.)'),
+    ('all_amps_mode', 'select', 'Amplitude mode'),
     ('cycles_per_step', 'int', 'Cycles per step'),
     ('n_end_cycles', 'int', 'End cycles'),
     ('randomize', 'bool', 'Randomize order'),
-    ('random_seed', 'optional_int', 'Random seed (empty = None)'),
-    ('stim_cycles_in_step', 'list_int', 'Stim cycle indices per step (comma-separated, e.g. 2, 3)'),
-    ('is_stim', 'bool', 'Stimulation enabled'),
+    ('random_seed', 'optional_int', 'Random seed (optional)'),
+    ('stim_cycles_in_step', 'list_int', 'Stim cycles per step (e.g., 2, 3)'),
+    ('is_stim', 'bool', 'Enable stimulation'),
     ('stim_pulse_rate', 'float', 'Stim pulse rate (Hz)'),
-    ('S1volts', 'float', 'S1 stim voltage'),
-    ('S2volts', 'float', 'S2 stim voltage'),
+    ('S1volts', 'float', 'S1 voltage (V)'),
+    ('S2volts', 'float', 'S2 voltage (V)'),
 ]
 
 STEP_CHANGE_EXTRA = [
-    ('step_change_frequencies', 'list_float', 'step_change frequencies (comma-separated)'),
-    ('step_change_curves', 'list_float', 'step_change curves / amplitudes (comma-separated)'),
-    ('step_change_cycles_per_step', 'list_int', 'cycles per step (comma-separated)'),
+    ('step_change_frequencies', 'list_float', 'Step-change frequencies'),
+    ('step_change_curves', 'list_float', 'Step-change curves/amplitudes'),
+    ('step_change_cycles_per_step', 'list_int', 'Step-change cycles per step'),
 ]
 
 # Required by :meth:`Bender.make_cycles_frequency_sweep` but not used by other motion modes.
@@ -916,7 +1257,7 @@ FREQUENCY_SWEEP_ONLY_FIELDS = [
     (
         'amplitude_frequency_exponent',
         'float',
-        'Amplitude–frequency exponent α (command θ ∝ f^α vs sweep start)',
+        'Amplitude-frequency exponent (alpha)',
     ),
 ]
 
@@ -1002,12 +1343,31 @@ BIO_PROF_CLAMP_FIELD_HELP = (
 )
 
 
-def _sync_bio_prof_rho_from_density_preset() -> None:
-    """If a non-Custom density preset is selected, copy its g/mm³ value into ``bio_prof_rho`` (used on Apply)."""
+def _resolved_bio_prof_rho_g_per_mm3() -> float:
+    """Density for profile/inertial apply: preset table value, or the custom ``bio_prof_rho`` number input."""
     label = str(st.session_state.get('bio_prof_rho_preset') or '')
     v = BIO_DENSITY_PRESET_G_PER_MM3.get(label)
     if v is not None:
-        st.session_state['bio_prof_rho'] = float(v)
+        return float(v)
+    return float(st.session_state['bio_prof_rho'])
+
+
+def _queue_bio_prof_rho_widget_sync_from_preset() -> None:
+    """
+    Preset-driven density cannot assign ``st.session_state['bio_prof_rho']`` during the same run as the
+    ``number_input(..., key='bio_prof_rho')`` widget (Streamlit blocks writes to widget-bound keys after mount).
+    Queue the value and flush at the start of the next run (see ``_flush_pending_bio_prof_rho_sync``).
+    """
+    label = str(st.session_state.get('bio_prof_rho_preset') or '')
+    v = BIO_DENSITY_PRESET_G_PER_MM3.get(label)
+    if v is not None:
+        st.session_state['_pending_sync_bio_prof_rho'] = float(v)
+
+
+def _flush_pending_bio_prof_rho_sync() -> None:
+    """Copy queued preset density into the widget key before ``bio_prof_rho`` number_input is created."""
+    if '_pending_sync_bio_prof_rho' in st.session_state:
+        st.session_state['bio_prof_rho'] = float(st.session_state.pop('_pending_sync_bio_prof_rho'))
 
 
 ISOMETRIC_STIM_JSON_HELP = (
@@ -1037,7 +1397,9 @@ RANDOM_SEED_HELP = (
 
 RECRUITMENT_FIELD_HELP = (
     'How stimulation and/or motor commands are routed across left vs right: simultaneous, sequential halves of a '
-    'step, or unilateral (one side).'
+    'step, or unilateral (one side). If **Perform test on both sides (bilateral)** is checked, simultaneous or '
+    'unilateral recruitment is **upgraded to bilateral sequential** at run time so the motor can bend toward left '
+    'then right with stim matched to each hold.'
 )
 
 ISOVELOCITY_WIDGET_LABEL = {
@@ -1068,9 +1430,9 @@ ISOVELOCITY_FIELD_HELP = {
         'is set with **recruitment** above; this overrides that name inside merged stim settings.'
     ),
     'bilateral_mirror_motor': (
-        'When **recruitment** is **bilateral sequential**, mirror the commanded bend between the first and second '
-        'half of each step (left vs right). Does **not** turn on bilateral testing by itself—choose **recruitment** for '
-        'which sides are used.'
+        'Two constant-velocity bends in one trial: first toward **left**, then toward **right**, with stimulation on '
+        'each side in turn. If recruitment is **bilateral simultaneous** or **left/right**, it is upgraded to '
+        '**bilateral sequential** for this run.'
     ),
     'bilateral_sequential_left_frac': 'Share of each step spent on the **left** side before the right (0–1).',
 }
@@ -1089,8 +1451,17 @@ ISOMETRIC_FIELD_HELP = {
         'left/right/bilateral behavior; this overrides the router name in merged stim params.'
     ),
     'bilateral_mirror_motor': (
-        'When **recruitment** is **bilateral sequential**, mirror the hold/ramp between left and right halves of each '
-        'step. Which sides are active is still set by **recruitment**, not this checkbox alone.'
+        'Left posture then right, with stim on each side in turn. Recruitment is coerced to **bilateral sequential** '
+        'when needed so both bends run.'
+    ),
+    'isometric_mirror_target_left': (
+        'Optional. When **both** left and right values are set, each bilateral step uses this magnitude for the **first** '
+        'hold (bend toward **left** specimen side) instead of the sweep step value. Same units as **isometric mode** '
+        '(e.g. decimal ε 0.1 = 10% strain, or use **strain_pct** with 10).'
+    ),
+    'isometric_mirror_target_right': (
+        'Optional. Magnitude for the **second** hold (bend toward **right** specimen side). Must be set together with '
+        'the left target; same units as **isometric mode**.'
     ),
     'bilateral_sequential_left_frac': 'Share of each step on the **left** side before the right (0–1).',
 }
@@ -1243,6 +1614,17 @@ def _render_field(b: Bender, name: str, kind: str, label: str, *, help_text: Opt
             st.session_state[sk] = int(cur) if cur is not None else 0
         return int(st.number_input(label, key=sk, step=1))
 
+    if kind == 'optional_float':
+        use_key = f'{sk}_use'
+        if use_key not in st.session_state:
+            st.session_state[use_key] = cur is not None
+        use = st.checkbox(f'{label} (enable)', key=use_key, help=h)
+        if not use:
+            return None
+        if sk not in st.session_state:
+            st.session_state[sk] = float(cur) if cur is not None else 0.0
+        return float(st.number_input(label, key=sk, format='%.6g'))
+
     if kind == 'bool':
         if sk not in st.session_state:
             st.session_state[sk] = bool(cur) if cur is not None else False
@@ -1380,6 +1762,37 @@ def _show_friendly_error(err: Exception, *, action: str):
         st.exception(err)
 
 
+def _preview_error_actions(err_text: str) -> tuple[str, list[str]]:
+    e = str(err_text or '').strip()
+    low = e.lower()
+    if 'set all_freqs' in low:
+        return (
+            'Preview needs frequencies.',
+            ['Enter Frequencies (Hz) in motion controls', 'Click Refresh experiment preview'],
+        )
+    if 'set all_amps' in low:
+        return (
+            'Preview needs amplitudes.',
+            ['Enter Amplitudes in motion controls', 'Click Refresh experiment preview'],
+        )
+    if 'needs duration' in low:
+        return (
+            'Preview needs duration.',
+            ['Set Duration (s) for this protocol', 'Click Refresh experiment preview'],
+        )
+    if 'isometric_initial' in low or 'isometric_final' in low or 'isometric_num_steps' in low:
+        return (
+            'Preview needs isometric start/end/steps values.',
+            ['Set isometric start, end, and number of steps', 'Click Refresh experiment preview'],
+        )
+    if 'step_change' in low and 'needs' in low:
+        return (
+            'Preview needs step-change parameters.',
+            ['Set step-change frequencies, amplitudes, and cycles/step', 'Click Refresh experiment preview'],
+        )
+    return ('Preview failed.', ['Review preview error detail', 'Update required fields and refresh preview'])
+
+
 def _needs_missing_calibration_confirmation(b: Bender) -> bool:
     """True when inertial-calibration use is requested but file path is absent or missing."""
     use_cal = bool(getattr(b, 'use_inertial_calibration', False))
@@ -1457,6 +1870,9 @@ def _compose_output_h5_path() -> str:
     """Full `.h5` path from **section 2** **Data folder** + **Data file name**."""
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
     fn = str(st.session_state.get('gui_data_filename') or '').strip()
+    # When a folder is selected, treat filename input as basename-only.
+    if folder and fn:
+        fn = os.path.basename(os.path.normpath(fn))
     if not fn:
         return ''
     if not fn.lower().endswith('.h5'):
@@ -1466,11 +1882,68 @@ def _compose_output_h5_path() -> str:
     return os.path.normpath(fn)
 
 
-def _section2_destination_incomplete() -> bool:
-    """True when **Data folder** or **Data file name** is blank (section 2)."""
+def _normalize_data_filename_field() -> None:
+    """Normalize filename field to basename when users paste/type a full path."""
+    raw = str(st.session_state.get('gui_data_filename') or '').strip()
+    if not raw:
+        return
+    base = os.path.basename(os.path.normpath(raw))
+    if base and base != raw:
+        st.session_state['gui_data_filename'] = base
+
+
+def _repair_data_path_fields_from_session() -> None:
+    """Best-effort repair for data-path fields from persisted session artifacts."""
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
     fn = str(st.session_state.get('gui_data_filename') or '').strip()
-    return (not folder) or (not fn)
+    if folder and fn:
+        st.session_state['gui_data_filename'] = os.path.basename(os.path.normpath(fn))
+        return
+
+    sig = st.session_state.get('gui_data_path_applied_sig')
+    if not isinstance(sig, (list, tuple)) or len(sig) != 2:
+        return
+    vals = [str(v or '').strip() for v in sig]
+    vals = [v for v in vals if v]
+    if not vals:
+        return
+
+    for v in vals:
+        nv = os.path.normpath(v)
+        if nv.lower().endswith('.h5') and (os.path.dirname(nv) or ('\\' in nv or '/' in nv)):
+            st.session_state['gui_data_folder'] = os.path.dirname(nv) or folder
+            st.session_state['gui_data_filename'] = os.path.basename(nv)
+            return
+
+    if len(vals) == 2:
+        a, b = vals
+        a_norm, b_norm = os.path.normpath(a), os.path.normpath(b)
+        if os.path.dirname(a_norm) and os.path.basename(b_norm):
+            st.session_state['gui_data_folder'] = a_norm
+            st.session_state['gui_data_filename'] = os.path.basename(b_norm)
+            return
+        if os.path.dirname(b_norm) and os.path.basename(a_norm):
+            st.session_state['gui_data_folder'] = b_norm
+            st.session_state['gui_data_filename'] = os.path.basename(a_norm)
+
+
+def _section2_destination_incomplete() -> bool:
+    """True when no usable output `.h5` destination is currently available."""
+    folder = str(st.session_state.get('gui_data_folder') or '').strip()
+    fn = str(st.session_state.get('gui_data_filename') or '').strip()
+    if fn:
+        # If filename includes a path, or folder+filename compose cleanly, we have a destination.
+        if folder or os.path.dirname(fn):
+            return False
+        # Filename-only still resolves to a concrete relative `.h5` path.
+        return False
+    # Fall back to any already-bound experiment output path.
+    b = st.session_state.get('bender')
+    if b is not None:
+        outp = str(getattr(b, 'outputfile', '') or '').strip()
+        if outp:
+            return False
+    return True
 
 
 def _output_path_anchor_for_review(b: Optional[Bender] = None) -> str:
@@ -1489,25 +1962,27 @@ def _normalize_config_module_name(raw: str) -> str:
     s = str(raw or '').strip()
     if s.lower().endswith('.py'):
         s = s[:-3].strip()
+    s = s.replace('\\', '.').replace('/', '.')
+    s = '.'.join(part for part in s.split('.') if part)
     return s
 
 
 def _ensure_hw_config_session_defaults() -> None:
-    """Keep ``gui_load_cfg_select`` / ``gui_cfg_mod`` valid when **section 1** is off-screen or session state is stale."""
+    """Keep ``gui_load_cfg_select`` valid when **section 1** is off-screen or session state is stale."""
     mods = discover_config_modules(_ROOT)
+    cur_sel = str(st.session_state.get('gui_load_cfg_select') or '').strip()
+    if cur_sel:
+        return
     if not mods:
         return
-    if 'gui_cfg_mod' not in st.session_state or not str(st.session_state.get('gui_cfg_mod') or '').strip():
-        st.session_state['gui_cfg_mod'] = str(st.session_state.get('cfg_mod') or 'jimenez_bender_config_A')
-    typed = str(st.session_state.get('gui_cfg_mod') or '').strip()
-    pick = typed if typed in mods else mods[0]
-    cur_sel = str(st.session_state.get('gui_load_cfg_select') or '').strip()
-    if not cur_sel or cur_sel not in mods:
-        st.session_state['gui_load_cfg_select'] = pick
+    pick = str(st.session_state.get('cfg_mod') or '')
+    if pick not in mods:
+        pick = mods[0]
+    st.session_state['gui_load_cfg_select'] = pick
 
 
 def _selected_config_matches_bender(b: Bender, eff_raw: str) -> bool:
-    """True if ``b`` was loaded from the same module name as ``eff_raw`` (dropdown + override)."""
+    """True if ``b`` was loaded from the same module name as ``eff_raw`` (current picker selection)."""
     eff = _normalize_config_module_name(eff_raw)
     if not eff:
         return False
@@ -1531,9 +2006,6 @@ def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
             n0 = os.path.normpath(outp0)
             st.session_state['gui_pending_data_folder'] = os.path.dirname(n0) or ''
             st.session_state['gui_pending_data_filename'] = os.path.basename(n0)
-        else:
-            st.session_state['gui_pending_data_folder'] = ''
-            st.session_state['gui_pending_data_filename'] = ''
         _meta0 = getattr(b0, 'h5_protocol_metadata', {}) or {}
         st.session_state['gui_pending_genus_species'] = str(_meta0.get('genus_species', '') or '')
         st.session_state['gui_pending_specimen_id'] = str(_meta0.get('specimen_id', '') or '')
@@ -1693,7 +2165,8 @@ def _procedure_apply_dirty() -> bool:
 
 
 def _soft_apply_reminder() -> None:
-    st.info('You have edits that are not on the experiment object yet — click **Apply** (or **Set data file path**) so they take effect.')
+    # Intentionally silent: setup readiness is shown in the sidebar checklist.
+    return
 
 
 def _session_float(key: str) -> Optional[float]:
@@ -1707,8 +2180,32 @@ def _session_float(key: str) -> Optional[float]:
         return None
 
 
+def _measurements_confirmed_for_checklist() -> bool:
+    """True when biometrics/measurements look intentionally confirmed, not just default-populated."""
+    if not bool(st.session_state.get('gui_measurements_confirmed')):
+        return False
+    if 'gui_bio_applied_sig' not in st.session_state:
+        return False
+    if _bio_apply_dirty():
+        return False
+    if not str(st.session_state.get('gui_specimen_id') or '').strip():
+        return False
+    if not str(st.session_state.get('gui_genus_species') or '').strip():
+        return False
+    m = _session_float('bio_fishmass')
+    if m is None or m <= 0:
+        return False
+    dc = _session_float('bio_dclamp')
+    if dc is None or dc <= 0:
+        return False
+    xw = _session_float('bio_xsec')
+    if xw is None or xw <= 0:
+        return False
+    return True
+
+
 _CHK_SEC_DATA = '2 · Data path'
-_CHK_SEC_BIO = '3 · Biometrics'
+_CHK_SEC_BIO = '3 · Measurements'
 _CHK_SEC_EXP = '4–6 · Experiment'
 
 
@@ -1918,6 +2415,65 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
     return uniq
 
 
+def _setup_confirmed_for_checklist(b: Optional[Bender]) -> bool:
+    if b is None:
+        return False
+    if not bool(st.session_state.get('gui_setup_confirmed')):
+        return False
+    if _section2_destination_incomplete() or _data_path_apply_dirty():
+        return False
+    _cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+    if not _cfg_sel:
+        return False
+    _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
+    if _cfg_mode == 'Load existing' and not _selected_config_matches_bender(b, _cfg_sel):
+        return False
+    return True
+
+
+def _protocol_confirmed_for_checklist(b: Optional[Bender], checks_by_sec: dict[str, list[str]]) -> bool:
+    if b is None:
+        return False
+    if not bool(st.session_state.get('gui_protocol_confirmed')):
+        return False
+    if _procedure_apply_dirty():
+        return False
+    if _CHK_SEC_EXP in checks_by_sec:
+        return False
+    return True
+
+
+def _refresh_confirmation_flags() -> None:
+    if st.session_state.get('bender') is None:
+        st.session_state['gui_setup_confirmed'] = False
+        st.session_state['gui_measurements_confirmed'] = False
+        st.session_state['gui_protocol_confirmed'] = False
+        return
+    if _data_path_apply_dirty() or _section2_destination_incomplete():
+        st.session_state['gui_setup_confirmed'] = False
+    if _bio_apply_dirty():
+        st.session_state['gui_measurements_confirmed'] = False
+    if _procedure_apply_dirty():
+        st.session_state['gui_protocol_confirmed'] = False
+
+
+def _mark_review_data_used() -> None:
+    st.session_state['gui_review_data_used'] = True
+
+
+def _build_checklist_fix_lines(*, b: Optional[Bender], setup_ok: bool, measurements_ok: bool, protocol_ok: bool) -> list[str]:
+    lines: list[str] = []
+    if not setup_ok:
+        lines.append('Setup: complete Step 1 and click Apply setup.')
+    if not measurements_ok:
+        lines.append('Measurements: enter required values and click Apply section or Apply all biometrics.')
+    if not protocol_ok:
+        lines.append('Protocol/Run: fill required procedure fields and click Apply procedure.')
+    if b is None:
+        lines.append('Hardware: load a hardware configuration in Setup.')
+    return lines
+
+
 def _check_sections_for_sidebar() -> Optional[frozenset[str]]:
     """Which section labels to show in **Status check**. ``None`` = all sections (full workflow)."""
     if _nav_route() != 'stepwise':
@@ -1946,13 +2502,18 @@ def _render_sidebar_stepwise_progress() -> None:
     composed = _compose_output_h5_path().strip()
     applied = str(getattr(b, 'outputfile', '') or '').strip()
     if not applied:
-        st.caption('Step 2: apply data path.')
+        if composed:
+            st.success(f"Selected HDF5 → `{os.path.basename(composed)}` (not applied yet — click **Apply setup**)")
+        else:
+            st.caption('Step 2: apply data path.')
     elif not composed:
         st.caption('Step 2: set a file name.')
     elif _paths_equal_norm(applied, composed):
         st.caption(f"HDF5 → `{os.path.basename(applied)}`")
     else:
-        st.caption('Step 2: form path ≠ experiment — use **Set data file path**.')
+        st.success(
+            f"Selected HDF5 → `{os.path.basename(composed)}` (selected, not applied yet — click **Apply setup**)"
+        )
     st.divider()
 
 
@@ -2084,9 +2645,16 @@ def _flush_pending_load_config_session():
     if 'gui_pending_specimen_id' in st.session_state:
         st.session_state['gui_specimen_id'] = st.session_state.pop('gui_pending_specimen_id')
     if 'gui_pending_data_folder' in st.session_state:
-        st.session_state['gui_data_folder'] = st.session_state.pop('gui_pending_data_folder')
+        _pending_folder = str(st.session_state.pop('gui_pending_data_folder') or '').strip()
+        _cur_folder = str(st.session_state.get('gui_data_folder') or '').strip()
+        # Do not clobber a user-picked folder with an empty pending value.
+        if _pending_folder or not _cur_folder:
+            st.session_state['gui_data_folder'] = _pending_folder
     if 'gui_pending_data_filename' in st.session_state:
-        st.session_state['gui_data_filename'] = st.session_state.pop('gui_pending_data_filename')
+        _pending_file = str(st.session_state.pop('gui_pending_data_filename') or '').strip()
+        _cur_file = str(st.session_state.get('gui_data_filename') or '').strip()
+        if _pending_file or not _cur_file:
+            st.session_state['gui_data_filename'] = _pending_file
     if 'gui_pending_post_notes' in st.session_state:
         st.session_state['gui_post_notes'] = st.session_state.pop('gui_pending_post_notes')
 
@@ -2209,6 +2777,7 @@ def _apply_procedure_form_to_bender(b: Bender, updates: dict, tt: str) -> None:
     if _pn:
         b.post_trial_notes = _pn
     _mark_procedure_applied()
+    st.session_state['gui_protocol_confirmed'] = True
 
 
 def _consume_pending_protocol_template(valid_test_types: list) -> None:
@@ -2294,7 +2863,8 @@ def _apply_clamp_geometry_to_bender(b: Bender) -> None:
 
 def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
     """Tapered outline + specimen density + length for profiled / inertial (and frustum-style) corrections → ``b``."""
-    _sync_bio_prof_rho_from_density_preset()
+    rho = _resolved_bio_prof_rho_g_per_mm3()
+    _queue_bio_prof_rho_widget_sync_from_preset()
     stations = b.make_profile_stations(
         st.session_state['bio_prof_ph'],
         st.session_state['bio_prof_pw'],
@@ -2304,7 +2874,7 @@ def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
     b.set_profiled_specimen_inertial_model(
         stations,
         st.session_state['bio_prof_L'],
-        st.session_state['bio_prof_rho'],
+        rho,
         clamp_offset_mm=float(st.session_state['bio_prof_clamp']),
         num_samples=int(st.session_state['bio_prof_samples']),
     )
@@ -2318,6 +2888,7 @@ def _apply_all_biometrics_to_bender(b: Bender) -> None:
     _apply_experimental_conditions_to_bender(b)
     _apply_clamp_geometry_to_bender(b)
     _apply_mounted_profile_inertial_to_bender(b)
+    st.session_state['gui_measurements_confirmed'] = True
 
 
 def _sync_biometric_flags_from_session(b: Bender):
@@ -2418,7 +2989,7 @@ def _stepwise_step() -> int:
 
 
 def _stepwise_on_data_file_path_step() -> bool:
-    return _nav_route() == 'stepwise' and _stepwise_step() == 1
+    return _nav_route() == 'stepwise' and _stepwise_step() == 0
 
 
 def _template_hide_config_build_new() -> bool:
@@ -2452,7 +3023,8 @@ def _show_data_path_section() -> bool:
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
     if _nav_route() == 'stepwise':
-        return _stepwise_step() == 1
+        # Stepwise "Setup" combines hardware + data path in one tab.
+        return _stepwise_step() == 0
     return True
 
 
@@ -2460,7 +3032,7 @@ def _show_full_sec2() -> bool:
     """Section 3 · biometrics."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
-    if _nav_route() == 'stepwise' and _stepwise_step() != 2:
+    if _nav_route() == 'stepwise' and _stepwise_step() != 1:
         return False
     return True
 
@@ -2468,13 +3040,13 @@ def _show_full_sec2() -> bool:
 def _show_sec3_through_6() -> bool:
     if _nav_route() != 'stepwise':
         return True
-    return _stepwise_step() == 3
+    return _stepwise_step() == 2
 
 
 def _show_sec7_and_8() -> bool:
     if _nav_route() != 'stepwise':
         return True
-    return _stepwise_step() == 4
+    return _stepwise_step() >= 3
 
 
 _LANDING_STIM_HZ = 75.0
@@ -2925,6 +3497,7 @@ def _render_landing_page() -> None:
             'shown at once, training-style steps, and optional checklist loading from disk.</p>',
             unsafe_allow_html=True,
         )
+        st.markdown('<div class="bnd-land-workflow-cards-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
         a, b, c = st.columns(3)
         with a:
             st.markdown('**Build from scratch**')
@@ -2939,14 +3512,17 @@ def _render_landing_page() -> None:
             st.caption('One focus per step with a progress bar; good for training or checklist-style sessions.')
 
         st.markdown('<div style="height:0.5rem"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="bnd-land-workflow-btn-row-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
         ba, bb, bc = st.columns(3)
         with ba:
             if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='primary'):
+                _autosave_tick(force=True)
                 st.session_state['gui_app_route'] = 'scratch'
                 st.session_state.pop('gui_stepwise_step', None)
                 st.rerun()
         with bb:
             if st.button('Template workflow', key='land_templates', use_container_width=True, type='primary'):
+                _autosave_tick(force=True)
                 st.session_state['gui_app_route'] = 'templates'
                 st.session_state.pop('gui_stepwise_step', None)
                 st.session_state.pop('gui_tpl_bio_done', None)
@@ -2954,6 +3530,7 @@ def _render_landing_page() -> None:
                 st.rerun()
         with bc:
             if st.button('Step-by-step', key='land_stepwise', use_container_width=True, type='primary'):
+                _autosave_tick(force=True)
                 st.session_state['gui_app_route'] = 'stepwise'
                 st.session_state['gui_stepwise_step'] = 0
                 st.rerun()
@@ -2970,6 +3547,7 @@ def _render_landing_page() -> None:
             type='secondary',
             help='Compare two cantilever specimens (material + geometry) using numpy only — no NI-DAQ.',
         ):
+            _autosave_tick(force=True)
             st.session_state['gui_app_route'] = 'sim_compare'
             st.session_state.pop('gui_stepwise_step', None)
             st.rerun()
@@ -2988,6 +3566,7 @@ def _render_landing_page() -> None:
             unsafe_allow_html=True,
         )
         if st.button('Open Visualize Data', key='land_h5_explorer', use_container_width=True, type='primary'):
+            _autosave_tick(force=True)
             st.session_state['gui_app_route'] = 'h5_explorer'
             st.rerun()
 
@@ -3099,6 +3678,16 @@ def _render_landing_page() -> None:
 }
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] [data-testid="stCaption"] { color: #64748b !important; }
 :is(#root, body:has(.bnd-landing-page)) .bnd-landing-between-sections { height: 1.65rem; }
+@media (max-width: 980px) {
+  :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-workflow-cards-marker ~ div [data-testid="column"],
+  :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-workflow-btn-row-marker ~ div [data-testid="column"] {
+    min-width: 100% !important;
+    flex: 1 1 100% !important;
+  }
+  :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] .bnd-land-workflow-btn-row-marker ~ div [data-testid="stButton"] button {
+    min-height: 2.85rem !important;
+  }
+}
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stVerticalBlockBorderWrapper"] {
     padding: 1.05rem 1.05rem 1.2rem !important;
     margin-top: 0 !important;
@@ -4441,6 +5030,14 @@ def _render_h5_explorer() -> None:
     _render_h5_attribute_editor(loaded)
 
 
+def _trigger_emergency_stop() -> tuple[bool, str]:
+    """Run NI-DAQ emergency stop and return `(ok, message)`."""
+    dev = None
+    if st.session_state.get('bender') is not None:
+        dev = getattr(st.session_state['bender'], 'device_name', None)
+    return daq_emergency_stop(dev)
+
+
 def _render_app_chrome() -> None:
     st.markdown(
         '<div id="bnd-main-content" tabindex="-1"></div>'
@@ -4458,7 +5055,8 @@ def _render_app_chrome() -> None:
         except TypeError:
             c_home, c_spacer, c_logo = st.columns([2.2, 7.6, 2.2])
         with c_home:
-            if st.button('Home', key='gui_nav_home', type='secondary'):
+            if st.button('Home', key='gui_nav_home_stepwise', type='secondary'):
+                _autosave_tick(force=True)
                 st.session_state['gui_app_route'] = 'landing'
                 st.rerun()
         with c_spacer:
@@ -4472,11 +5070,13 @@ def _render_app_chrome() -> None:
                     except Exception:
                         pass
         _inject_load_save_button_theme()
+        _render_recovery_status_ui()
         return
 
-    h0, h1, h2, h3 = st.columns([1, 2.2, 1, 1.2])
+    h0, h1 = st.columns([1.1, 8.9], vertical_alignment='center')
     with h0:
-        if st.button('← Home', key='gui_nav_home'):
+        if st.button('← Home', key='gui_nav_home_main'):
+            _autosave_tick(force=True)
             st.session_state['gui_app_route'] = 'landing'
             st.rerun()
     with h1:
@@ -4490,13 +5090,14 @@ def _render_app_chrome() -> None:
             st.caption('Simulation & Comparison — numpy cantilever mechanics only; no NI-DAQ.')
         elif _mode == 'h5_explorer':
             st.caption('Visualize Data — plot HDF5 series; standard or custom layout; optional attribute edits.')
-    with h2:
+    lg_l, lg_r = st.columns([1, 1])
+    with lg_l:
         if os.path.isfile(_LOGO_PATH):
             try:
                 st.image(_LOGO_PATH, width=120)
             except Exception:
                 pass
-    with h3:
+    with lg_r:
         nsf = _nsf_logo_path()
         if nsf:
             st.markdown(
@@ -4505,19 +5106,64 @@ def _render_app_chrome() -> None:
             )
     st.divider()
     _inject_load_save_button_theme()
+    _render_recovery_status_ui()
 
 
 def _render_sidebar() -> None:
-    """Sidebar: stepwise progress, status check, emergency stop."""
+    """Sidebar: unified workflow checklist + emergency + settings."""
     with st.sidebar:
         if _nav_route() == 'sim_compare':
             st.markdown('### Simulation & Comparison')
             st.caption('This path does not use NI-DAQ or the live experiment stack. Use **Settings** for display options.')
             _render_sidebar_settings_expander(leading_divider=False)
             return
-        if _nav_route() == 'stepwise':
-            _render_sidebar_stepwise_progress()
-        _render_sidebar_input_checks()
+        b = st.session_state.get('bender')
+        checks = _collect_check_tuples(b) if b is not None else []
+        checks_by_sec: dict[str, list[str]] = {}
+        for sec, msg in checks:
+            checks_by_sec.setdefault(sec, []).append(msg)
+        st.markdown('**Workflow checklist**')
+        _session_src = str(st.session_state.get('gui_session_source') or 'fresh')
+        st.caption(f"Session: {'Restored' if _session_src == 'restored' else 'Fresh start'}")
+        _setup_ok = _setup_confirmed_for_checklist(b)
+        _meas_ok = _measurements_confirmed_for_checklist()
+        _proto_ok = _protocol_confirmed_for_checklist(b, checks_by_sec)
+        _review_used = bool(st.session_state.get('gui_review_data_used'))
+        st.caption(f"1. Setup {'✅' if _setup_ok else '⚠️'}")
+        st.caption(f"2. Measurements {'✅' if _meas_ok else '⚠️'}")
+        st.caption(f"3. Protocol/Run {'✅' if _proto_ok else '⚠️'}")
+        st.caption(f"4. Review Data {'✅' if _review_used else '⚪'}")
+        st.session_state.setdefault('gui_fix_panel_seen', False)
+        if st.button('Click here to fix warning', key='gui_fix_warning_open', use_container_width=True, type='secondary'):
+            st.session_state['gui_fix_panel_open'] = True
+        _show_fix_panel = bool(st.session_state.get('gui_fix_panel_open'))
+        if _show_fix_panel:
+            fix_lines = _build_checklist_fix_lines(
+                b=b,
+                setup_ok=_setup_ok,
+                measurements_ok=_meas_ok,
+                protocol_ok=_proto_ok,
+            )
+            with st.container(border=True):
+                if fix_lines:
+                    for row in fix_lines:
+                        st.caption(f'- {row}')
+                else:
+                    st.caption('All required checklist steps are complete.')
+                if st.button('Hide fixes', key='gui_fix_warning_hide', use_container_width=True):
+                    st.session_state['gui_fix_panel_open'] = False
+                    st.session_state['gui_fix_panel_seen'] = True
+                    st.rerun()
+            st.session_state['gui_fix_panel_seen'] = True
+        with st.expander('Advanced diagnostics', expanded=False):
+            if checks_by_sec:
+                for sec, rows in checks_by_sec.items():
+                    st.caption(f'{sec}')
+                    for row in rows:
+                        st.caption(f'- {row}')
+            else:
+                st.caption('No diagnostics.')
+        st.divider()
         # No simulation-mode toggle on NI-DAQ experiment workflows (real hardware path only).
         _route = _nav_route()
         if _route in ('stepwise', 'scratch', 'templates'):
@@ -4527,47 +5173,37 @@ def _render_sidebar() -> None:
                 _b.simulation_mode = False
         else:
             _render_simulation_sidebar()
-        st.markdown('### Emergency stop')
-        st.caption(
-            'Resets the NI-DAQ device (stops tasks and clears analog/digital outputs). With a loaded experiment, only '
-            'that device is reset; otherwise all local NI devices are reset. Not a substitute for lab safety interlocks.'
-        )
-        if st.button(
-            'Stop DAQ & reset NI device',
-            key='gui_kill_daq',
-            type='primary',
-            use_container_width=True,
-            help=(
-                'Hardware reset via NI-DAQmx: stops running tasks and clears outputs on the configured device, '
-                'or on every local NI device if none is configured.'
-            ),
-        ):
-            dev = None
-            if st.session_state.get('bender') is not None:
-                dev = getattr(st.session_state['bender'], 'device_name', None)
-            ok, msg = daq_emergency_stop(dev)
-            if ok:
-                st.success(msg)
-            else:
-                st.warning(msg)
+        with st.container(border=True):
+            st.markdown('### Emergency stop')
+            if st.button(
+                'Stop DAQ & reset NI device',
+                key='gui_kill_daq',
+                type='primary',
+                use_container_width=True,
+            ):
+                ok, msg = _trigger_emergency_stop()
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
         _render_sidebar_settings_expander(leading_divider=True)
 
 
 _STEPWISE_TAB_LABELS = (
-    '1 · Hardware configuration',
-    '2 · Data file path',
-    '3 · Biometrics',
-    '4 · Experiment & run',
-    '5 · Visualize & notes',
+    '1 · Setup (hardware + data path)',
+    '2 · Measurements',
+    '3 · Protocol & run',
+    '4 · Visualize & notes',
+    '5 · Review',
 )
 
 # Short labels for tab buttons (keep narrow columns readable)
 _STEPWISE_TAB_SHORT = (
-    'Hardware',
-    'Data',
-    'Biometrics',
-    'Experiment',
+    'Setup',
+    'Measurements',
+    'Protocol/Run',
     'Visualize',
+    'Review',
 )
 
 
@@ -4588,6 +5224,7 @@ def _render_stepwise_rail() -> None:
     with st.container(border=True):
         st.progress(min(1.0, (cur + 1) / 5.0), text=f'Step {cur + 1} / 5 · {_STEPWISE_TAB_SHORT[cur]}')
 
+        st.markdown('<div class="bnd-stepwise-tab-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
         tab_cols = st.columns(5, gap='small')
         for i in range(5):
             with tab_cols[i]:
@@ -4625,58 +5262,212 @@ def _render_stepwise_rail() -> None:
                 st.session_state['gui_stepwise_step'] = cur + 1
                 st.rerun()
 
-    if st.session_state.get('bender') is None and _stepwise_step() >= 2:
-        with st.container(border=True):
-            st.warning(
-                '**Hardware not loaded.** Finish **Step 1** (hardware) and **Step 2** (data path) first, or use **Load default hardware** below.'
-            )
-            w1, w2 = st.columns(2)
-            with w1:
-                if st.button('Go to step 1', key='gui_stepwise_go_a', use_container_width=True):
-                    st.session_state['gui_stepwise_step'] = 0
-                    st.rerun()
-            with w2:
-                if st.button(
-                    'Load default hardware and proceed',
-                    key='gui_sw_load_default_hw',
-                    use_container_width=True,
-                    help='Loads the typed override if valid, else jimenez_bender_config_A, else the first project module, then continues here.',
-                ):
-                    _mods = discover_config_modules(_ROOT)
-                    _typed = str(st.session_state.get('gui_cfg_mod') or '').strip()
-                    _stem = _typed if _typed and _typed in _mods else None
-                    if _stem is None and 'jimenez_bender_config_A' in _mods:
-                        _stem = 'jimenez_bender_config_A'
-                    if _stem is None and _mods:
-                        _stem = _mods[0]
-                    if not _stem:
-                        st.session_state['gui_sw_default_hw_err'] = 'No hardware `.py` config modules found in the project folder.'
-                        st.rerun()
-                    _err = _apply_loaded_config_module(_stem)
-                    if _err:
-                        st.session_state['gui_sw_default_hw_err'] = _err
-                        st.rerun()
-                    st.toast(f'Loaded `{_stem}`. Complete **Step 2** (data path) before **Run**.')
-                    st.rerun()
+    # Prerequisite reminders are centralized in the sidebar checklist + fix panel.
 
 
 def _cb_tpl_config_module_changed() -> None:
     st.session_state['gui_tpl_reload_config'] = True
 
 
+def _pick_folder_with_dialog(initial_dir: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (folder_path, error_text) from native folder picker."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        picked = filedialog.askdirectory(initialdir=initial_dir or _ROOT, title='Select folder')
+        root.destroy()
+        if not picked:
+            return None, None
+        return os.path.normpath(str(picked)), None
+    except Exception as e:
+        return None, f'{type(e).__name__}: {e}'
+
+
+_DATA_FOLDER_DD_SENTINEL = '— Select folder —'
+
+
+def _immediate_subdirs(root: str, *, max_entries: int = 50) -> list[str]:
+    """List immediate child directories under ``root`` (stable, browser-safe)."""
+    root = os.path.normpath(str(root or '').strip())
+    if not root or not os.path.isdir(root):
+        return []
+    out: list[str] = []
+    try:
+        for name in sorted(os.listdir(root), key=str.casefold):
+            p = os.path.join(root, name)
+            if os.path.isdir(p):
+                out.append(os.path.normpath(p))
+            if len(out) >= max_entries:
+                break
+    except OSError:
+        return []
+    return out
+
+
+def _data_folder_dropdown_choice_list(current_folder: str) -> list[str]:
+    """
+    Candidate data folders for a Streamlit dropdown (no tkinter).
+
+    Includes the project root, common subfolders, and one level of child directories.
+    If ``current_folder`` is a valid directory, it is included even when not under _ROOT.
+    """
+    cur = os.path.normpath(str(current_folder or '').strip()) if str(current_folder or '').strip() else ''
+    seeds = [
+        _ROOT,
+        os.path.join(_ROOT, 'TestData'),
+        os.path.join(_ROOT, 'SessionSnapshots'),
+        os.path.join(_ROOT, 'ProtocolTemplates'),
+        os.path.join(_ROOT, 'TemplateProtocols'),
+        os.path.join(_ROOT, 'TemplateBiometrics'),
+    ]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for seed in seeds:
+        norm = os.path.normpath(seed)
+        if not norm or norm in seen or not os.path.isdir(norm):
+            continue
+        seen.add(norm)
+        ordered.append(norm)
+        for sub in _immediate_subdirs(norm, max_entries=40):
+            if sub not in seen:
+                seen.add(sub)
+                ordered.append(sub)
+    if cur and os.path.isdir(cur) and cur not in seen:
+        ordered.insert(0, cur)
+    return ordered
+
+
+def _render_data_folder_dropdown(*, key_suffix: str) -> None:
+    """
+    Browser-native folder picker: dropdown sets ``gui_data_folder`` (works without tkinter).
+
+    Syncs from ``gui_data_folder`` when it changes via Browse/Apply; uses ``on_change`` so
+    user selections are not clobbered before ``_store_selected_data_folder`` runs.
+    """
+    dd_key = f'gui_data_folder_dd_{key_suffix}'
+    sync_key = f'{dd_key}_synced_from_gui_data_folder'
+    cur = str(st.session_state.get('gui_data_folder') or '').strip()
+    cur_norm = os.path.normpath(cur) if cur else ''
+    choices = _data_folder_dropdown_choice_list(cur_norm)
+    if cur_norm and cur_norm not in choices and os.path.isdir(cur_norm):
+        choices.insert(0, cur_norm)
+    options = [_DATA_FOLDER_DD_SENTINEL] + choices
+
+    def _fmt(p: str) -> str:
+        return p if p == _DATA_FOLDER_DD_SENTINEL else str(p)
+
+    def _on_folder_dd_change() -> None:
+        raw = st.session_state.get(dd_key)
+        if raw is None or raw == _DATA_FOLDER_DD_SENTINEL or not str(raw).strip():
+            return
+        picked = os.path.normpath(str(raw).strip())
+        _store_selected_data_folder(picked)
+        st.session_state[sync_key] = os.path.normpath(str(st.session_state.get('gui_data_folder') or '').strip())
+
+    if st.session_state.get(sync_key) != cur_norm:
+        st.session_state[dd_key] = cur_norm if cur_norm and cur_norm in options else _DATA_FOLDER_DD_SENTINEL
+        st.session_state[sync_key] = cur_norm
+
+    st.selectbox(
+        'Data folder',
+        options=options,
+        format_func=_fmt,
+        key=dd_key,
+        on_change=_on_folder_dd_change,
+        help=(
+            'Pick a folder from this list (works in the browser). The full HDF5 path is **folder + file name** '
+            'in the next column. Native **Browse…** may not work on remote desktops or hosted Streamlit.'
+        ),
+    )
+
+
+def _pick_file_with_dialog(initial_dir: str, *, title: str, filetypes: list[tuple[str, str]]) -> tuple[Optional[str], Optional[str]]:
+    """Return (file_path, error_text) from native open-file picker."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        picked = filedialog.askopenfilename(
+            initialdir=initial_dir or _ROOT,
+            title=title,
+            filetypes=filetypes,
+        )
+        root.destroy()
+        if not picked:
+            return None, None
+        return os.path.normpath(str(picked)), None
+    except Exception as e:
+        return None, f'{type(e).__name__}: {e}'
+
+
+def _store_selected_data_folder(picked_dir: str) -> None:
+    """Persist selected folder and keep a usable filename for composed output paths."""
+    folder = os.path.normpath(str(picked_dir or '').strip())
+    if not folder:
+        return
+    # User-picked folder is authoritative; discard deferred config-load path seeds.
+    st.session_state.pop('gui_pending_data_folder', None)
+    st.session_state.pop('gui_pending_data_filename', None)
+    st.session_state['gui_data_folder'] = folder
+    cur_fn = str(st.session_state.get('gui_data_filename') or '').strip()
+    if cur_fn:
+        return
+    # If filename is blank, preserve the current experiment basename so saves move to selected folder.
+    b = st.session_state.get('bender')
+    fallback = str(getattr(b, 'outputfile', '') or '').strip() if b is not None else ''
+    if fallback:
+        base = os.path.basename(os.path.normpath(fallback))
+        if base:
+            st.session_state['gui_data_filename'] = base
+
+
+def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware configuration module') -> None:
+    """Simple hardware config picker: native Browse button + current selection display."""
+    _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+    _init_dir = _ROOT
+    if _sel:
+        _sel_path = os.path.join(_ROOT, _sel.replace('.', os.sep) + '.py')
+        _init_dir = os.path.dirname(_sel_path) if os.path.isfile(_sel_path) else _ROOT
+    if st.button('Browse…', key=f'{key_prefix}_cfg_nav_browse', use_container_width=True):
+        picked, err = _pick_file_with_dialog(
+            _init_dir,
+            title='Select hardware config module',
+            filetypes=[('Python files', '*.py'), ('All files', '*.*')],
+        )
+        if err:
+            st.warning(f'File dialog unavailable: {err}')
+        elif picked:
+            try:
+                rel_file = os.path.relpath(picked, _ROOT).replace('\\', '/')
+                if rel_file.startswith('..'):
+                    st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
+                else:
+                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
+                    if key_prefix.startswith('tpl_'):
+                        _cb_tpl_config_module_changed()
+                    st.rerun()
+            except Exception as e:
+                st.warning(f'Could not resolve selected file: {type(e).__name__}: {e}')
+    st.caption(f'{label}: `{_sel or "(none selected)"}`')
+
+
 def _render_template_procedure_strip() -> None:
     """Compact loaders: config + biometrics from disk, then experiment sections (procedure edited in the app)."""
     _ensure_hw_config_session_defaults()
     st.subheader('Load saved files')
-    st.caption('Order: hardware `.py` → data path → biometrics file. Reload module after changing the list or typed name.')
+    st.caption('Order: hardware `.py` → data path → biometrics file. Reload module after changing the selection.')
 
     if st.session_state.pop('gui_tpl_reload_config', False):
-        eff = effective_load_module_name(
-            typed=str(st.session_state.get('gui_cfg_mod') or ''),
-            selected=str(st.session_state.get('gui_load_cfg_select') or ''),
-        )
+        eff = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
         if not eff:
-            st.session_state['gui_tpl_config_load_err'] = 'Choose a config module from the list or type a name to override.'
+            st.session_state['gui_tpl_config_load_err'] = 'Choose a config module with Browse.'
         else:
             err = _apply_loaded_config_module(eff)
             if err:
@@ -4693,24 +5484,19 @@ def _render_template_procedure_strip() -> None:
     st.subheader('1 · Hardware configuration')
     with st.container(border=True):
         _cfg_mods = discover_config_modules(_ROOT)
-        st.session_state.setdefault('gui_cfg_mod', str(st.session_state.get('cfg_mod') or 'jimenez_bender_config_A'))
-        _default_pick = st.session_state['gui_cfg_mod'] if st.session_state['gui_cfg_mod'] in _cfg_mods else _cfg_mods[0]
+        _default_pick = str(st.session_state.get('cfg_mod') or '')
+        if _default_pick not in _cfg_mods:
+            _default_pick = _cfg_mods[0]
         st.session_state.setdefault('gui_load_cfg_select', _default_pick)
         if st.session_state.get('bender') is None and not st.session_state.get('gui_tpl_cfg_autoloaded'):
             st.session_state['gui_tpl_cfg_autoloaded'] = True
             st.session_state['gui_tpl_reload_config'] = True
             st.rerun()
-        st.selectbox(
-            'Hardware configuration module',
-            options=_cfg_mods,
-            key='gui_load_cfg_select',
-            on_change=_cb_tpl_config_module_changed,
-        )
-        st.text_input('Or type module name (overrides list)', key='gui_cfg_mod', placeholder='e.g. my_lab_config')
+        _render_config_module_navigator(key_prefix='tpl', label='Hardware configuration module')
         if _load_save_button(
             'Load hardware configuration',
             key='gui_btn_load_config_tpl',
-            help='Reload the selected hardware `.py` module from disk (use after typing an override name).',
+            help='Reload the selected hardware `.py` module from disk.',
         ):
             st.session_state['gui_tpl_reload_config'] = True
             st.rerun()
@@ -4722,18 +5508,33 @@ def _render_template_procedure_strip() -> None:
     with st.container(border=True):
         _dfc, _fnc = st.columns(2)
         with _dfc:
-            st.text_input(
-                'Data folder',
-                key='gui_data_folder',
-                placeholder=r'Example: C:\Users\me\Data\Experiments',
-                help=DATA_FOLDER_HELP,
-            )
+            _cur_df = str(st.session_state.get('gui_data_folder') or '').strip()
+            _render_data_folder_dropdown(key_suffix='tpl')
+            if st.button('Browse…', key='gui_tpl_data_folder_browse', use_container_width=True, type='secondary'):
+                _init_dir = _cur_df or _ROOT
+                _picked_dir, _err_dir = _pick_folder_with_dialog(_init_dir)
+                if _err_dir:
+                    st.warning(f'Folder dialog unavailable: {_err_dir}')
+                elif _picked_dir:
+                    _norm_p = os.path.normpath(_picked_dir)
+                    _store_selected_data_folder(_norm_p)
+                    _dd_tpl = 'gui_data_folder_dd_tpl'
+                    st.session_state[_dd_tpl] = _norm_p
+                    st.session_state[f'{_dd_tpl}_synced_from_gui_data_folder'] = _norm_p
+                    st.rerun()
+            _preview_out = _compose_output_h5_path().strip()
+            _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
+            if _preview_out:
+                st.caption(f'Save path: `{_preview_out}`')
+            elif _preview_folder:
+                st.caption(f'Save path: `{_preview_folder}`')
         with _fnc:
             st.text_input(
-                'Data file name',
+                ' ',
                 key='gui_data_filename',
-                placeholder='my_experiment.h5',
+                placeholder='datafilename.h5',
                 help=DATA_FILE_NAME_HELP,
+                label_visibility='collapsed',
             )
 
     st.divider()
@@ -4758,6 +5559,8 @@ def _render_template_procedure_strip() -> None:
         ok_bf, txt_bf = bf
         if ok_bf:
             st.success(txt_bf)
+        elif str(txt_bf).strip() == 'Choose a biometrics file first.':
+            st.warning(txt_bf)
         else:
             _st_error_detail(
                 'Biometrics load failed.',
@@ -4813,6 +5616,11 @@ def main():
     _migrate_gui_ui_theme_session()
     st.session_state.setdefault('gui_ui_large_text', False)
     st.session_state.setdefault('gui_app_route', 'landing')
+    st.session_state.setdefault('gui_session_source', 'fresh')
+    st.session_state.setdefault('gui_setup_confirmed', False)
+    st.session_state.setdefault('gui_measurements_confirmed', False)
+    st.session_state.setdefault('gui_protocol_confirmed', False)
+    _bootstrap_autosave_recovery()
     _inject_accessibility_theme()
     _ensure_gui_data_path_session_keys()
     if 'gui_post_notes' not in st.session_state:
@@ -4824,22 +5632,32 @@ def main():
     if 'bio_prep_condition' not in st.session_state:
         st.session_state['bio_prep_condition'] = ''
     st.session_state.setdefault('bio_prof_rho_preset', 'Custom — edit the number below')
+    if 'gui_default_state_baseline' not in st.session_state and 'gui_recovered_state_baseline' not in st.session_state:
+        st.session_state['gui_default_state_baseline'] = _collect_persistable_state()
+    _update_state_origin_summary()
     if _nav_route() == 'landing':
         _render_landing_page()
+        _autosave_tick()
         return
 
     _flush_pending_load_config_session()
     _consume_pending_biometrics_template()
+    _refresh_confirmation_flags()
+    # Repair data-path fields from persisted signatures before any widget binds to
+    # gui_data_folder / gui_data_filename (Streamlit forbids mutating those keys later).
+    _repair_data_path_fields_from_session()
 
     _render_app_chrome()
     _render_sidebar()
 
     if _nav_route() == 'h5_explorer':
         _render_h5_explorer()
+        _autosave_tick()
         return
 
     if _nav_route() == 'sim_compare':
         _render_simulation_comparison_page()
+        _autosave_tick()
         return
 
     if _nav_route() == 'templates':
@@ -4873,11 +5691,147 @@ def main():
     _cfg_mods = discover_config_modules(_ROOT)
     _template_procedure_gate()
 
-    if _show_hw_config_section():
-        st.subheader('1 · Hardware configuration')
-        with st.container(border=True):
-            st.session_state.setdefault('gui_cfg_mod', str(st.session_state.get('cfg_mod') or 'jimenez_bender_config_A'))
-            _default_pick = st.session_state['gui_cfg_mod'] if st.session_state['gui_cfg_mod'] in _cfg_mods else _cfg_mods[0]
+    if _show_hw_config_section() or _show_data_path_section():
+        st.session_state.setdefault('gui_setup_about_show', False)
+        st.session_state.setdefault('gui_setup_actions_show', False)
+        _setup_ctl_left, _setup_ctl_right = st.columns(2, gap='small')
+        with _setup_ctl_left:
+            if st.button('About setup', key='gui_setup_about_btn', type='secondary', use_container_width=True):
+                st.session_state['gui_setup_about_show'] = not bool(st.session_state.get('gui_setup_about_show', False))
+        with _setup_ctl_right:
+            if st.button(
+                'Start fresh / save progress',
+                key='gui_setup_actions_btn',
+                type='secondary',
+                use_container_width=True,
+            ):
+                st.session_state['gui_setup_actions_show'] = not bool(st.session_state.get('gui_setup_actions_show', False))
+        if st.session_state.get('gui_setup_about_show'):
+            st.info(
+                'Setup order: select/load hardware config, choose data folder, set data file name, then apply path. '
+                'Hardware `.py` defines rig channels/settings; it does not define output `.h5` save location.'
+            )
+        if st.session_state.get('gui_setup_actions_show'):
+            st.caption('Choose what to do with your current form state before starting over.')
+            _a_save, _a_home, _a_tpl = st.columns(3, gap='small')
+            with _a_save:
+                if st.button('Save progress snapshot', key='gui_save_progress_snapshot', use_container_width=True):
+                    ok, msg = _save_progress_snapshot()
+                    if ok:
+                        st.success(f'Snapshot saved: `{msg}`')
+                    else:
+                        _st_error_detail(
+                            'Could not save progress snapshot.',
+                            ['Check write permissions', 'Verify workspace is writable'],
+                            msg,
+                        )
+            with _a_home:
+                if st.button(
+                    'Go to Home Page',
+                    key='gui_go_home_discard',
+                    type='primary',
+                    use_container_width=True,
+                    help='Discard current unsaved workflow state and return to landing page.',
+                ):
+                    _autosave_tick(force=True)
+                    _reset_workflow_session_to_home(clear_autosave=True)
+                    st.rerun()
+            with _a_tpl:
+                if st.button(
+                    'Go to Templates',
+                    key='gui_go_templates_from_setup',
+                    use_container_width=True,
+                    help='Use template workflow instead of continuing with current unsaved setup.',
+                ):
+                    _autosave_tick(force=True)
+                    st.session_state['gui_app_route'] = 'templates'
+                    st.rerun()
+
+    _show_hw = _show_hw_config_section()
+    _show_data = _show_data_path_section()
+    _setup_left = _setup_right = None
+    if _show_hw and _show_data:
+        _setup_left, _setup_right = st.columns(2, gap='large')
+
+    def _apply_setup_action(*, sw_dp: bool) -> None:
+        _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
+        if _cfg_mode == 'Load existing':
+            _ensure_hw_config_session_defaults()
+            eff = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+            if not eff:
+                _mods_here = discover_config_modules(_ROOT)
+                if not _mods_here:
+                    _st_error_actions(
+                        'No hardware config modules found.',
+                        ['Add a `.py` config module in the project folder'],
+                    )
+                else:
+                    _st_error_actions(
+                        'No config module resolved.',
+                        ['Use Browse in Step 1 to select module'],
+                    )
+                return
+            b0 = st.session_state.get('bender')
+            need_hw_reload = b0 is None or not _selected_config_matches_bender(b0, eff)
+            err = _apply_loaded_config_module(eff) if need_hw_reload else None
+            if err:
+                _st_error_detail(
+                    'Hardware config load failed.',
+                    ['Check module name', 'Fix errors in Details'],
+                    err,
+                )
+                return
+            perr = _sec1_apply_composed_path_to_bender()
+            if perr:
+                if need_hw_reload:
+                    _st_error_detail(
+                        'Hardware OK; path failed.',
+                        ['Fix folder name', 'Fix file name'],
+                        perr,
+                    )
+                else:
+                    _st_error_detail(
+                        'Data path not applied.',
+                        ['Fix folder name', 'Fix file name'],
+                        perr,
+                    )
+                return
+            if sw_dp and not need_hw_reload:
+                st.toast('Data file path set.')
+            elif sw_dp and need_hw_reload:
+                st.toast('Hardware configuration loaded and data file path set.')
+            else:
+                st.toast('Hardware configuration and data file path applied.')
+            if need_hw_reload:
+                st.success(f'Loaded `{_normalize_config_module_name(eff)}`')
+            else:
+                st.success('Data file path set on the experiment object.')
+            st.session_state['gui_setup_confirmed'] = True
+            st.rerun()
+            return
+
+        if st.session_state.get('bender') is None:
+            _st_error_actions('Setup apply blocked.', ['Load or build hardware config first'])
+            return
+        perr = _sec1_apply_composed_path_to_bender()
+        if perr:
+            _st_error_detail(
+                'Data path not applied.',
+                ['Fix folder name', 'Fix file name'],
+                perr,
+            )
+        else:
+            st.toast('Data file path set.' if sw_dp else 'Data file path applied.')
+            st.session_state['gui_setup_confirmed'] = True
+            st.rerun()
+
+    if _show_hw:
+        _hw_host = _setup_left if _setup_left is not None else st
+        _hw_host.subheader('1 · Hardware configuration')
+        with _hw_host.container(border=True):
+            _default_pick = str(st.session_state.get('cfg_mod') or '')
+            if _default_pick not in _cfg_mods:
+                _default_pick = _cfg_mods[0]
             st.session_state.setdefault('gui_load_cfg_select', _default_pick)
             st.session_state.setdefault('gui_cfg_build_base', _cfg_mods[0])
             st.session_state.setdefault('gui_cfg_build_out', '')
@@ -4891,105 +5845,101 @@ def main():
                 mode = _hardware_configuration_mode_toggle()
 
             if mode == 'Load existing':
-                st.selectbox(
-                    'Hardware configuration module',
-                    options=_cfg_mods,
-                    key='gui_load_cfg_select',
-                    help='Python modules in this project folder that define hardware (DAQ, motor, channels).',
-                )
-                st.text_input(
-                    'Override: type module name',
-                    key='gui_cfg_mod',
-                    help='If you fill this, it replaces the dropdown. Leave empty to use the list.',
-                    placeholder='e.g. my_lab_config',
-                )
+                _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+                st.caption(f"Selected config: `{_sel or '(none selected)'}`")
             else:
-                st.selectbox(
-                    'Start from template (base module for import *)',
-                    options=_cfg_mods,
-                    key='gui_cfg_build_base',
-                    help='Other settings from the template stay unless you override them below.',
-                )
-                _maybe_seed_cfg_build_fields()
-                st.text_input(
-                    'Save new config as (module name, no `.py`)',
-                    key='gui_cfg_build_out',
-                    placeholder='e.g. lab_setup_2026',
-                    help='Writes a new `.py` file in this folder and loads it.',
-                )
-                with st.expander('Calibration, direction & axis labels', expanded=False):
-                    st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
-                    st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
-                    st.number_input(
-                        'Specimen lateral index on positive motor side',
-                        key='gui_cfg_bld_specimen_lateral_index',
-                        step=1,
-                        format='%d',
-                    )
-                    st.text_input('Motor axis (config `motor_axis`)', key='gui_cfg_bld_motor_axis')
-                    st.text_input('Bending axis — sensor (`bending_axis_sensor`)', key='gui_cfg_bld_bending_axis_sensor')
-                    st.text_input('Primary bending axis (e.g. zTorque)', key='gui_cfg_bld_primary_bending_axis')
-                    st.text_input(
-                        'Bending axis — specimen (`bending_axis_specimen`: dorsoventral / lateral / anteroposterior)',
-                        key='gui_cfg_bld_bending_axis_specimen',
-                    )
-                    st.text_input('S1 side label', key='gui_cfg_bld_S1side')
-                    st.text_input('S2 side label', key='gui_cfg_bld_S2side')
-                with st.expander('DAQ rates & device', expanded=True):
-                    st.text_input('NI-DAQ device name', key='gui_cfg_bld_device_name')
-                    st.number_input('AI + encoder sample rate (Hz)', key='gui_cfg_bld_daq_ai_sr', min_value=1.0, format='%.f')
-                    st.number_input('AO + DO sample rate (Hz)', key='gui_cfg_bld_daq_ao_sr', min_value=1.0, format='%.f')
-                with st.expander('Motor, encoder & stim channels', expanded=False):
-                    st.number_input('Motor full steps per rev', key='gui_cfg_bld_motor_steps', min_value=1, step=1, format='%d')
-                    st.number_input('Motor gear ratio', key='gui_cfg_bld_motor_gear', min_value=1, step=1, format='%d')
-                    st.number_input('Encoder pulses per rev', key='gui_cfg_bld_encoder_ppr', min_value=1, step=1, format='%d')
-                    st.text_input('Motor port', key='gui_cfg_bld_motor_port')
-                    st.text_input('Encoder counter channel', key='gui_cfg_bld_encoder_chan')
-                    st.text_input('Stim AO channels (comma-separated)', key='gui_cfg_bld_stim_channels')
-                with st.expander('Strain / ATI channels', expanded=False):
-                    st.text_input('SG AI channels (comma-separated)', key='gui_cfg_bld_SG_chan')
-                    st.text_input('SG channel names (comma-separated)', key='gui_cfg_bld_SG_name')
-                with st.expander('Sonomicrometry', expanded=False):
-                    st.checkbox('Use sonomicrometry', key='gui_cfg_bld_use_sono')
-                    st.text_input('Sono AI channels (comma-separated)', key='gui_cfg_bld_sono_channel')
-                    st.text_input('Sono names (comma-separated)', key='gui_cfg_bld_sono_name')
-                    st.number_input(
-                        'Sono internal sample frequency (`sono_internal_samplefreq`)',
-                        key='gui_cfg_bld_sono_internal_samplefreq',
-                        min_value=1,
-                        step=1,
-                        format='%d',
-                    )
-                    st.text_input(
-                        'Sono cal left [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
-                        key='gui_cfg_bld_sono_cal_left',
-                        help='Four numbers, same order as the config file.',
-                    )
-                    st.text_input(
-                        'Sono cal right [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
-                        key='gui_cfg_bld_sono_cal_right',
-                    )
-                with st.expander('Stim monitor AI (optional)', expanded=False):
-                    st.text_input(
-                        'Stim monitor AI channels (comma-separated; empty = none)',
-                        key='gui_cfg_bld_stim_monitor_chan',
-                    )
-                    st.text_input('Stim monitor channel names (comma-separated)', key='gui_cfg_bld_stim_monitor_name')
-                with st.expander('Default timing, ramp & motion', expanded=False):
-                    st.number_input('waitbefore (s)', key='gui_cfg_bld_waitbefore', min_value=0.0, format='%.6g')
-                    st.number_input('waitafter (s)', key='gui_cfg_bld_waitafter', min_value=0.0, format='%.6g')
-                    st.number_input('rampdur (s)', key='gui_cfg_bld_rampdur', min_value=0.0, format='%.6g')
-                    st.number_input('prepoststim_dur (s)', key='gui_cfg_bld_prepoststim_dur', min_value=0.0, format='%.6g')
-                    st.number_input('prepoststim_sep (s)', key='gui_cfg_bld_prepoststim_sep', format='%.6g')
-                    st.number_input('prestim_time', key='gui_cfg_bld_prestim_time', format='%.6g')
-                    st.number_input('poststim_time', key='gui_cfg_bld_poststim_time', format='%.6g')
-                    st.number_input('amp_step_vel', key='gui_cfg_bld_amp_step_vel', min_value=1, step=1, format='%d')
+                c_top_l, c_top_r = st.columns(2, gap='large')
+                with c_top_l:
                     st.selectbox(
-                        'ramp_mode_default',
-                        options=['linear', 'exponential'],
-                        key='gui_cfg_bld_ramp_mode_default',
+                        'Start from template (base module for import *)',
+                        options=_cfg_mods,
+                        key='gui_cfg_build_base',
+                        help='Other settings from the template stay unless you override them below.',
                     )
-                    st.caption('`units` / `unit_rules` dicts stay from the template unless you edit the generated `.py` file.')
+                _maybe_seed_cfg_build_fields()
+                with c_top_r:
+                    st.text_input(
+                        'Save new config as (module name, no `.py`)',
+                        key='gui_cfg_build_out',
+                        placeholder='e.g. lab_setup_2026',
+                        help='Writes a new `.py` file in this folder and loads it.',
+                    )
+                c_cfg_l, c_cfg_r = st.columns(2, gap='large')
+                with c_cfg_l:
+                    with st.expander('Calibration, direction & axis labels', expanded=False):
+                        st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
+                        st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
+                        st.number_input(
+                            'Specimen lateral index on positive motor side',
+                            key='gui_cfg_bld_specimen_lateral_index',
+                            step=1,
+                            format='%d',
+                        )
+                        st.text_input('Motor axis (config `motor_axis`)', key='gui_cfg_bld_motor_axis')
+                        st.text_input('Bending axis — sensor (`bending_axis_sensor`)', key='gui_cfg_bld_bending_axis_sensor')
+                        st.text_input('Primary bending axis (e.g. zTorque)', key='gui_cfg_bld_primary_bending_axis')
+                        st.text_input(
+                            'Bending axis — specimen (`bending_axis_specimen`: dorsoventral / lateral / anteroposterior)',
+                            key='gui_cfg_bld_bending_axis_specimen',
+                        )
+                        st.text_input('S1 side label', key='gui_cfg_bld_S1side')
+                        st.text_input('S2 side label', key='gui_cfg_bld_S2side')
+                    with st.expander('Motor, encoder & stim channels', expanded=False):
+                        st.number_input('Motor full steps per rev', key='gui_cfg_bld_motor_steps', min_value=1, step=1, format='%d')
+                        st.number_input('Motor gear ratio', key='gui_cfg_bld_motor_gear', min_value=1, step=1, format='%d')
+                        st.number_input('Encoder pulses per rev', key='gui_cfg_bld_encoder_ppr', min_value=1, step=1, format='%d')
+                        st.text_input('Motor port', key='gui_cfg_bld_motor_port')
+                        st.text_input('Encoder counter channel', key='gui_cfg_bld_encoder_chan')
+                        st.text_input('Stim AO channels (comma-separated)', key='gui_cfg_bld_stim_channels')
+                    with st.expander('Sonomicrometry', expanded=False):
+                        st.checkbox('Use sonomicrometry', key='gui_cfg_bld_use_sono')
+                        st.text_input('Sono AI channels (comma-separated)', key='gui_cfg_bld_sono_channel')
+                        st.text_input('Sono names (comma-separated)', key='gui_cfg_bld_sono_name')
+                        st.number_input(
+                            'Sono internal sample frequency (`sono_internal_samplefreq`)',
+                            key='gui_cfg_bld_sono_internal_samplefreq',
+                            min_value=1,
+                            step=1,
+                            format='%d',
+                        )
+                        st.text_input(
+                            'Sono cal left [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
+                            key='gui_cfg_bld_sono_cal_left',
+                            help='Four numbers, same order as the config file.',
+                        )
+                        st.text_input(
+                            'Sono cal right [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
+                            key='gui_cfg_bld_sono_cal_right',
+                        )
+                with c_cfg_r:
+                    with st.expander('DAQ rates & device', expanded=True):
+                        st.text_input('NI-DAQ device name', key='gui_cfg_bld_device_name')
+                        st.number_input('AI + encoder sample rate (Hz)', key='gui_cfg_bld_daq_ai_sr', min_value=1.0, format='%.f')
+                        st.number_input('AO + DO sample rate (Hz)', key='gui_cfg_bld_daq_ao_sr', min_value=1.0, format='%.f')
+                    with st.expander('Strain / ATI channels', expanded=False):
+                        st.text_input('SG AI channels (comma-separated)', key='gui_cfg_bld_SG_chan')
+                        st.text_input('SG channel names (comma-separated)', key='gui_cfg_bld_SG_name')
+                    with st.expander('Stim monitor AI (optional)', expanded=False):
+                        st.text_input(
+                            'Stim monitor AI channels (comma-separated; empty = none)',
+                            key='gui_cfg_bld_stim_monitor_chan',
+                        )
+                        st.text_input('Stim monitor channel names (comma-separated)', key='gui_cfg_bld_stim_monitor_name')
+                    with st.expander('Default timing, ramp & motion', expanded=False):
+                        st.number_input('waitbefore (s)', key='gui_cfg_bld_waitbefore', min_value=0.0, format='%.6g')
+                        st.number_input('waitafter (s)', key='gui_cfg_bld_waitafter', min_value=0.0, format='%.6g')
+                        st.number_input('rampdur (s)', key='gui_cfg_bld_rampdur', min_value=0.0, format='%.6g')
+                        st.number_input('prepoststim_dur (s)', key='gui_cfg_bld_prepoststim_dur', min_value=0.0, format='%.6g')
+                        st.number_input('prepoststim_sep (s)', key='gui_cfg_bld_prepoststim_sep', format='%.6g')
+                        st.number_input('prestim_time', key='gui_cfg_bld_prestim_time', format='%.6g')
+                        st.number_input('poststim_time', key='gui_cfg_bld_poststim_time', format='%.6g')
+                        st.number_input('amp_step_vel', key='gui_cfg_bld_amp_step_vel', min_value=1, step=1, format='%d')
+                        st.selectbox(
+                            'ramp_mode_default',
+                            options=['linear', 'exponential'],
+                            key='gui_cfg_bld_ramp_mode_default',
+                        )
+                        st.caption('`units` / `unit_rules` dicts stay from the template unless you edit the generated `.py` file.')
                 st.checkbox(
                     'Overwrite if a `.py` file with that name already exists',
                     key='gui_cfg_build_overwrite',
@@ -5110,136 +6060,66 @@ def main():
                                             err,
                                         )
                                     else:
-                                        st.session_state['gui_cfg_mod'] = out_stem
+                                        st.session_state['gui_load_cfg_select'] = out_stem
                                         st.success(f'Wrote and loaded `{out_stem}`')
                                         st.rerun()
 
-    if _show_hw_config_section() and _show_data_path_section():
-        st.divider()
-        st.caption(
-            '**Data file path** (section 2, next) is separate from **hardware configuration** (section 1): the `.py` '
-            'module does not set your HDF5 save location.'
-        )
-
-    if _show_data_path_section():
+    if _show_data:
+        _data_host = _setup_right if _setup_right is not None else st
         _ensure_hw_config_session_defaults()
-        st.subheader('2 · Data file path')
-        st.caption('HDF5 save location (separate from the hardware `.py` module).')
+        _data_host.subheader('2 · Data file path')
         _sw_dp = _stepwise_on_data_file_path_step()
-        with st.container(border=True):
-            if _sw_dp:
-                st.caption('Red button sets the path; it also reloads the module if you changed it in step 1.')
+        with _data_host.container(border=True):
             df_col, fn_col = st.columns(2)
             with df_col:
-                st.text_input(
-                    'Data folder',
-                    key='gui_data_folder',
-                    placeholder=r'Example: C:\Users\me\Data\Experiments',
-                    help=DATA_FOLDER_HELP,
-                )
+                _cur_df = str(st.session_state.get('gui_data_folder') or '').strip()
+                _render_data_folder_dropdown(key_suffix='main')
+                if st.button('Browse…', key='gui_data_folder_browse', use_container_width=True, type='secondary'):
+                    _init_dir = _cur_df or _ROOT
+                    _picked_dir, _err_dir = _pick_folder_with_dialog(_init_dir)
+                    if _err_dir:
+                        st.warning(f'Folder dialog unavailable: {_err_dir}')
+                    elif _picked_dir:
+                        _norm_p = os.path.normpath(_picked_dir)
+                        _store_selected_data_folder(_norm_p)
+                        _dd_main = 'gui_data_folder_dd_main'
+                        st.session_state[_dd_main] = _norm_p
+                        st.session_state[f'{_dd_main}_synced_from_gui_data_folder'] = _norm_p
+                        st.rerun()
+                _preview_out = _compose_output_h5_path().strip()
+                _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
+                if _preview_out:
+                    st.caption(f'Save path: `{_preview_out}`')
+                elif _preview_folder:
+                    st.caption(f'Save path: `{_preview_folder}`')
             with fn_col:
                 st.text_input(
-                    'Data file name',
+                    ' ',
                     key='gui_data_filename',
-                    placeholder='my_experiment.h5',
+                    placeholder='datafilename.h5',
                     help=DATA_FILE_NAME_HELP,
+                    label_visibility='collapsed',
                 )
             full_out = _compose_output_h5_path()
             if full_out:
-                st.caption(f'**Save path (base name):** `{full_out}`')
-                st.caption(
-                    'If this file already exists when you **Run** or save, the app writes to a **new** name with a numeric suffix '
-                    '(e.g. `_001`) so nothing is overwritten — the preview above does not show that suffix until after save.'
-                )
-            else:
-                st.caption('Enter a file name to preview the full path.')
-            _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
-            if _cfg_mode == 'Load existing':
-                _load_lbl = 'Set data file path' if _sw_dp else 'Load hardware configuration and data path'
-                _load_hlp = (
-                    'Sets save path; reloads the hardware module if needed. Does not start DAQ.'
-                    if _sw_dp
-                    else 'Loads the module from section 1 and sets the save path. Does not start DAQ; re-click after changes.'
-                )
-                if _load_save_button(_load_lbl, key='gui_btn_load_config', help=_load_hlp):
-                    _ensure_hw_config_session_defaults()
-                    eff = effective_load_module_name(
-                        typed=str(st.session_state.get('gui_cfg_mod') or ''),
-                        selected=str(st.session_state.get('gui_load_cfg_select') or ''),
-                    )
-                    if not eff:
-                        _mods_here = discover_config_modules(_ROOT)
-                        if not _mods_here:
-                            _st_error_actions(
-                                'No hardware config modules found.',
-                                ['Add a `.py` config module in the project folder'],
-                            )
-                        else:
-                            _st_error_actions(
-                                'No config module resolved.',
-                                ['Pick a module from the list in Step 1', 'Or type a name in Override'],
-                            )
-                    else:
-                        b0 = st.session_state.get('bender')
-                        need_hw_reload = b0 is None or not _selected_config_matches_bender(b0, eff)
-                        err = _apply_loaded_config_module(eff) if need_hw_reload else None
-                        if err:
-                            _st_error_detail(
-                                'Hardware config load failed.',
-                                ['Check module name', 'Fix errors in Details'],
-                                err,
-                            )
-                        else:
-                            perr = _sec1_apply_composed_path_to_bender()
-                            if perr:
-                                if need_hw_reload:
-                                    _st_error_detail(
-                                        'Hardware OK; path failed.',
-                                        ['Fix folder name', 'Fix file name'],
-                                        perr,
-                                    )
-                                else:
-                                    _st_error_detail(
-                                        'Data path not applied.',
-                                        ['Fix folder name', 'Fix file name'],
-                                        perr,
-                                    )
-                            else:
-                                if _sw_dp and not need_hw_reload:
-                                    st.toast('Data file path set.')
-                                elif _sw_dp and need_hw_reload:
-                                    st.toast('Hardware configuration loaded and data file path set.')
-                                else:
-                                    st.toast('Hardware configuration and data file path applied.')
-                                if need_hw_reload:
-                                    st.success(f'Loaded `{_normalize_config_module_name(eff)}`')
-                                else:
-                                    st.success('Data file path set on the experiment object.')
-                                st.rerun()
-            if st.session_state.get('bender') is not None and _cfg_mode == 'Build new':
-                _apply_lbl = 'Set data file path' if _sw_dp else 'Apply data file path'
-                _apply_hlp = (
-                    'Copy **Data folder** and **Data file name** to the experiment save path (after **Write config file and load**).'
-                    if _sw_dp
-                    else (
-                        'Copy **Data folder** and **Data file name** to the experiment save path. Use after **Write config file and load** '
-                        'when you change where files should be saved.'
-                    )
-                )
-                if _load_save_button(_apply_lbl, key='gui_sec1_apply_paths', help=_apply_hlp):
-                    perr = _sec1_apply_composed_path_to_bender()
-                    if perr:
-                        _st_error_detail(
-                            'Data path not applied.',
-                            ['Fix folder name', 'Fix file name'],
-                            perr,
-                        )
-                    else:
-                        st.toast('Data file path set.' if _sw_dp else 'Data file path applied.')
-                        st.rerun()
+                # Show "selected" state immediately; committing to the in-memory experiment still requires "Apply setup".
+                b0 = st.session_state.get('bender')
+                applied = str(getattr(b0, 'outputfile', '') or '').strip() if b0 is not None else ''
+                if applied and _paths_equal_norm(applied, full_out):
+                    st.success(f'**Save path:** `{full_out}`')
+                else:
+                    st.success(f'**Save path:** `{full_out}` (selected, not applied yet — click **Apply setup**)')
             if _data_path_apply_dirty():
                 _soft_apply_reminder()
             _touch_data_path_baseline_if_clean()
+
+        _apply_hlp = (
+            'Applies selected hardware config and current data path to the experiment object. Does not start DAQ.'
+            if _sw_dp
+            else 'Applies hardware config and data path from setup sections. Does not start DAQ.'
+        )
+        if _load_save_button('Apply setup', key='gui_setup_apply_bottom', help=_apply_hlp):
+            _apply_setup_action(sw_dp=bool(_sw_dp))
 
     if 'bender' not in st.session_state:
         st.stop()
@@ -5247,6 +6127,7 @@ def main():
     b: Bender = st.session_state['bender']
     _ensure_apply_tracking_bender(b)
     _init_biometrics_session_state(b, force=False)
+    _flush_pending_bio_prof_rho_sync()
     _sync_biometric_flags_from_session(b)
     _ensure_review_file_selection(
         _candidate_review_files(_output_path_anchor_for_review(b)) if _output_path_anchor_for_review(b) else []
@@ -5256,26 +6137,24 @@ def main():
     _consume_pending_protocol_template(test_types)
 
     if _show_full_sec2():
-        st.subheader('3 · Biometrics')
+        st.subheader('3 · Measurements')
         if _bio_apply_dirty():
             _soft_apply_reminder()
 
-        st.markdown('**Biometrics templates**')
-        st.caption(
-            'Save or reload this section to a file in your **Data folder** (**section 2**). After **Load biometrics**, use **Apply** '
-            'in each block — **Specimen identity**, **Intrinsic**, **Experimental conditions**, **Clamp**, **Profile** — or **Apply all**.'
-        )
-        _df_check = str(st.session_state.get('gui_data_folder') or '').strip()
-        _bio_tpl_dir = _shared_experiment_dir()
-        if not (_df_check and os.path.isdir(os.path.normpath(_df_check))):
-            st.caption(
-                f'**Data folder** is not set or not found on disk—listing saved template files from `{_bio_tpl_dir}` until '
-                '**section 2** points to a valid folder.'
+        with st.expander('About the measurements', expanded=False):
+            st.markdown(
+                '- Use this section to set specimen identity, intrinsic dimensions, experimental conditions, clamp geometry, and profile/inertial settings.\n'
+                '- **Apply** buttons commit the current values to the in-memory experiment object.\n'
+                '- **Apply all biometrics** commits every block at once.\n'
+                '- Biometrics templates are separate from protocol templates.'
             )
+
         if bf := st.session_state.pop('gui_biometrics_load_feedback', None):
             ok_bf, txt_bf = bf
             if ok_bf:
                 st.success(txt_bf)
+            elif str(txt_bf).strip() == 'Choose a biometrics file first.':
+                st.warning(txt_bf)
             else:
                 _st_error_detail(
                     'Biometrics load failed.',
@@ -5292,68 +6171,69 @@ def main():
                     ['Check name and folder', 'Read Details'],
                     txt_s,
                 )
-        _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
-        _bio_opts: list = [None] + _bio_tpl_list
-        _bio_pick = st.selectbox(
-            'Biometrics file to load',
-            _bio_opts,
-            format_func=_biometrics_template_option_label,
-            key='gui_biometrics_template_select',
-        )
-        c_bl, c_bs = st.columns(2)
-        with c_bl:
+        with st.expander('Load / save biometrics templates', expanded=False):
+            st.caption('Optional: reuse biometrics snapshots (`.json`) in your selected data folder.')
+            _df_check = str(st.session_state.get('gui_data_folder') or '').strip()
+            _bio_tpl_dir = _shared_experiment_dir()
+            if not (_df_check and os.path.isdir(os.path.normpath(_df_check))):
+                st.caption(
+                    f'**Data folder** is not set or not found on disk—listing saved template files from `{_bio_tpl_dir}` until '
+                    '**section 2** points to a valid folder.'
+                )
+            _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
+            _bio_opts: list = [None] + _bio_tpl_list
+            _bio_pick = st.selectbox(
+                'Biometrics file to load',
+                _bio_opts,
+                format_func=_biometrics_template_option_label,
+                key='gui_biometrics_template_select',
+            )
             if _load_save_button(
                 'Load biometrics into form',
                 key='gui_biometrics_btn_load',
-                help='Fills biometrics widgets from the file. Use **Apply** in each block (identity, intrinsic, experimental conditions, clamp, profile) or **Apply all**.',
+                help='Fills biometrics widgets from the file. Use **Apply** in each block (identity, intrinsic, conditions, clamp, profile) or **Apply all**.',
             ):
                 if not _bio_pick:
                     st.session_state['gui_biometrics_load_feedback'] = (False, 'Choose a biometrics file first.')
                 else:
                     st.session_state['gui_pending_biometrics_path'] = _bio_pick
                 st.rerun()
-        with c_bs:
-            st.caption('Independent of **protocol templates** in **section 4**.')
 
-        st.text_input('Save biometrics as (name)', key='gui_biometrics_new_name', placeholder='e.g. Zebrafish adult default')
-        st.text_area(
-            'Description (optional)',
-            key='gui_biometrics_new_desc',
-            height=50,
-            placeholder='Optional note saved inside the file.',
-            help='Stored in the file metadata when you save.',
-        )
-        st.checkbox('Overwrite if same file name exists', key='gui_biometrics_overwrite')
-        if _load_save_button('Save biometrics', key='gui_biometrics_btn_save'):
-            _bn = str(st.session_state.get('gui_biometrics_new_name') or '').strip()
-            _bd = str(st.session_state.get('gui_biometrics_new_desc') or '').strip()
-            _bst = sanitize_biometrics_filename_stem(_bn or 'biometrics')
-            _bout = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_bst}.json'))
-            try:
-                if os.path.isfile(_bout) and not bool(st.session_state.get('gui_biometrics_overwrite')):
-                    st.session_state['gui_biometrics_save_feedback'] = (
-                        False,
-                        f'File already exists: `{_bout}`. Enable **Overwrite** or change the name.',
-                    )
-                else:
-                    os.makedirs(os.path.dirname(_bout) or '.', exist_ok=True)
-                    save_biometrics_template(
-                        _bout,
-                        name=_bn or _bst,
-                        description=_bd,
-                        session_state=st.session_state,
-                    )
-                    st.session_state['gui_biometrics_save_feedback'] = (True, f'Saved `{_bout}`')
-            except Exception as e:
-                st.session_state['gui_biometrics_save_feedback'] = (False, f'{type(e).__name__}: {e}')
-            st.rerun()
+            st.text_input('Save biometrics as (name)', key='gui_biometrics_new_name', placeholder='e.g. Zebrafish adult default')
+            st.text_area(
+                'Description (optional)',
+                key='gui_biometrics_new_desc',
+                height=50,
+                placeholder='Optional note saved inside the file.',
+                help='Stored in the file metadata when you save.',
+            )
+            st.checkbox('Overwrite if same file name exists', key='gui_biometrics_overwrite')
+            if _load_save_button('Save biometrics', key='gui_biometrics_btn_save'):
+                _bn = str(st.session_state.get('gui_biometrics_new_name') or '').strip()
+                _bd = str(st.session_state.get('gui_biometrics_new_desc') or '').strip()
+                _bst = sanitize_biometrics_filename_stem(_bn or 'biometrics')
+                _bout = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_bst}.json'))
+                try:
+                    if os.path.isfile(_bout) and not bool(st.session_state.get('gui_biometrics_overwrite')):
+                        st.session_state['gui_biometrics_save_feedback'] = (
+                            False,
+                            f'File already exists: `{_bout}`. Enable **Overwrite** or change the name.',
+                        )
+                    else:
+                        os.makedirs(os.path.dirname(_bout) or '.', exist_ok=True)
+                        save_biometrics_template(
+                            _bout,
+                            name=_bn or _bst,
+                            description=_bd,
+                            session_state=st.session_state,
+                        )
+                        st.session_state['gui_biometrics_save_feedback'] = (True, f'Saved `{_bout}`')
+                except Exception as e:
+                    st.session_state['gui_biometrics_save_feedback'] = (False, f'{type(e).__name__}: {e}')
+                st.rerun()
 
         st.divider()
         st.markdown('**Specimen identity**')
-        st.caption(
-            'Export metadata (`genus_species`, `specimen_id`) and notebook-style `fishcode` (mirrors specimen ID). '
-            'Click **Apply specimen identity** to commit fields (same as pressing Enter in each box).'
-        )
         sub_bio_id = False
         with st.form('bio_form_identity', clear_on_submit=False):
             id1, id2 = st.columns(2)
@@ -5384,7 +6264,7 @@ def main():
         st.divider()
         st.session_state.setdefault('gui_bio_hide', False)
         _bio_section_collapsed = bool(st.session_state.get('gui_bio_hide')) and _nav_route() != 'stepwise'
-        s_bio_intr = s_bio_exp = s_bio_clamp = s_bio_prof = s_bio_all = False
+        s_bio_section = s_bio_all = False
         if _bio_section_collapsed:
             st.caption(
                 'Section body hidden. Uncheck **Hide section** at the bottom to edit biometrics inputs.'
@@ -5401,25 +6281,23 @@ def main():
                 st.toast('Biometrics applied.')
         else:
             with st.form('bio_main_form', clear_on_submit=False):
-                st.markdown('### Intrinsic biometrics')
-                st.caption(
-                    'Whole-specimen lengths and mass. **Apply intrinsic biometrics** also refreshes protocol metadata for identity '
-                    '(same as **Apply specimen identity** above). Offsets, density, and temperatures are in the blocks below.'
-                )
-                L1, L2 = st.columns(2)
-                with L1:
-                    st.number_input('Total length TL (`fishlen_TL`)', min_value=0.0, format='%.6g', key='bio_fishlen_TL')
-                with L2:
-                    st.number_input('Total length SL (`fishlen_SL`)', min_value=0.0, format='%.6g', key='bio_fishlen_SL')
-                st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
-
-                st.divider()
-                st.markdown('### Experimental conditions')
-                st.caption(
-                    'Environmental context for the trial (not specimen geometry). Stored on the experiment object and in HDF5 protocol metadata.'
-                )
-                t1, t2 = st.columns(2)
-                with t1:
+                bio_l, bio_r = st.columns(2, gap='large')
+                with bio_l:
+                    st.markdown('### Specimen measurements & conditions')
+                    st.number_input(
+                        'Total Length (`fishlen_TL`, mm)',
+                        min_value=0.0,
+                        format='%.6g',
+                        key='bio_fishlen_TL',
+                    )
+                    st.number_input(
+                        'Standard Length (`fishlen_SL`, mm)',
+                        min_value=0.0,
+                        format='%.6g',
+                        key='bio_fishlen_SL',
+                    )
+                    st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
+                    st.divider()
                     st.number_input(
                         'Room temperature (`temp_C_room`, °C)',
                         min_value=-5.0,
@@ -5427,7 +6305,6 @@ def main():
                         format='%.3f',
                         key='bio_temp_room',
                     )
-                with t2:
                     st.number_input(
                         'Tank / bath temperature (`temp_C_tank`, °C)',
                         min_value=-5.0,
@@ -5435,49 +6312,35 @@ def main():
                         format='%.3f',
                         key='bio_temp_tank',
                     )
-                st.text_input(
-                    'Prep condition',
-                    key='bio_prep_condition',
-                    placeholder='e.g. anesthetized, recovered 24 h, fasted',
-                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
-                )
+                    st.text_input(
+                        'Prep condition',
+                        key='bio_prep_condition',
+                        placeholder='e.g. anesthetized, recovered 24 h, fasted',
+                        help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+                    )
 
-                st.divider()
-                st.markdown('### Clamp geometry')
-                st.caption(
-                    'Clamp spacing, bend location along the body, cross-section at the test segment, and vertical/horizontal offsets '
-                    '(`dvert`, `dhoriz`) for strain ↔ motor mapping.'
-                )
-                st.number_input(
-                    'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`)',
-                    min_value=0.001,
-                    format='%.6g',
-                    key='bio_dclamp',
-                )
-                st.number_input(
-                    'Along-body distance to center of clamped test segment (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='bio_dbend',
-                    help=BIO_DBEND_FIELD_HELP,
-                )
-                x1, x2 = st.columns(2)
-                with x1:
+                with bio_r:
+                    st.markdown('### Clamp geometry')
+                    st.number_input(
+                        'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
+                        min_value=0.001,
+                        format='%.6g',
+                        key='bio_dclamp',
+                    )
+                    st.number_input(
+                        'Along-body distance to center of clamped test segment (mm)',
+                        min_value=0.0,
+                        format='%.6g',
+                        key='bio_dbend',
+                        help=BIO_DBEND_FIELD_HELP,
+                    )
                     st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
-                with x2:
                     st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
-                o1, o2 = st.columns(2)
-                with o1:
                     st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
-                with o2:
                     st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
 
                 st.divider()
                 st.markdown('### Mounted body profile (inertial model)')
-                st.caption(
-                    'Tapered outline between proximal and distal cross-sections, **specimen density**, outline length, and integration. '
-                    'Density feeds the profiled inertial model (and related frustum-style inertia calculations).'
-                )
                 st.selectbox(
                     'Typical density (sets g/mm³ on Apply)',
                     BIO_DENSITY_PRESET_LABELS,
@@ -5533,21 +6396,13 @@ def main():
                         'profile above when correcting measured torque.'
                     ),
                 )
-                st.caption(
-                    'This checkbox is saved on the experiment object when you click any **Apply** below (including **Apply all biometrics**).'
-                )
-                st.caption(
-                    '**Apply** commits every field in this panel at once—you can use **Apply** instead of pressing Enter in each box.'
-                )
-                br1 = st.columns(4)
+                br1 = st.columns(2)
                 with br1[0]:
-                    s_bio_intr = st.form_submit_button('Apply intrinsic', use_container_width=True)
-                with br1[1]:
-                    s_bio_exp = st.form_submit_button('Apply conditions', use_container_width=True)
-                with br1[2]:
-                    s_bio_clamp = st.form_submit_button('Apply clamp', use_container_width=True)
-                with br1[3]:
-                    s_bio_prof = st.form_submit_button('Apply profile', use_container_width=True)
+                    s_bio_section = st.form_submit_button(
+                        'Apply section',
+                        use_container_width=True,
+                        help='Applies specimen identity, measurements/conditions, clamp geometry, profile, and inertial setting.',
+                    )
                 s_bio_all = st.form_submit_button(
                     'Apply all biometrics',
                     type='primary',
@@ -5557,18 +6412,9 @@ def main():
                         '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
                     ),
                 )
-        if s_bio_intr:
-            _apply_intrinsic_biometrics_to_bender(b)
-            st.toast('Intrinsic biometrics applied.')
-        elif s_bio_exp:
-            _apply_experimental_conditions_to_bender(b)
-            st.toast('Experimental conditions applied.')
-        elif s_bio_clamp:
-            _apply_clamp_geometry_to_bender(b)
-            st.toast('Clamp geometry applied.')
-        elif s_bio_prof:
-            _apply_mounted_profile_inertial_to_bender(b)
-            st.toast('Profile / inertia model applied.')
+        if s_bio_section:
+            _apply_all_biometrics_to_bender(b)
+            st.toast('Biometrics section applied.')
         elif s_bio_all:
             _apply_all_biometrics_to_bender(b)
             st.toast('Biometrics applied.')
@@ -5586,34 +6432,21 @@ def main():
         st.divider()
         st.subheader('4 · Experiment type & parameters')
 
-        st.markdown('**Protocol templates (load)**')
-        st.caption(
-            'Lists saved protocol files in your **Data folder** (**section 2**). **Load template into form** sets **experiment type** '
-            'and procedure fields; click **Apply** (below or in **section 6**) to copy onto the Bender object. Does not '
-            'change **section 3** biometrics—use **Load biometrics** there or enter fields manually.'
-        )
-        if fb := st.session_state.pop('gui_protocol_load_feedback', None):
-            ok_fb, txt_fb = fb
-            if ok_fb:
-                st.success(txt_fb)
-            else:
-                _st_error_detail(
-                    'Protocol load failed.',
-                    ['Check template file', 'Read Details'],
-                    txt_fb,
-                )
-        _tpl_folder_top = _shared_experiment_dir()
-        _tpl_files_top = list_template_files(_tpl_folder_top)
-        _tpl_options_top: list = [None] + _tpl_files_top
-        _tpl_pick_top = st.selectbox(
-            'Template to load',
-            _tpl_options_top,
-            format_func=_protocol_template_option_label,
-            key='gui_protocol_template_select',
-            help='Procedure files saved from this app (`.json` in the data folder).',
-        )
-        c_tl_top, c_ts_top = st.columns(2)
-        with c_tl_top:
+        with st.expander('Load protocol template (optional)', expanded=False):
+            st.caption(
+                'Templates set experiment type + procedure fields only (not biometrics). '
+                'Use **Apply procedure** after loading.'
+            )
+            _tpl_folder_top = _shared_experiment_dir()
+            _tpl_files_top = list_template_files(_tpl_folder_top)
+            _tpl_options_top: list = [None] + _tpl_files_top
+            _tpl_pick_top = st.selectbox(
+                'Template to load',
+                _tpl_options_top,
+                format_func=_protocol_template_option_label,
+                key='gui_protocol_template_select',
+                help='Procedure files saved from this app (`.json` in the data folder).',
+            )
             if _load_save_button(
                 'Load template into form',
                 key='gui_protocol_btn_load',
@@ -5624,21 +6457,21 @@ def main():
                 else:
                     st.session_state['gui_pending_protocol_template_path'] = _tpl_pick_top
                 st.rerun()
-        with c_ts_top:
-            st.caption('Same directory as your **Data folder** and **Save** in **Procedure fields**.')
-
-        st.divider()
-
+        if fb := st.session_state.pop('gui_protocol_load_feedback', None):
+            ok_fb, txt_fb = fb
+            if ok_fb:
+                st.success(txt_fb)
+            else:
+                _st_error_detail(
+                    'Protocol load failed.',
+                    ['Check template file', 'Read Details'],
+                    txt_fb,
+                )
         tt = st.selectbox('Experiment type (test_type)', test_types, key='test_type_select')
         b.test_type = tt
 
         st.session_state.setdefault('gui_exp_hide', False)
-        st.caption(
-            'Procedure widgets live inside **Procedure fields** below. Use **Apply procedure** there (or in **section 6**) '
-            'to copy them onto the experiment object—**Apply** commits typed values without pressing Enter in each field. '
-            'Collapsing only hides the panel. If anything looks out of sync, use **Load hardware configuration and data path** '
-            'again (**sections 1–2**, load existing).'
-        )
+        st.caption('Set procedure fields below, then click **Apply procedure**.')
 
         updates = {}
         sub_proc_apply = False
@@ -5694,13 +6527,33 @@ def main():
                                 'Stim routing overrides (advanced)',
                                 help_text=ISOMETRIC_STIM_OVERRIDES_HELP,
                             )
+                        elif key in ('bilateral_mirror_motor',):
+                            updates[key] = _render_field(
+                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                            )
+                        elif key == 'isometric_mirror_target_left':
+                            updates[key] = _render_field(
+                                b,
+                                key,
+                                'optional_float',
+                                'Bilateral LEFT-hold target (same units as isometric mode)',
+                                help_text=ISOMETRIC_FIELD_HELP.get(key),
+                            )
+                        elif key == 'isometric_mirror_target_right':
+                            updates[key] = _render_field(
+                                b,
+                                key,
+                                'optional_float',
+                                'Bilateral RIGHT-hold target (same units as isometric mode)',
+                                help_text=ISOMETRIC_FIELD_HELP.get(key),
+                            )
                         elif key == 'recruitment':
                             skr = _widget_key('recruitment')
                             cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
                             if skr not in st.session_state:
                                 st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
                             updates[key] = st.selectbox(
-                                'recruitment',
+                                'Recruitment',
                                 list(RECRUITMENT_OPTIONS),
                                 key=skr,
                                 help=RECRUITMENT_FIELD_HELP,
@@ -5710,13 +6563,9 @@ def main():
                             if skl not in st.session_state:
                                 st.session_state[skl] = str(_get_session_value(b, key) or '')
                             updates[key] = st.text_input(LATERAL_MODE_LABEL, key=skl, help=ISOMETRIC_FIELD_HELP.get('lateral_mode'))
-                        elif key in ('bilateral_mirror_motor',):
-                            updates[key] = _render_field(
-                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOMETRIC_FIELD_HELP.get(key)
-                            )
                         elif key == 'bilateral_sequential_left_frac':
                             updates[key] = _render_field(
-                                b, key, 'float', key, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                                b, key, 'float', 'Left-side fraction (0-1)', help_text=ISOMETRIC_FIELD_HELP.get(key)
                             )
                         elif key == 'isometric_mode':
                             modes = list(ALL_AMPS_MODE_OPTIONS)
@@ -5725,7 +6574,7 @@ def main():
                             if skm not in st.session_state:
                                 st.session_state[skm] = cur_m if cur_m in modes else 'strain'
                             updates[key] = st.selectbox(
-                                'isometric_mode (how to interpret isometric_initial / isometric_final)',
+                                'Isometric mode (units for initial/final)',
                                 modes,
                                 key=skm,
                                 format_func=_format_strain_or_amp_mode,
@@ -5767,8 +6616,9 @@ def main():
                                     updates[key] = None
                         else:
                             kind = 'bool' if 'randomize' in key else 'str'
+                            lbl = key.replace('_', ' ')
                             updates[key] = _render_field(
-                                b, key, kind, key, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                                b, key, kind, lbl, help_text=ISOMETRIC_FIELD_HELP.get(key)
                             )
 
                 elif tt == 'isovelocity':
@@ -5799,13 +6649,17 @@ def main():
                                 'Stim routing overrides (advanced)',
                                 help_text=ISOVELOCITY_STIM_OVERRIDES_HELP,
                             )
+                        elif key in ('bilateral_mirror_motor',):
+                            updates[key] = _render_field(
+                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                            )
                         elif key == 'recruitment':
                             skr = _widget_key('recruitment')
                             cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
                             if skr not in st.session_state:
                                 st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
                             updates[key] = st.selectbox(
-                                'recruitment',
+                                'Recruitment',
                                 list(RECRUITMENT_OPTIONS),
                                 key=skr,
                                 help=RECRUITMENT_FIELD_HELP,
@@ -5817,13 +6671,9 @@ def main():
                             updates[key] = st.text_input(
                                 LATERAL_MODE_LABEL, key=skl, help=ISOVELOCITY_FIELD_HELP.get('lateral_mode')
                             )
-                        elif key in ('bilateral_mirror_motor',):
-                            updates[key] = _render_field(
-                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                            )
                         elif key == 'bilateral_sequential_left_frac':
                             updates[key] = _render_field(
-                                b, key, 'float', key, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                                b, key, 'float', 'Left-side fraction (0-1)', help_text=ISOVELOCITY_FIELD_HELP.get(key)
                             )
                         elif key == 'isovelocity_starting_strain_mode':
                             modes = list(ALL_AMPS_MODE_OPTIONS)
@@ -5833,7 +6683,7 @@ def main():
                                 st.session_state[skm] = cur_m if cur_m in modes else 'strain'
                             updates[key] = st.selectbox(
                                 ISOVELOCITY_WIDGET_LABEL.get(
-                                    key, 'isovelocity_starting_strain_mode (unit for isovelocity_starting_strain)'
+                                    key, 'Starting posture mode'
                                 ),
                                 modes,
                                 key=skm,
@@ -5876,7 +6726,7 @@ def main():
                     if st.session_state[sk_cal] not in bases:
                         st.session_state[sk_cal] = bases[0]
                     updates['calibration_base_test_type'] = st.selectbox(
-                        'calibration_base_test_type', bases, key=sk_cal
+                        'Calibration base test type', bases, key=sk_cal
                     )
                     st.info(
                         'Calibration runs the **base** motion protocol. Set **test_type** to that base '
@@ -5888,59 +6738,76 @@ def main():
                         sko = _widget_key(key)
                         if sko not in st.session_state:
                             st.session_state[sko] = str(_get_session_value(b, key) or '')
-                        updates[key] = st.text_input(key, key=sko)
+                        updates[key] = st.text_input(key.replace('_', ' '), key=sko)
 
                 elif tt in MOTION_TYPES:
                     st.markdown('**Motion-series parameters** (procedure-specific)')
                     if tt == 'dynamic':
-                        st.caption(
-                            'Timeline length follows **cycles** (freq × cycles_per_step + end cycles), not **Duration**. '
-                            'If `period_by_cycle` is not set yet, call **organize_cycles** from a notebook/script after **Apply**.'
-                        )
+                        st.info('Dynamic timing uses cycles (not Duration).')
                     elif tt == 'step_change':
-                        st.caption('Motion length is computed inside **make_cycles_step_change**; **Duration** does not apply.')
+                        st.info('Step-change timing is derived from step-change cycle parameters.')
                     fields = _motion_parameter_rows(tt)
-                    for name, kind, label in fields:
-                        updates[name] = _render_field(
-                            b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
-                        )
+                    _stim_field_names = {
+                        'stim_cycles_in_step',
+                        'is_stim',
+                        'stim_pulse_rate',
+                        'S1volts',
+                        'S2volts',
+                    }
+                    _motion_fields = [row for row in fields if row[0] not in _stim_field_names]
+                    _stim_fields = [row for row in fields if row[0] in _stim_field_names]
+                    mcol, scol = st.columns([1.35, 1.0], gap='large')
+                    with mcol:
+                        st.markdown('**Motion controls**')
+                        for name, kind, label in _motion_fields:
+                            updates[name] = _render_field(
+                                b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
+                            )
+                    with scol:
+                        st.markdown('**Stimulation**')
+                        for name, kind, label in _stim_fields:
+                            updates[name] = _render_field(
+                                b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
+                            )
 
                 else:
                     st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
 
                 st.divider()
-                st.markdown('**Save current procedure as template**')
-                st.caption(
-                    '**Save** stores the current **experiment type** and all **procedure fields** for that type '
-                    '(dynamic / sweeps / steps / isometric / isovelocity / calibration). **Section 2** (data path) and '
-                    '**section 3** biometrics are not included—use **Save biometrics** there. For **calibration**, the template '
-                    'can also embed the **base protocol** from the Bender object (e.g. frequencies & strains) if you **Apply** '
-                    'that base type before saving. Use **Protocol templates (load)** above, then **Apply** and **Run**.'
+                _show_tpl_save = st.checkbox(
+                    'Show "Save procedure as template"',
+                    key='gui_protocol_show_save_template',
+                    value=False,
                 )
-                st.text_input(
-                    'Template name',
-                    key='gui_protocol_new_name',
-                    placeholder='e.g. Protocol A (any test_type)',
-                )
-                st.text_area(
-                    'Description (optional)',
-                    key='gui_protocol_new_desc',
-                    height=70,
-                    placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz × strains (strain_pct); or calibration + base',
-                )
-                st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
-                st.caption(
-                    '**Apply procedure** or **Save template** commits all procedure fields above at once (no Enter in each box).'
-                )
-                _pc1, _pc2 = st.columns(2)
-                with _pc1:
+                if _show_tpl_save:
+                    st.markdown('**Save procedure as template**')
+                    st.text_input(
+                        'Template name',
+                        key='gui_protocol_new_name',
+                        placeholder='e.g. Protocol A (any test_type)',
+                    )
+                    st.text_area(
+                        'Description (optional)',
+                        key='gui_protocol_new_desc',
+                        height=70,
+                        placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz x strains; or calibration + base',
+                    )
+                    st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
+                    _pc1, _pc2 = st.columns(2)
+                    with _pc1:
+                        sub_proc_apply = st.form_submit_button(
+                            'Apply procedure',
+                            use_container_width=True,
+                            help='Copy procedure fields onto the experiment object (not **Run experiment**).',
+                        )
+                    with _pc2:
+                        sub_proc_save = st.form_submit_button('Save template', use_container_width=True)
+                else:
                     sub_proc_apply = st.form_submit_button(
                         'Apply procedure',
                         use_container_width=True,
                         help='Copy procedure fields onto the experiment object (not **Run experiment**).',
                     )
-                with _pc2:
-                    sub_proc_save = st.form_submit_button('Save template', use_container_width=True)
 
             if sub_proc_apply:
                 _apply_procedure_form_to_bender(b, updates, tt)
@@ -5988,59 +6855,71 @@ def main():
         )
 
         st.divider()
-        st.session_state.setdefault('gui_sec4_hide', False)
-        st.subheader('5 · Experiment preview (table & plot, no DAQ)')
-        st.caption(
-            'Uses the same motion math as a real run for **commanded** angle / velocity. '
-            '**Refresh preview** uses procedure values after you click **Apply procedure** inside **section 4 · Procedure fields** '
-            '(that submit commits typed numbers without pressing Enter in each box). '
-            'For **dynamic**, preview calls **organize_cycles** and updates `period_by_cycle`, so a following **Run** '
-            'matches the preview if you do not overwrite those arrays elsewhere. '
-            'Set **test_segment_length_mm** and **xsec_width** in **section 3** (or **Apply** there) so preview matches strain geometry.'
-        )
         if _procedure_apply_dirty() or _bio_apply_dirty():
             _soft_apply_reminder()
-        if st.session_state.get('gui_sec4_hide'):
-            st.caption('Preview panel hidden. Uncheck **Hide section** below to show controls and plots.')
-        else:
-            c_ap4, _ = st.columns([1, 4])
-            with c_ap4:
-                if st.button(
-                    'Apply (procedure + biometrics)',
-                    key='gui_preview_apply',
-                    help=(
-                        'Procedure: full **Apply procedure** sync. Biometrics: flags + identity/metadata from the form (same as '
-                        '**Apply specimen identity** + intrinsic metadata). For clamp/profile numbers, use **section 3** Apply.'
-                    ),
-                ):
-                    _sync_biometric_flags_from_session(b)
-                    _sync_genus_species_to_bender(b)
-                    _apply_procedure_form_to_bender(b, updates, tt)
-                    st.toast('Settings applied.')
-            pv_on = st.checkbox('Show last preview', value=True, key='gui_show_preview')
-            pv_pts = st.slider('Preview plot resolution (max points)', 400, 12000, 6000, step=200, key='gui_preview_pts')
-            if st.button('Refresh preview'):
-                _sync_biometric_flags_from_session(b)
-                _sync_genus_species_to_bender(b)
-                _apply_form_updates(b, updates, tt)
-                _mark_procedure_applied()
-                st.session_state['gui_last_preview'] = build_protocol_preview(
-                    b, requested_test_type=tt, max_plot_points=int(pv_pts)
-                )
-                st.session_state['gui_last_preview_tt'] = tt
 
-            if pv_on and st.session_state.get('gui_last_preview') is not None:
-                prev = st.session_state['gui_last_preview']
-                if st.session_state.get('gui_last_preview_tt') != tt:
-                    st.warning('Test type changed since the last preview — click **Refresh preview** to update.')
-                if prev.get('error'):
-                    _st_error_actions(
-                        'Preview failed.',
-                        ['Fix highlighted parameters', 'Click Refresh preview'],
-                    )
-                    with st.expander('Preview error detail'):
-                        st.code(str(prev['error']))
-                elif prev.get('ok'):
+        def _render_current_settings_table() -> None:
+            _sync_biometric_flags_from_session(b)
+            _sync_genus_species_to_bender(b)
+            _apply_form_updates(b, updates, tt)
+            _mark_procedure_applied()
+            settings_rows = [
+                {'group': 'experiment', 'name': 'test_type', 'value': tt},
+                {
+                    'group': 'export',
+                    'name': 'data_file_target_h5',
+                    'value': _compose_output_h5_path() or getattr(b, 'outputfile', None),
+                },
+                {
+                    'group': 'specimen',
+                    'name': 'genus_species',
+                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('genus_species', ''),
+                },
+                {
+                    'group': 'specimen',
+                    'name': 'specimen_id',
+                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_id', ''),
+                },
+                {'group': 'biometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
+                {'group': 'biometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
+                {'group': 'biometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
+                {'group': 'biometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
+                {'group': 'biometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
+                {
+                    'group': 'conditions',
+                    'name': 'temp_C_room',
+                    'value': getattr(b, 'temp_C_room', None),
+                },
+                {
+                    'group': 'conditions',
+                    'name': 'temp_C_tank',
+                    'value': getattr(b, 'temp_C_tank', None),
+                },
+                {
+                    'group': 'conditions',
+                    'name': 'prep_condition',
+                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('prep_condition', ''),
+                },
+            ]
+            for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
+                settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
+            st.dataframe(pd.DataFrame(settings_rows), use_container_width=True, hide_index=True)
+
+        pv_pts = 6000
+
+        if st.session_state.get('gui_last_preview') is not None:
+            prev = st.session_state['gui_last_preview']
+            if st.session_state.get('gui_last_preview_tt') != tt:
+                st.warning('Test type changed since the last preview — click **Refresh preview** to update.')
+            if prev.get('error'):
+                _ph, _pb = _preview_error_actions(str(prev.get('error') or ''))
+                _st_error_actions(
+                    _ph,
+                    _pb,
+                )
+                with st.expander('Preview error detail'):
+                    st.code(str(prev['error']))
+            elif prev.get('ok'):
                     if tt == 'calibration':
                         st.info(
                             f"Calibration uses base protocol **{prev.get('motion_test_type')}** for motion "
@@ -6154,229 +7033,179 @@ def main():
                         st.caption(
                             'Step protocols: table lists setpoints; refresh preview after fixing errors to see the plot.'
                         )
-                else:
-                    st.warning('Preview incomplete; click **Refresh preview** again.')
-
-        st.checkbox(
-            'Hide section (values stay; unhide to edit)',
-            key='gui_sec4_hide',
-            help='Collapse preview controls and plots when you are done reviewing.',
-        )
+            else:
+                st.warning('Preview incomplete; click **Refresh preview** again.')
 
         st.divider()
-        st.session_state.setdefault('gui_sec5_hide', False)
-        st.subheader('6 · Save, validate, and run')
-        if st.session_state.get('gui_sec5_hide'):
-            st.caption('Run controls hidden. Uncheck **Hide section** below.')
-        else:
-            if bool(st.session_state.get('gui_simulation_mode', False)):
-                st.info(
-                    '**Simulation mode** is enabled in the sidebar: **Run experiment** uses numpy only (no NI-DAQ). '
-                    'Section 5 **Refresh preview** shows the simulated force–displacement curve.'
+        st.subheader('6 · Run')
+        if bool(st.session_state.get('gui_simulation_mode', False)):
+            st.info('Simulation mode active: run uses numpy only (no NI-DAQ).')
+        if _procedure_apply_dirty() or _bio_apply_dirty():
+            _soft_apply_reminder()
+
+        def _execute_run() -> None:
+            if bool(st.session_state.get('gui_run_in_progress', False)):
+                st.warning('A run is already in progress.')
+                return
+            st.session_state['gui_run_in_progress'] = True
+            _sync_biometric_flags_from_session(b)
+            _apply_form_updates(b, updates, tt)
+            _sync_genus_species_to_bender(b)
+            _mark_procedure_applied()
+            outp = _compose_output_h5_path().strip()
+            if outp:
+                b.outputfile = outp
+                _mark_data_path_applied()
+            notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
+            try:
+                b.simulation_mode = bool(st.session_state.get('gui_simulation_mode', False))
+                b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
+                _acq_label = (
+                    'Simulating acquisition (no DAQ)…'
+                    if b.simulation_mode
+                    else 'Acquiring (DAQ)…'
                 )
-            if _procedure_apply_dirty() or _bio_apply_dirty():
-                _soft_apply_reminder()
-            if st.button('View current settings'):
+                _status_factory = getattr(st, 'status', None)
+                if callable(_status_factory):
+                    with _status_factory('Run in progress…', expanded=True) as run_status:
+                        run_status.write('Acquisition…')
+                        with st.spinner(_acq_label):
+                            b.run_experiment(test_type=tt)
+                        st.success('Acquisition finished.')
+                        run_status.write('HDF5…')
+                        with st.spinner('Writing data file (.h5)…'):
+                            rep = export_primary_h5(
+                                b,
+                                post_trial_notes=notes_in if notes_in else None,
+                                outputfile=outp or None,
+                                append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
+                            )
+                        qix = _read_qc_trial_index(b)
+                        sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
+                        qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                        run_status.write('QC plot…')
+                        with st.spinner('Saving QC plot…'):
+                            qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+                        _st_done = getattr(run_status, 'update', None)
+                        if callable(_st_done):
+                            _st_done(label='Run finished', state='complete')
+                        st.success('Data has been saved! Check data folder to confirm before proceeding.')
+                        st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                        if bool(st.session_state.get('gui_qc_notes_append', True)):
+                            st.session_state['gui_post_notes'] = ''
+                        else:
+                            st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+                else:
+                    with st.spinner(_acq_label):
+                        b.run_experiment(test_type=tt)
+                    st.success('Acquisition finished.')
+                    with st.spinner('Writing data file (.h5)…'):
+                        rep = export_primary_h5(
+                            b,
+                            post_trial_notes=notes_in if notes_in else None,
+                            outputfile=outp or None,
+                            append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
+                        )
+                    qix = _read_qc_trial_index(b)
+                    sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
+                    qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                    with st.spinner('Saving QC plot…'):
+                        qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+                    st.success('Data has been saved! Check data folder to confirm before proceeding.')
+                    st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                    if bool(st.session_state.get('gui_qc_notes_append', True)):
+                        st.session_state['gui_post_notes'] = ''
+                    else:
+                        st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+            except Exception as e:
+                _show_friendly_error(e, action='run_experiment')
+            finally:
+                st.session_state['gui_run_in_progress'] = False
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button('Refresh experiment preview', use_container_width=True):
                 _sync_biometric_flags_from_session(b)
                 _sync_genus_species_to_bender(b)
                 _apply_form_updates(b, updates, tt)
                 _mark_procedure_applied()
-                settings_rows = [
-                    {'group': 'experiment', 'name': 'test_type', 'value': tt},
-                    {
-                        'group': 'export',
-                        'name': 'data_file_target_h5',
-                        'value': _compose_output_h5_path() or getattr(b, 'outputfile', None),
-                    },
-                    {
-                        'group': 'specimen',
-                        'name': 'genus_species',
-                        'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('genus_species', ''),
-                    },
-                    {
-                        'group': 'specimen',
-                        'name': 'specimen_id',
-                        'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_id', ''),
-                    },
-                    {'group': 'biometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
-                    {'group': 'biometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
-                    {'group': 'biometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
-                    {'group': 'biometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
-                    {'group': 'biometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
-                    {
-                        'group': 'conditions',
-                        'name': 'temp_C_room',
-                        'value': getattr(b, 'temp_C_room', None),
-                    },
-                    {
-                        'group': 'conditions',
-                        'name': 'temp_C_tank',
-                        'value': getattr(b, 'temp_C_tank', None),
-                    },
-                    {
-                        'group': 'conditions',
-                        'name': 'prep_condition',
-                        'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('prep_condition', ''),
-                    },
-                ]
-                for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
-                    settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
-                st.dataframe(pd.DataFrame(settings_rows), use_container_width=True, hide_index=True)
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button(
-                    'Apply procedure',
-                    help=(
-                        'Copy procedure fields to the experiment object (no DAQ). After editing in **section 4 · Procedure fields**, '
-                        'prefer **Apply procedure** there first so the latest typed values are committed.'
-                    ),
-                ):
-                    _apply_procedure_form_to_bender(b, updates, tt)
-                    st.toast('Settings applied.')
-            with c2:
-                if st.button(
-                    'Check required fields',
-                    help='Runs validation for the current test type (does not talk to hardware).',
-                ):
-                    _sync_biometric_flags_from_session(b)
-                    _sync_genus_species_to_bender(b)
-                    _apply_form_updates(b, updates, tt)
-                    _mark_procedure_applied()
-                    rep = b.validate_dispatch_setup(test_type=tt)
-                    if rep['ok']:
-                        st.success('All required fields for this procedure are set.')
-                    else:
-                        _st_error_actions(
-                            'Required fields missing.',
-                            _missing_fields_to_actions(list(rep['missing'])),
-                        )
-            _sim_run = bool(st.session_state.get('gui_simulation_mode', False))
-            daq_ok = st.checkbox(
-                'Hardware: I intend to run DAQ',
-                value=False,
-                disabled=_sim_run,
-                help='Confirm before **Run experiment** starts NI-DAQ acquisition.',
-            )
-            run_hw_ok = _sim_run or daq_ok
-            bio_confirm = st.checkbox(
-                'Biometrics applied (section 3)',
-                value=False,
-                key='gui_run_biometrics_confirm',
-                help='Confirm you used **Apply** in each edited block (identity, intrinsic, experimental conditions, clamp, profile) or **Apply all**.',
-            )
-            needs_cal_confirm = _needs_missing_calibration_confirmation(b) and not _sim_run
-            if needs_cal_confirm:
-                st.warning('No calibration file detected. Are you sure you wish to proceed?')
-            ok_wo_cal = st.checkbox(
-                'Yes, proceed without calibration file',
-                key='gui_confirm_run_without_calibration',
-                disabled=not needs_cal_confirm,
-            )
-            needs_dest_confirm = _section2_destination_incomplete()
-            if needs_dest_confirm:
-                st.warning(
-                    '**No designated file destination.** Data will not save to a known `.h5` path until you set '
-                    '**Data folder** and **Data file name** in **section 2**. Proceed anyway?'
+                st.session_state['gui_last_preview'] = build_protocol_preview(
+                    b, requested_test_type=tt, max_plot_points=int(pv_pts)
                 )
-            ok_wo_dest = st.checkbox(
-                'Yes, proceed without section 2 save path',
-                key='gui_confirm_run_without_destination',
-                disabled=not needs_dest_confirm,
-                help='Only for quick tests; without section 2 the app may not write an .h5 where you expect.',
-            )
-            _run_dest_block = needs_dest_confirm and not ok_wo_dest
-            _, _run_big, _ = st.columns([1, 2, 1])
-            with _run_big:
+                st.session_state['gui_last_preview_tt'] = tt
+        with c2:
+            if st.button('View experiment settings', use_container_width=True):
+                _render_current_settings_table()
+
+        st.session_state.setdefault('gui_run_soft_warnings', [])
+        st.session_state.setdefault('gui_run_in_progress', False)
+        _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
+        _run_in_progress = bool(st.session_state.get('gui_run_in_progress', False))
+        if st.button(
+            'Run experiment',
+            type='primary',
+            use_container_width=True,
+            disabled=_run_in_progress,
+            help='Starts NI-DAQ acquisition.',
+        ):
+            run_warnings: list[str] = []
+            bio_soft_missing: list[str] = []
+            if not str(st.session_state.get('gui_specimen_id') or '').strip():
+                bio_soft_missing.append('specimen ID')
+            if not str(st.session_state.get('gui_genus_species') or '').strip():
+                bio_soft_missing.append('genus-species')
+            if _session_float('bio_dclamp') is None or _session_float('bio_dclamp') <= 0:
+                bio_soft_missing.append('clamp spacing')
+            if _session_float('bio_xsec') is None or _session_float('bio_xsec') <= 0:
+                bio_soft_missing.append('cross-section width')
+            if _session_float('bio_fishmass') is None or _session_float('bio_fishmass') <= 0:
+                bio_soft_missing.append('mass')
+            if bio_soft_missing:
+                _missing_txt = ', '.join(bio_soft_missing[:4])
+                if len(bio_soft_missing) > 4:
+                    _missing_txt += ', ...'
+                run_warnings.append(f'Biometrics look incomplete ({_missing_txt}).')
+            if _needs_missing_calibration_confirmation(b) and not bool(st.session_state.get('gui_simulation_mode', False)):
+                run_warnings.append('No calibration file detected.')
+            if _section2_destination_incomplete():
+                run_warnings.append('No designated file destination in section 2.')
+            _sync_biometric_flags_from_session(b)
+            _sync_genus_species_to_bender(b)
+            _apply_form_updates(b, updates, tt)
+            _mark_procedure_applied()
+            rep = b.validate_dispatch_setup(test_type=tt)
+            if not rep.get('ok', False):
+                run_warnings.append('Required protocol fields are missing.')
+            if run_warnings:
+                st.session_state['gui_run_soft_warnings'] = run_warnings
+                st.session_state['gui_run_pending_confirm'] = True
+            else:
+                st.session_state['gui_run_soft_warnings'] = []
+                st.session_state['gui_run_pending_confirm'] = False
+                _execute_run()
+            _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
+
+        if _pending_run_confirm:
+            _warns = list(st.session_state.get('gui_run_soft_warnings') or [])
+            if _warns:
+                st.warning('\n'.join([f'- {w}' for w in _warns]))
+            c_go, c_stop = st.columns(2)
+            with c_go:
                 if st.button(
-                    'Run experiment',
+                    'Proceed',
                     type='primary',
                     use_container_width=True,
-                    disabled=not run_hw_ok or not bio_confirm or _run_dest_block,
-                    help='Starts NI-DAQ acquisition.',
+                    key='gui_run_proceed',
+                    disabled=bool(st.session_state.get('gui_run_in_progress', False)),
                 ):
-                    _sync_biometric_flags_from_session(b)
-                    _apply_form_updates(b, updates, tt)
-                    _sync_genus_species_to_bender(b)
-                    _mark_procedure_applied()
-                    outp = _compose_output_h5_path().strip()
-                    if outp:
-                        b.outputfile = outp
-                        _mark_data_path_applied()
-                    notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
-                    if needs_cal_confirm and not ok_wo_cal:
-                        st.info('Run canceled. Check "Yes, proceed without calibration file" to continue.')
-                        return
-                    if needs_dest_confirm and not ok_wo_dest:
-                        st.info('Run canceled. Set **section 2** or check "Yes, proceed without section 2 save path".')
-                        return
-                    try:
-                        b.simulation_mode = bool(st.session_state.get('gui_simulation_mode', False))
-                        b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
-                        _acq_label = (
-                            'Simulating acquisition (no DAQ)…'
-                            if b.simulation_mode
-                            else 'Acquiring (DAQ)…'
-                        )
-                        _status_factory = getattr(st, 'status', None)
-                        if callable(_status_factory):
-                            with _status_factory('Run in progress…', expanded=True) as run_status:
-                                run_status.write('Acquisition…')
-                                with st.spinner(_acq_label):
-                                    b.run_experiment(test_type=tt)
-                                st.success('Acquisition finished.')
-                                run_status.write('HDF5…')
-                                with st.spinner('Writing data file (.h5)…'):
-                                    rep = export_primary_h5(
-                                        b,
-                                        post_trial_notes=notes_in if notes_in else None,
-                                        outputfile=outp or None,
-                                        append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
-                                    )
-                                qix = _read_qc_trial_index(b)
-                                sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
-                                qc_base = _qc_figure_base_path(b, sel_h5, qix)
-                                run_status.write('QC plot…')
-                                with st.spinner('Saving QC plot…'):
-                                    qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
-                                _st_done = getattr(run_status, 'update', None)
-                                if callable(_st_done):
-                                    _st_done(label='Run finished', state='complete')
-                                st.success('Data has been saved! Check data folder to confirm before proceeding.')
-                                st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
-                                if bool(st.session_state.get('gui_qc_notes_append', True)):
-                                    st.session_state['gui_post_notes'] = ''
-                                else:
-                                    st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-                        else:
-                            with st.spinner(_acq_label):
-                                b.run_experiment(test_type=tt)
-                            st.success('Acquisition finished.')
-                            with st.spinner('Writing data file (.h5)…'):
-                                rep = export_primary_h5(
-                                    b,
-                                    post_trial_notes=notes_in if notes_in else None,
-                                    outputfile=outp or None,
-                                    append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
-                                )
-                            qix = _read_qc_trial_index(b)
-                            sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
-                            qc_base = _qc_figure_base_path(b, sel_h5, qix)
-                            with st.spinner('Saving QC plot…'):
-                                qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
-                            st.success('Data has been saved! Check data folder to confirm before proceeding.')
-                            st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
-                            if bool(st.session_state.get('gui_qc_notes_append', True)):
-                                st.session_state['gui_post_notes'] = ''
-                            else:
-                                st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-                    except Exception as e:
-                        _show_friendly_error(e, action='run_experiment')
-
-        st.checkbox(
-            'Hide section (values stay; unhide to edit)',
-            key='gui_sec5_hide',
-            help='Collapse validate/run controls after you finish.',
-        )
+                    st.session_state['gui_run_pending_confirm'] = False
+                    st.session_state['gui_run_soft_warnings'] = []
+                    _execute_run()
+            with c_stop:
+                if st.button('Abort', use_container_width=True, key='gui_run_abort'):
+                    st.session_state['gui_run_pending_confirm'] = False
+                    st.session_state['gui_run_soft_warnings'] = []
+                    st.info('Run aborted.')
 
         st.divider()
         st.session_state.setdefault('gui_sec6_hide', False)
@@ -6411,37 +7240,9 @@ def main():
                 qc_base = _qc_figure_base_path(b, sel_h5, qix)
                 return save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
 
-            _, c_big, _ = st.columns([1, 2, 1])
-            with c_big:
-                if _load_save_button('Save Data File (.h5) and QC Plot', key='gui_save_h5_and_qc'):
-                    try:
-                        with st.spinner('Writing data file (.h5)…'):
-                            rep = _export_h5_from_session()
-                        if rep is None:
-                            pass
-                        else:
-                            qix = _read_qc_trial_index(b)
-                            sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
-                            qc_base = _qc_figure_base_path(b, sel_h5, qix)
-                            try:
-                                with st.spinner('Saving QC plot…'):
-                                    qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
-                            except Exception as e:
-                                _show_friendly_error(e, action='save_qc')
-                                st.warning(f"The data file was saved: `{rep['outputfile']}`")
-                            else:
-                                st.success('Data file and QC plot saved.')
-                                st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
-                            if bool(st.session_state.get('gui_qc_notes_append', True)):
-                                st.session_state['gui_post_notes'] = ''
-                            else:
-                                st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-                    except Exception as e:
-                        _show_friendly_error(e, action='save_h5')
-
             e1, e2 = st.columns(2)
             with e1:
-                if _load_save_button('Only save Data File (.h5)', key='gui_save_h5_only'):
+                if _load_save_button('Only save Data File (.h5)', key='gui_save_h5_only', button_type='secondary'):
                     try:
                         rep = _export_h5_from_session()
                         if rep is not None:
@@ -6453,12 +7254,38 @@ def main():
                     except Exception as e:
                         _show_friendly_error(e, action='save_h5')
             with e2:
-                if _load_save_button('Only Save QC Plot', key='gui_save_qc_only'):
+                if _load_save_button('Only Save QC Plot', key='gui_save_qc_only', button_type='secondary'):
                     try:
                         qc_path, _ = _save_qc_plot_only()
                         st.success(f'QC plot saved: `{qc_path}`')
                     except Exception as e:
                         _show_friendly_error(e, action='save_qc')
+
+            if _load_save_button('Save Data File (.h5) and QC Plot', key='gui_save_h5_and_qc'):
+                try:
+                    with st.spinner('Writing data file (.h5)…'):
+                        rep = _export_h5_from_session()
+                    if rep is None:
+                        pass
+                    else:
+                        qix = _read_qc_trial_index(b)
+                        sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
+                        qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                        try:
+                            with st.spinner('Saving QC plot…'):
+                                qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+                        except Exception as e:
+                            _show_friendly_error(e, action='save_qc')
+                            st.warning(f"The data file was saved: `{rep['outputfile']}`")
+                        else:
+                            st.success('Data file and QC plot saved.')
+                            st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                        if bool(st.session_state.get('gui_qc_notes_append', True)):
+                            st.session_state['gui_post_notes'] = ''
+                        else:
+                            st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+                except Exception as e:
+                    _show_friendly_error(e, action='save_h5')
 
         st.checkbox(
             'Hide section (values stay; unhide to edit)',
@@ -6565,6 +7392,7 @@ def main():
                                         )
     
                                 if st.button('Generate plots from file', key='gui_h5_gen_plots'):
+                                    _any_panel_ok = False
                                     for p in range(int(n_panel)):
                                         x_id = st.session_state.get(f'gui_h5_x_{p}')
                                         y_ids = st.session_state.get(f'gui_h5_y_{p}') or []
@@ -6593,6 +7421,7 @@ def main():
                                                 legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
                                             )
                                             st.plotly_chart(fig_p, use_container_width=True)
+                                            _any_panel_ok = True
                                         except Exception as e:
                                             _st_error_actions(
                                                 f'Panel {p + 1} plot failed.',
@@ -6600,6 +7429,8 @@ def main():
                                             )
                                             with st.expander('Technical details'):
                                                 st.exception(e)
+                                    if _any_panel_ok:
+                                        _mark_review_data_used()
     
                 st.markdown('**Add post-experiment note to selected file**')
                 note_file = st.text_area(
@@ -6612,6 +7443,7 @@ def main():
                         if ext != '.h5':
                             raise ValueError('Selected file is not .h5. Choose a data file to append notes.')
                         _append_note_to_h5_file(selected_file, note_file)
+                        _mark_review_data_used()
                         st.success('Note appended to selected data file.')
                     except Exception as e:
                         _show_friendly_error(e, action='save_h5')
@@ -6702,6 +7534,8 @@ def main():
             key='gui_sec8_hide',
             help='Collapse file picker and note fields when finished.',
         )
+
+    _autosave_tick()
 
 
 if __name__ == '__main__':
