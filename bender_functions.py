@@ -2904,18 +2904,21 @@ class Bender:
         Isovelocity sweep: hold at a strain-defined angle, then command constant angular velocity
         (deg/s) for a short interval, with optional stimulation during the iso segment.
 
-        Velocities are ``np.linspace(min_vel, max_vel, num_steps)`` in **deg/s** (same units as
-        ``anglevel`` / motor command). Each trial starts again from the same starting angle.
+        Velocities are ``np.linspace(min_vel, max_vel, num_steps)`` in the units given by
+        ``isovelocity_velocity_mode`` (default **angle_vel** = deg/s), then converted to motor deg/s.
+        Each trial starts again from the same starting angle.
 
         Parameters
         ----------
         min_vel, max_vel : float
-            Angular velocity range (deg/s).
+            Velocity range in ``isovelocity_velocity_mode`` units (converted to motor deg/s).
         starting_strain : float
             Interpreted with ``starting_strain_mode`` (``strain`` fraction, ``strain_pct``, etc.).
         num_steps : int
         starting_strain_mode : str
             Passed to :func:`convert_to_curvature` for the initial posture.
+        isovelocity_velocity_mode : str
+            Rate mode for min/max velocity (``angle_vel``, ``strain_rate``, etc.).
         randomize : bool
             If True, randomize the order of the generated velocity steps.
         random_seed : int or None
@@ -2975,7 +2978,17 @@ class Bender:
         if uidx0 is not None:
             theta0 = theta0 * self.motor_command_sign_for_bend_toward_index(uidx0)
 
-        vels = np.linspace(float(min_vel), float(max_vel), int(num_steps))
+        velocity_mode = str(
+            getattr(self, 'isovelocity_velocity_mode', None) or kwargs.get('isovelocity_velocity_mode') or 'angle_vel'
+        ).lower()
+        vels_native = np.linspace(float(min_vel), float(max_vel), int(num_steps))
+        kdot = convert_to_curvature(
+            vels_native,
+            velocity_mode,
+            dclamp_mm=float(dc),
+            xsec_width_mm=xw,
+        )
+        vels = np.rad2deg(np.asarray(kdot, dtype=float) * (float(dc) / 1000.0))
         seq_idx = np.arange(vels.size, dtype=int)
         if bool(randomize) and vels.size > 1:
             rng = np.random.default_rng(None if random_seed is None else int(random_seed))
@@ -3784,10 +3797,11 @@ class Bender:
             ],
             'isovelocity_required': [
                 'isovelocity_min_vel', 'isovelocity_max_vel',
-                'isovelocity_starting_strain', 'isovelocity_num_steps',
+                'isovelocity_starting_strain', 'isovelocity_starting_strain_mode',
+                'isovelocity_velocity_mode', 'isovelocity_num_steps',
             ],
             'isovelocity_optional': [
-                'isovelocity_starting_strain_mode', 'isovelocity_randomize',
+                'isovelocity_randomize',
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
                 'isovelocity_pre_hold_s', 'isovelocity_stim_params',
                 'isovelocity_stim_overrides',
@@ -3864,6 +3878,10 @@ class Bender:
             if _iv_mode in ('strain', 'strain_rate', 'strain_pct', 'strain_pct_rate'):
                 if not self._xsec_width_mm_valid():
                     missing.append('xsec_width (mm)')
+            _iv_vel_mode = str(getattr(self, 'isovelocity_velocity_mode', None) or 'angle_vel').lower()
+            if _iv_vel_mode in ('strain_rate', 'strain_pct_rate'):
+                if not self._xsec_width_mm_valid():
+                    missing.append('xsec_width (mm) (required for strain-rate velocity mode)')
         elif tt == 'calibration':
             if getattr(self, 'calibration_base_test_type', None) is None:
                 missing.append('calibration_base_test_type')

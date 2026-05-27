@@ -6,6 +6,7 @@ Mirrors motion-generation branches in :meth:`bender_functions.Bender.run_experim
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -50,6 +51,90 @@ def _downsample(t, y, max_points: int):
     return t[idx], y[idx]
 
 
+def _motor_angle_to_kappa_strain(
+    angle_deg: np.ndarray, *, dclamp_mm: float, xsec_width_mm: Optional[float]
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """Inverse of motor command: κ (1/m) and surface engineering strain ε from angle (deg)."""
+    ang = np.asarray(angle_deg, dtype=float).reshape(-1)
+    kappa = np.deg2rad(ang) * 1000.0 / float(dclamp_mm)
+    if xsec_width_mm is None or not math.isfinite(float(xsec_width_mm)) or float(xsec_width_mm) <= 0:
+        return kappa, None
+    half_m = (float(xsec_width_mm) / 2.0) / 1000.0
+    return kappa, kappa * half_m
+
+
+def _attach_native_unit_series(out: PreviewResult, b: Any, t: np.ndarray, angle: np.ndarray) -> None:
+    dc = getattr(b, '_effective_dclamp_mm', lambda: None)()
+    if dc is None:
+        dc = getattr(b, 'dclamp', None)
+    xw = getattr(b, 'xsec_width', None)
+    if dc is None:
+        return
+    kappa, strain = _motor_angle_to_kappa_strain(angle, dclamp_mm=float(dc), xsec_width_mm=xw)
+    out['curvature'] = kappa
+    if strain is not None:
+        out['strain'] = strain
+
+
+def _stim_table_rows(b: Any, sp: dict, *, recruitment: str) -> List[dict]:
+    spr_raw = sp.get('stim_pulse_rate', None)
+    spr = float(spr_raw) if spr_raw is not None else float(getattr(b, 'stim_pulse_rate', 75.0) or 75.0)
+    return [
+        {'metric': 'stimulation enabled', 'value': bool(sp.get('is_stim', True))},
+        {'metric': 'pulse rate (Hz)', 'value': spr},
+        {'metric': 'stim voltage (V)', 'value': float(sp.get('stim_voltage', 5.0))},
+        {'metric': 'recruitment', 'value': recruitment},
+    ]
+
+
+def _stim_for_ramp_hold(
+    b: Any,
+    t: np.ndarray,
+    ramp_s: float,
+    hold_s: float,
+    sp: dict,
+    rec: str,
+    *,
+    mirror: bool = False,
+    hold_windows: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    spr_raw = sp.get('stim_pulse_rate', None)
+    spr = float(spr_raw) if spr_raw is not None else float(getattr(b, 'stim_pulse_rate', 75.0) or 75.0)
+    stim_voltage = float(sp.get('stim_voltage', 5.0))
+    settle = float(sp.get('settle_before_stim_s', 0.5))
+    stim_duration_s = sp.get('stim_duration_s', None)
+    is_stim = bool(sp.get('is_stim', True))
+    seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(b, 'bilateral_sequential_left_frac', 0.5)))
+    t = np.asarray(t, dtype=float).reshape(-1)
+    if mirror and hold_windows is not None:
+        h1, h2 = hold_windows
+        active_l = (t >= h1[0] + settle) & (t < h1[1])
+        active_r = (t >= h2[0] + settle) & (t < h2[1])
+        if stim_duration_s is not None:
+            active_l &= t < (h1[0] + settle + float(stim_duration_s))
+            active_r &= t < (h2[0] + settle + float(stim_duration_s))
+        if is_stim and (np.any(active_l) or np.any(active_r)):
+            p_l = b._pulse_carrier_volts(t, active_l, spr, stim_voltage)
+            p_r = b._pulse_carrier_volts(t, active_r, spr, stim_voltage)
+            s1 = np.zeros_like(t)
+            s2 = np.zeros_like(t)
+            b._deposit_stim_on_side(p_l, 'left', s1, s2)
+            b._deposit_stim_on_side(p_r, 'right', s1, s2)
+            return s1, s2
+        return np.zeros_like(t), np.zeros_like(t)
+    t_stim0 = float(ramp_s) + settle
+    if stim_duration_s is None:
+        t_stim1 = float(ramp_s) + float(hold_s)
+    else:
+        t_stim1 = t_stim0 + float(stim_duration_s)
+    t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
+    active = (t >= t_stim0) & (t < t_stim1)
+    if is_stim and np.any(active):
+        pulse = b._pulse_carrier_volts(t, active, spr, stim_voltage)
+        return b._route_recruitment_stim(pulse, rec, sequential_left_frac=seq_frac)
+    return np.zeros_like(t), np.zeros_like(t)
+
+
 def _default_stim_duties_phases(b: Any) -> Tuple[List[float], List[float]]:
     d = getattr(b, 'all_stimduties', None)
     p = getattr(b, 'all_stimphases', None)
@@ -91,9 +176,17 @@ def build_protocol_preview(
         't': None,
         'angle': None,
         'anglevel': None,
+        'stim_s1': None,
+        'stim_s2': None,
+        'stim_total': None,
+        'strain': None,
+        'curvature': None,
         't_plot': None,
         'angle_plot': None,
         'anglevel_plot': None,
+        'stim_plot': None,
+        'strain_plot': None,
+        'curvature_plot': None,
     }
 
     try:
@@ -128,6 +221,20 @@ def build_protocol_preview(
                 out['anglevel_plot'] = vp
             else:
                 out['anglevel_plot'] = None
+            _attach_native_unit_series(out, b, np.asarray(t), np.asarray(ang))
+            if out.get('strain') is not None:
+                _, out['strain_plot'] = _downsample(t, out['strain'], max_plot_points)
+            if out.get('curvature') is not None:
+                _, out['curvature_plot'] = _downsample(t, out['curvature'], max_plot_points)
+            s1 = out.get('stim_s1')
+            s2 = out.get('stim_s2')
+            if s1 is not None:
+                s1a = np.asarray(s1, dtype=float).reshape(-1)
+                s2a = np.zeros_like(s1a) if s2 is None else np.asarray(s2, dtype=float).reshape(-1)
+                n_st = min(s1a.size, s2a.size, np.asarray(t).size)
+                stot = s1a[:n_st] + s2a[:n_st]
+                out['stim_total'] = stot
+                _, out['stim_plot'] = _downsample(t, stot, max_plot_points)
         return out
     except Exception as e:
         out['error'] = f'{type(e).__name__}: {e}'
@@ -155,7 +262,7 @@ def _isovelocity_stim_params_from_b(b: Any) -> dict:
 
 def _preview_concat_isovelocity_timeline(
     b: Any, theta0_fixed: float, velocities_deg_per_s: np.ndarray, sp: dict
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Concatenate per-step isovelocity command timelines (same geometry as
     :meth:`bender_functions.Bender._run_isovelocity_steps`, without DAQ).
@@ -190,6 +297,8 @@ def _preview_concat_isovelocity_timeline(
     t_chunks: List[np.ndarray] = []
     a_chunks: List[np.ndarray] = []
     w_chunks: List[np.ndarray] = []
+    s1_chunks: List[np.ndarray] = []
+    s2_chunks: List[np.ndarray] = []
     toff = 0.0
     for i in range(n):
         v_mag = abs(float(vels[i]))
@@ -233,6 +342,8 @@ def _preview_concat_isovelocity_timeline(
             t_seg = np.concatenate([d1['t'], d2['t'][1:] + off])
             a_seg = np.concatenate([d1['angle'], d2['angle'][1:]])
             w_seg = np.concatenate([d1['anglevel'], d2['anglevel'][1:]])
+            s1_seg = np.concatenate([d1['s1'], d2['s1'][1:]])
+            s2_seg = np.concatenate([d1['s2'], d2['s2'][1:]])
         else:
             v_sign = float(vels[i])
             uidx = b.recruitment_unilateral_lateral_index(rec)
@@ -255,14 +366,19 @@ def _preview_concat_isovelocity_timeline(
                 mirror_stim_side=None,
             )
             t_seg, a_seg, w_seg = d0['t'], d0['angle'], d0['anglevel']
+            s1_seg, s2_seg = d0['s1'], d0['s2']
         t_chunks.append(np.asarray(t_seg, dtype=float) + toff)
         a_chunks.append(np.asarray(a_seg, dtype=float))
         w_chunks.append(np.asarray(w_seg, dtype=float))
+        s1_chunks.append(np.asarray(s1_seg, dtype=float))
+        s2_chunks.append(np.asarray(s2_seg, dtype=float))
         toff = float(t_chunks[-1][-1])
     t = np.concatenate(t_chunks)
     angle = np.concatenate(a_chunks)
     anglevel = np.concatenate(w_chunks)
-    return t, angle, anglevel
+    s1 = np.concatenate(s1_chunks)
+    s2 = np.concatenate(s2_chunks)
+    return t, angle, anglevel, s1, s2
 
 
 def _isometric_stim_params_from_b(b: Any) -> dict:
@@ -287,7 +403,7 @@ def _isometric_stim_params_from_b(b: Any) -> dict:
 
 def _preview_concat_isometric_timeline(
     b: Any, targets_deg: np.ndarray, sp: dict, *, mode: str = 'strain'
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Match :meth:`Bender._run_force_length_steps` ramp/hold segments (and optional mirror path)."""
     targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
     num_steps = int(targets_deg.size)
@@ -328,6 +444,8 @@ def _preview_concat_isometric_timeline(
 
     t_chunks: List[np.ndarray] = []
     a_chunks: List[np.ndarray] = []
+    s1_chunks: List[np.ndarray] = []
+    s2_chunks: List[np.ndarray] = []
     toff = 0.0
 
     for i in range(num_steps):
@@ -337,8 +455,11 @@ def _preview_concat_isometric_timeline(
             n_g = max(2, int(round(gap_s / dt)) + 1)
             tg = np.linspace(0.0, gap_s, n_g, dtype=float)
             ag = np.full(n_g, last_ang, dtype=float)
+            zg = np.zeros(n_g, dtype=float)
             t_chunks.append(tg + toff)
             a_chunks.append(ag)
+            s1_chunks.append(zg)
+            s2_chunks.append(zg)
             toff = float(t_chunks[-1][-1])
 
         target = float(targets_deg[i])
@@ -349,17 +470,23 @@ def _preview_concat_isometric_timeline(
                 kw['mirror_abs_deg_left'] = mhl
             if mhr is not None:
                 kw['mirror_abs_deg_right'] = mhr
-            tloc, aloc, _wloc, _h1, _h2 = b._timeline_mirror_two_holds(prev, target, ramp, hold, daq_hz, **kw)
+            tloc, aloc, _wloc, h1, h2 = b._timeline_mirror_two_holds(prev, target, ramp, hold, daq_hz, **kw)
+            s1loc, s2loc = _stim_for_ramp_hold(b, tloc, ramp, hold, sp, rec, mirror=True, hold_windows=(h1, h2))
         else:
             tloc, aloc, _wloc = b._timeline_ramp_hold(prev, target, ramp, hold, daq_hz)
+            s1loc, s2loc = _stim_for_ramp_hold(b, tloc, ramp, hold, sp, rec)
         t_chunks.append(tloc + toff)
         a_chunks.append(aloc)
+        s1_chunks.append(s1loc)
+        s2_chunks.append(s2loc)
         toff = float(t_chunks[-1][-1])
 
     t = np.concatenate(t_chunks)
     angle = np.concatenate(a_chunks)
     anglevel = np.gradient(angle, t, edge_order=1) if t.size >= 2 else np.zeros_like(angle)
-    return t, angle, anglevel
+    s1 = np.concatenate(s1_chunks)
+    s2 = np.concatenate(s2_chunks)
+    return t, angle, anglevel, s1, s2
 
 
 def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
@@ -429,13 +556,16 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
                 }
             )
         try:
-            t, angle, anglevel = _preview_concat_isometric_timeline(b, targets_deg, sp, mode=str(mode))
+            t, angle, anglevel, s1, s2 = _preview_concat_isometric_timeline(b, targets_deg, sp, mode=str(mode))
         except Exception as e:
             r['error'] = f'Isometric timeline preview failed: {type(e).__name__}: {e}'
             return r
         r['t'] = t
         r['angle'] = angle
         r['anglevel'] = anglevel
+        r['stim_s1'] = s1
+        r['stim_s2'] = s2
+        r['table'].extend(_stim_table_rows(b, sp, recruitment=str(rec)))
         r['preview_isometric'] = True
         return r
 
@@ -474,6 +604,9 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
     k0 = convert_to_curvature(float(ss), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
     k0 = float(np.asarray(k0).reshape(-1)[0])
     theta0 = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
+    velocity_mode = str(getattr(b, 'isovelocity_velocity_mode', None) or 'angle_vel').lower()
+    kdot = convert_to_curvature(vels, velocity_mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+    vels_deg = np.rad2deg(np.asarray(kdot, dtype=float) * (float(dc) / 1000.0))
     sp = _isovelocity_stim_params_from_b(b)
     rec_iso = b._normalize_recruitment(
         sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
@@ -485,23 +618,33 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
     r['table'].append(
         {'row': 'starting strain', 'value': float(ss), 'unit': _strain_mode_caption(mode)}
     )
+    vel_caption = {
+        'strain_rate': 'dε/dt (1/s)',
+        'strain_pct_rate': 'd(% strain)/dt (%/s)',
+        'curvature_rate': 'dκ/dt (1/m/s)',
+        'angle_vel': 'deg/s',
+    }.get(velocity_mode, velocity_mode)
     for i, v in enumerate(vels):
         r['table'].append(
             {
                 'row': f'velocity step {i}',
                 'value': float(v),
-                'unit': 'deg/s',
+                'unit': vel_caption,
+                'motor_deg_s': float(vels_deg[i]),
                 'sequence_index': int(seq_idx[i]),
             }
         )
     try:
-        t, angle, anglevel = _preview_concat_isovelocity_timeline(b, theta0, vels, sp)
+        t, angle, anglevel, s1, s2 = _preview_concat_isovelocity_timeline(b, theta0, vels_deg, sp)
     except Exception as e:
         r['error'] = f'Isovelocity timeline preview failed: {type(e).__name__}: {e}'
         return r
     r['t'] = t
     r['angle'] = angle
     r['anglevel'] = anglevel
+    r['stim_s1'] = s1
+    r['stim_s2'] = s2
+    r['table'].extend(_stim_table_rows(b, sp, recruitment=str(rec_iso)))
     r['preview_isovelocity'] = True
     return r
 
@@ -571,6 +714,18 @@ def _preview_dynamic(b: Any, max_plot_points: int) -> PreviewResult:
         {'metric': 'approx. motion duration (s)', 'value': float(np.sum(b.period_by_cycle))},
         {'metric': 'time samples', 'value': int(r['t'].size)},
     ]
+    if bool(getattr(b, 'is_stim', False)):
+        s1, s2 = b.make_stimuli(is_stim=True, t_basis=r['t'], tnorm_basis=tnorm, stim_pulse_rate=spr)
+        r['stim_s1'] = np.asarray(s1, dtype=float).reshape(-1)
+        r['stim_s2'] = np.asarray(s2, dtype=float).reshape(-1)
+        r['table'].extend(
+            [
+                {'metric': 'stimulation enabled', 'value': True},
+                {'metric': 'pulse rate (Hz)', 'value': spr},
+            ]
+        )
+    else:
+        r['table'].append({'metric': 'stimulation enabled', 'value': False})
     return r
 
 

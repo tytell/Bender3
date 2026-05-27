@@ -29,6 +29,8 @@ _MOTION_STIM = (
     'stim_pulse_rate',
     'S1volts',
     'S2volts',
+    'all_stimduties',
+    'all_stimphases',
 )
 _MOTION_FREQ_AMP_MODE = ('all_freqs', 'all_amps', 'all_amps_mode')
 _MOTION_ORGANIZE = (
@@ -75,6 +77,8 @@ LIST_FLOAT_KEYS = frozenset(
     {
         'all_freqs',
         'all_amps',
+        'all_stimduties',
+        'all_stimphases',
         'step_change_frequencies',
         'step_change_curves',
     }

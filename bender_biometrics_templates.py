@@ -39,6 +39,7 @@ BIOMETRICS_SESSION_KEYS = (
     'bio_prof_dh',
     'bio_prof_dw',
     'bio_prof_L',
+    'bio_prof_rho_preset',
     'bio_prof_rho',
     'bio_prof_clamp',
     'bio_prof_samples',

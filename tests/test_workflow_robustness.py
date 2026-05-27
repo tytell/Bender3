@@ -180,6 +180,9 @@ class _DummyBender:
         self.config_name = config_name
         self.outputfile = ''
 
+    def validate_dispatch_setup(self, test_type=None):
+        return {'ok': True, 'missing': [], 'test_type': str(test_type or 'dynamic')}
+
 
 def test_checklist_requires_confirmation_plus_valid_state():
     _clear_streamlit_session_state()
@@ -192,21 +195,36 @@ def test_checklist_requires_confirmation_plus_valid_state():
     b.outputfile = gui._compose_output_h5_path()
     gui._mark_data_path_applied()
 
-    st.session_state['gui_setup_confirmed'] = False
-    assert not gui._setup_confirmed_for_checklist(b)
-    st.session_state['gui_setup_confirmed'] = True
-    assert gui._setup_confirmed_for_checklist(b)
+    ready = gui._workflow_ready_state(b, 'dynamic')
+    assert ready['setup_ok']
+    assert not ready['measurements_ok']
+    assert ready['run_disabled'] is False
 
-    st.session_state['gui_measurements_confirmed'] = True
     st.session_state['gui_genus_species'] = 'Danio rerio'
     st.session_state['gui_specimen_id'] = 'fish-1'
     st.session_state['bio_fishmass'] = 2.0
     st.session_state['bio_dclamp'] = 10.0
     st.session_state['bio_xsec'] = 2.0
-    st.session_state['gui_bio_applied_sig'] = gui._bio_fingerprint()
-    assert gui._measurements_confirmed_for_checklist()
-    st.session_state['gui_measurements_confirmed'] = False
-    assert not gui._measurements_confirmed_for_checklist()
+    gui._mark_bio_applied()
+    ready2 = gui._workflow_ready_state(b, 'dynamic')
+    assert ready2['measurements_ok']
+
+
+def test_run_button_state_when_no_bender():
+    _clear_streamlit_session_state()
+    disabled, reason = gui._run_button_state()
+    assert disabled
+    assert 'Setup' in reason
+
+
+def test_protocol_checklist_ignores_form_widget_status_section():
+    _clear_streamlit_session_state()
+    b = _DummyBender('dummy_cfg')
+    st.session_state['bender'] = b
+    st.session_state['test_type_select'] = 'dynamic'
+    gui._mark_procedure_applied()
+    checks_by_sec = {gui._CHK_SEC_EXP: ['Frequencies field is blank.']}
+    assert gui._protocol_confirmed_for_checklist(b, checks_by_sec)
 
 
 def test_refresh_confirmation_flags_clear_when_dirty():

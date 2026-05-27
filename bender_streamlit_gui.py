@@ -7,7 +7,7 @@ Run from the project directory:
 Select ``test_type`` first; edit fields, use **Apply** to copy them onto the
 ``Bender`` instance, optionally **save / load protocol** and **biometrics** files in **section 3**,
 **Check required fields** to validate,
-**Refresh preview** for a table/plot of commanded motion (no DAQ), then **Run experiment**
+**Refresh experiment preview** (in **Procedure fields**) for a table/plot of commanded motion (no DAQ), then **Run experiment**
 when hardware is ready.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ import os
 import sys
 import tempfile
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import h5py
 import numpy as np
@@ -36,6 +36,28 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 _LOGO_PATH = os.path.join(_ROOT, 'assets', 'jimenez_biomechanics_logo.png')
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+_DEBUG_LOG_PATH = os.path.join(_ROOT, 'debug-4506cd.log')
+
+
+def _agent_debug_log(*, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        import json as _json
+
+        _payload = {
+            'sessionId': '4506cd',
+            'hypothesisId': hypothesis_id,
+            'location': location,
+            'message': message,
+            'data': data,
+            'timestamp': int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, 'a', encoding='utf-8') as _df:
+            _df.write(_json.dumps(_payload, default=str) + '\n')
+    except Exception:
+        pass
+    # #endregion
 
 
 def _nsf_logo_path() -> Optional[str]:
@@ -1244,6 +1266,16 @@ MOTION_GUI_FIELDS = [
     ('stim_pulse_rate', 'float', 'Stim pulse rate (Hz)'),
     ('S1volts', 'float', 'S1 voltage (V)'),
     ('S2volts', 'float', 'S2 voltage (V)'),
+    (
+        'all_stimduties',
+        'list_float',
+        'Stim duty (fraction of cycle, comma-separated)',
+    ),
+    (
+        'all_stimphases',
+        'list_float',
+        'Stim phase (fraction of cycle, comma-separated)',
+    ),
 ]
 
 STEP_CHANGE_EXTRA = [
@@ -1287,6 +1319,8 @@ def _motion_parameter_rows(test_type: str):
         _MOTION_ROW_BY_NAME['stim_pulse_rate'],
         _MOTION_ROW_BY_NAME['S1volts'],
         _MOTION_ROW_BY_NAME['S2volts'],
+        _MOTION_ROW_BY_NAME['all_stimduties'],
+        _MOTION_ROW_BY_NAME['all_stimphases'],
     ]
     if test_type == 'dynamic':
         # Duration comes from ``sum(period_by_cycle)`` after ``organize_cycles``, not ``self.duration``.
@@ -1306,6 +1340,7 @@ def _motion_parameter_rows(test_type: str):
 
 
 ALL_AMPS_MODE_OPTIONS = ('strain', 'strain_pct', 'curvature', 'angle')
+VELOCITY_MODE_OPTIONS = ('strain_rate', 'strain_pct_rate', 'curvature_rate', 'angle_vel')
 
 DATA_FOLDER_HELP = (
     'Choose the folder where experiment files live. Enter the folder path only — do not put the file name here. '
@@ -1403,11 +1438,12 @@ RECRUITMENT_FIELD_HELP = (
 )
 
 ISOVELOCITY_WIDGET_LABEL = {
-    'isovelocity_min_vel': 'Minimum angular velocity (deg/s)',
-    'isovelocity_max_vel': 'Maximum angular velocity (deg/s)',
-    'isovelocity_starting_strain': 'Starting posture (strain / curvature / angle)',
+    'isovelocity_min_vel': 'Minimum velocity',
+    'isovelocity_max_vel': 'Maximum velocity',
+    'isovelocity_starting_strain': 'Starting posture',
     'isovelocity_num_steps': 'Number of velocity steps',
-    'isovelocity_starting_strain_mode': 'Unit for starting posture value',
+    'isovelocity_starting_strain_mode': 'Unit for starting posture',
+    'isovelocity_velocity_mode': 'Unit for min/max velocity',
     'isovelocity_randomize': 'Randomize order of velocity steps',
     'isovelocity_random_seed': 'Random seed (optional)',
     'isovelocity_iso_duration_s': 'Constant-velocity bend duration (s)',
@@ -1415,8 +1451,12 @@ ISOVELOCITY_WIDGET_LABEL = {
 }
 
 ISOVELOCITY_FIELD_HELP = {
-    'isovelocity_min_vel': 'Lower end of the angular velocity sweep (deg/s). Steps are spaced linearly between min and max.',
-    'isovelocity_max_vel': 'Upper end of the angular velocity sweep (deg/s).',
+    'isovelocity_min_vel': 'Lower end of the velocity sweep in the units selected below (e.g. deg/s, dε/dt, or dκ/dt).',
+    'isovelocity_max_vel': 'Upper end of the velocity sweep (same units as minimum).',
+    'isovelocity_velocity_mode': (
+        'How **minimum** / **maximum velocity** are interpreted before conversion to motor deg/s '
+        '(strain_rate, curvature_rate, or angle_vel).'
+    ),
     'isovelocity_starting_strain': 'Initial posture before each velocity step; interpreted with **starting strain mode** (e.g. decimal ε vs motor angle).',
     'isovelocity_num_steps': 'How many commanded angular velocities between min and max (inclusive). Each is a separate trial from the same start posture.',
     'isovelocity_starting_strain_mode': 'Whether **starting posture** is decimal ε, percent strain, curvature κ, or motor angle (deg).',
@@ -1480,6 +1520,15 @@ MOTION_FIELD_HELP = {
     'stim_pulse_rate': 'Carrier pulse rate for stimulation (Hz).',
     'S1volts': 'Stimulus channel 1 amplitude (V).',
     'S2volts': 'Stimulus channel 2 amplitude (V).',
+    'all_stimduties': (
+        'Comma-separated **duty** values (each 0–1 as a **fraction of one motion cycle**). '
+        'Used with frequencies and amplitudes to build stimulation timing via ``organize_cycles``; '
+        'leave blank to use defaults (e.g. 0.3) in preview.'
+    ),
+    'all_stimphases': (
+        'Comma-separated **phase** values (each 0–1 as a **fraction of one motion cycle**, same convention as duty). '
+        'Leave blank to use defaults (e.g. 0.5) in preview.'
+    ),
     'amplitude_frequency_exponent': 'For frequency sweep: exponent α so amplitude ∝ f^α relative to the sweep start.',
     'step_change_frequencies': 'Comma-separated frequencies for each step-change segment.',
     'step_change_curves': 'Comma-separated curvature / amplitude targets per segment.',
@@ -1498,6 +1547,19 @@ def _format_strain_or_amp_mode(opt: str) -> str:
         return 'curvature — κ (1/m)'
     if o == 'angle':
         return 'angle — motor (deg)'
+    return o
+
+
+def _format_velocity_mode(opt: str) -> str:
+    o = str(opt)
+    if o == 'strain_rate':
+        return 'strain_rate — dε/dt (1/s, decimal ε)'
+    if o == 'strain_pct_rate':
+        return 'strain_pct_rate — d(% strain)/dt (%/s)'
+    if o == 'curvature_rate':
+        return 'curvature_rate — dκ/dt (1/m/s)'
+    if o == 'angle_vel':
+        return 'angle_vel — motor angular rate (deg/s)'
     return o
 
 
@@ -2068,6 +2130,7 @@ _BIO_APPLY_SESSION_KEYS = (
     'bio_prep_condition',
     'bio_use_theoretical_inertial',
     'bio_prof_L',
+    'bio_prof_rho_preset',
     'bio_prof_rho',
     'bio_prof_ph',
     'bio_prof_pw',
@@ -2108,10 +2171,32 @@ def _ensure_apply_tracking_bender(b: Bender) -> None:
 
 
 def _touch_bio_apply_baseline_if_clean() -> None:
-    if st.session_state.get('gui_bio_apply_invalidated'):
+    _inv = bool(st.session_state.get('gui_bio_apply_invalidated'))
+    _has_sig = 'gui_bio_applied_sig' in st.session_state
+    if _inv:
+        # #region agent log
+        _agent_debug_log(
+            hypothesis_id='B',
+            location='bender_streamlit_gui.py:_touch_bio_apply_baseline_if_clean',
+            message='skip_touch_invalidated',
+            data={'invalidated': True, 'has_sig': _has_sig},
+        )
+        # #endregion
         return
-    if 'gui_bio_applied_sig' not in st.session_state:
+    if not _has_sig:
         st.session_state['gui_bio_applied_sig'] = _bio_fingerprint()
+        # #region agent log
+        _agent_debug_log(
+            hypothesis_id='B',
+            location='bender_streamlit_gui.py:_touch_bio_apply_baseline_if_clean',
+            message='baseline_sig_set_without_apply',
+            data={
+                'fishmass': st.session_state.get('bio_fishmass'),
+                'dclamp': st.session_state.get('bio_dclamp'),
+                'xsec': st.session_state.get('bio_xsec'),
+            },
+        )
+        # #endregion
 
 
 def _touch_data_path_baseline_if_clean() -> None:
@@ -2148,6 +2233,18 @@ def _bio_apply_dirty() -> bool:
     if 'gui_bio_applied_sig' not in st.session_state:
         return False
     return _bio_fingerprint() != st.session_state['gui_bio_applied_sig']
+
+
+def _bio_apply_dirty_reason() -> str:
+    if st.session_state.get('bender') is None:
+        return 'no_bender'
+    if st.session_state.get('gui_bio_apply_invalidated'):
+        return 'invalidated'
+    if 'gui_bio_applied_sig' not in st.session_state:
+        return 'no_applied_sig'
+    if _bio_fingerprint() != st.session_state['gui_bio_applied_sig']:
+        return 'fingerprint_mismatch'
+    return 'clean'
 
 
 def _data_path_apply_dirty() -> bool:
@@ -2202,6 +2299,122 @@ def _measurements_confirmed_for_checklist() -> bool:
     if xw is None or xw <= 0:
         return False
     return True
+
+
+def _sanitize_stale_run_state() -> None:
+    """Clear stuck run flags when no acquisition can be active (e.g. after refresh)."""
+    if st.session_state.get('bender') is None:
+        st.session_state['gui_run_in_progress'] = False
+        st.session_state['gui_run_pending_confirm'] = False
+        st.session_state['gui_run_soft_warnings'] = []
+
+
+def _run_button_state() -> tuple[bool, str]:
+    """Whether **Run experiment** should be disabled and short help text."""
+    if st.session_state.get('bender') is None:
+        return True, 'Load hardware configuration in Setup (section 1) first.'
+    if bool(st.session_state.get('gui_run_in_progress', False)):
+        return True, 'Run in progress — wait for acquisition to finish.'
+    return False, 'Starts NI-DAQ acquisition (simulation when enabled on other routes).'
+
+
+def _measurements_fields_ok() -> bool:
+    if not str(st.session_state.get('gui_specimen_id') or '').strip():
+        return False
+    if not str(st.session_state.get('gui_genus_species') or '').strip():
+        return False
+    m = _session_float('bio_fishmass')
+    if m is None or m <= 0:
+        return False
+    dc = _session_float('bio_dclamp')
+    if dc is None or dc <= 0:
+        return False
+    xw = _session_float('bio_xsec')
+    if xw is None or xw <= 0:
+        return False
+    return True
+
+
+def _setup_ready(b: Optional[Bender]) -> bool:
+    if b is None:
+        return False
+    if _section2_destination_incomplete():
+        return False
+    outp = str(getattr(b, 'outputfile', '') or '').strip()
+    composed = _compose_output_h5_path().strip()
+    if not outp and not composed:
+        return False
+    if composed and outp and not _paths_equal_norm(outp, composed) and _data_path_apply_dirty():
+        return False
+    _cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+    if not _cfg_sel:
+        return False
+    _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
+    if _cfg_mode == 'Load existing' and not _selected_config_matches_bender(b, _cfg_sel):
+        return False
+    return True
+
+
+def _protocol_ready(b: Optional[Bender], tt: str) -> bool:
+    if b is None:
+        return False
+    if _procedure_apply_dirty():
+        return False
+    try:
+        rep = b.validate_dispatch_setup(test_type=tt)
+        return bool(rep.get('ok', False))
+    except Exception:
+        return False
+
+
+def _workflow_ready_state(b: Optional[Bender], tt: str) -> dict[str, Any]:
+    """Unified readiness for sidebar checklist and Run UX (scratch-oriented)."""
+    run_disabled, run_reason = _run_button_state()
+    setup_ok = _setup_ready(b)
+    measurements_ok = _measurements_fields_ok() and not _bio_apply_dirty()
+    # #region agent log
+    _agent_debug_log(
+        hypothesis_id='A',
+        location='bender_streamlit_gui.py:_workflow_ready_state',
+        message='checklist_measurements',
+        data={
+            'route': _nav_route(),
+            'stepwise_step': _stepwise_step() if _nav_route() == 'stepwise' else None,
+            'fields_ok': _measurements_fields_ok(),
+            'bio_dirty': _bio_apply_dirty(),
+            'dirty_reason': _bio_apply_dirty_reason(),
+            'measurements_ok': measurements_ok,
+            'fishmass': st.session_state.get('bio_fishmass'),
+            'dclamp': st.session_state.get('bio_dclamp'),
+            'bender_dclamp': getattr(b, 'dclamp', None) if b is not None else None,
+        },
+    )
+    # #endregion
+    if measurements_ok and b is not None:
+        st.session_state.setdefault('gui_measurements_confirmed', True)
+    protocol_ok = _protocol_ready(b, tt)
+    if protocol_ok:
+        st.session_state.setdefault('gui_protocol_confirmed', True)
+    if setup_ok:
+        st.session_state.setdefault('gui_setup_confirmed', True)
+    return {
+        'setup_ok': setup_ok,
+        'measurements_ok': measurements_ok,
+        'protocol_ok': protocol_ok,
+        'run_disabled': run_disabled,
+        'run_disabled_reason': run_reason,
+    }
+
+
+def _setup_confirmed_for_checklist(b: Optional[Bender]) -> bool:
+    tt = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
+    return _workflow_ready_state(b, tt)['setup_ok']
+
+
+def _measurements_confirmed_for_checklist() -> bool:
+    b = st.session_state.get('bender')
+    tt = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
+    return _workflow_ready_state(b, tt)['measurements_ok']
 
 
 _CHK_SEC_DATA = '2 · Data path'
@@ -2432,15 +2645,10 @@ def _setup_confirmed_for_checklist(b: Optional[Bender]) -> bool:
 
 
 def _protocol_confirmed_for_checklist(b: Optional[Bender], checks_by_sec: dict[str, list[str]]) -> bool:
-    if b is None:
-        return False
-    if not bool(st.session_state.get('gui_protocol_confirmed')):
-        return False
-    if _procedure_apply_dirty():
-        return False
-    if _CHK_SEC_EXP in checks_by_sec:
-        return False
-    return True
+    """Protocol step complete when Bender validates; form-widget warnings do not block."""
+    del checks_by_sec  # retained for call-site compatibility
+    tt = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
+    return _workflow_ready_state(b, tt)['protocol_ok']
 
 
 def _refresh_confirmation_flags() -> None:
@@ -2461,16 +2669,34 @@ def _mark_review_data_used() -> None:
     st.session_state['gui_review_data_used'] = True
 
 
-def _build_checklist_fix_lines(*, b: Optional[Bender], setup_ok: bool, measurements_ok: bool, protocol_ok: bool) -> list[str]:
+def _build_checklist_fix_lines(
+    *,
+    b: Optional[Bender],
+    setup_ok: bool,
+    measurements_ok: bool,
+    protocol_ok: bool,
+    checks_by_sec: Optional[dict[str, list[str]]] = None,
+    tt: str = 'dynamic',
+) -> list[str]:
     lines: list[str] = []
     if not setup_ok:
         lines.append('Setup: complete Step 1 and click Apply setup.')
     if not measurements_ok:
         lines.append('Measurements: enter required values and click Apply section or Apply all biometrics.')
     if not protocol_ok:
-        lines.append('Protocol/Run: fill required procedure fields and click Apply procedure.')
+        lines.append('Protocol/Run: fill required procedure fields and click Apply procedure or Refresh experiment preview.')
     if b is None:
         lines.append('Hardware: load a hardware configuration in Setup.')
+    if checks_by_sec:
+        for sec in (_CHK_SEC_DATA, _CHK_SEC_BIO, _CHK_SEC_EXP):
+            for msg in (checks_by_sec.get(sec) or [])[:2]:
+                lines.append(f'{sec}: {msg}')
+    elif b is not None and not protocol_ok:
+        try:
+            for msg in (b.validate_dispatch_setup(test_type=tt).get('missing') or [])[:3]:
+                lines.append(f'Protocol: missing {msg}')
+        except Exception:
+            pass
     return lines
 
 
@@ -2563,7 +2789,7 @@ def _render_simulation_sidebar() -> None:
         st.checkbox(
             'Enable simulation mode (no DAQ)',
             key='gui_simulation_mode',
-            help='Bypasses NI-DAQmx in **Run experiment**; use **Refresh preview** below for force–displacement plots.',
+            help='Bypasses NI-DAQmx in **Run experiment**; use **Refresh experiment preview** in **Procedure fields** for force–displacement plots.',
         )
         _sim_on = bool(st.session_state.get('gui_simulation_mode', False))
         st.selectbox(
@@ -2815,6 +3041,21 @@ def _consume_pending_biometrics_template() -> None:
         if ok:
             st.session_state['gui_bio_apply_invalidated'] = True
             st.session_state.pop('gui_tpl_bio_done', None)
+            # #region agent log
+            _agent_debug_log(
+                hypothesis_id='A',
+                location='bender_streamlit_gui.py:_consume_pending_biometrics_template',
+                message='template_loaded',
+                data={
+                    'path': os.path.basename(str(path)),
+                    'fishmass': st.session_state.get('bio_fishmass'),
+                    'dclamp': st.session_state.get('bio_dclamp'),
+                    'xsec': st.session_state.get('bio_xsec'),
+                    'invalidated': True,
+                },
+            )
+            # #endregion
+            st.rerun()
     except OSError as e:
         st.session_state['gui_biometrics_load_feedback'] = (False, f'Could not read file: {e}')
     except json.JSONDecodeError as e:
@@ -2927,53 +3168,157 @@ def _sync_biometric_flags_from_session(b: Bender):
         b.fishlen_SL = float(st.session_state['bio_fishlen_SL'])
 
 
-def _init_biometrics_session_state(b: Bender, *, force: bool = False):
-    """Seed Streamlit widget keys from ``b`` (``force`` overwrites after config reload)."""
+def _bio_prof_outline_mm_from_bender(b: Bender) -> tuple[float, float, float, float]:
+    """Proximal H/W and distal H/W (mm) from ``specimen_profile_stations`` when present; else GUI placeholders."""
+    st_list = getattr(b, 'specimen_profile_stations', None)
+    if not isinstance(st_list, list) or len(st_list) < 2:
+        return (4.0, 6.0, 3.5, 5.0)
+    valid: list = []
+    for s in st_list:
+        if not isinstance(s, dict):
+            continue
+        try:
+            float(s.get('position', 0.0))
+            float(s.get('height_mm', 0.0))
+            float(s.get('width_mm', 0.0))
+        except (TypeError, ValueError):
+            continue
+        valid.append(s)
+    if len(valid) < 2:
+        return (4.0, 6.0, 3.5, 5.0)
+    by_pos = sorted(valid, key=lambda s: float(s['position']))
+    p0, p1 = by_pos[0], by_pos[-1]
+    return (
+        float(p0['height_mm']),
+        float(p0['width_mm']),
+        float(p1['height_mm']),
+        float(p1['width_mm']),
+    )
 
-    def _put(key, val):
-        if force or key not in st.session_state:
-            st.session_state[key] = val
 
+def _bio_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
+    """Map ``Bender`` + protocol metadata to Streamlit biometrics widget keys (same source as **Apply all**)."""
     dc = getattr(b, 'dclamp', None)
     xw = getattr(b, 'xsec_width', None)
-    _meta_b = getattr(b, 'h5_protocol_metadata', {}) or {}
-    _put(
-        'gui_specimen_id',
-        str(_meta_b.get('specimen_id') or getattr(b, 'fishcode', '') or '').strip(),
-    )
-    _put('bio_segment', str(getattr(b, 'segment', '') or ''))
+    meta = getattr(b, 'h5_protocol_metadata', {}) or {}
+    ph, pw, dh, dw = _bio_prof_outline_mm_from_bender(b)
     _fm = getattr(b, 'fishmass', None)
-    _put('bio_fishmass', float(_fm) if _fm is not None and math.isfinite(float(_fm)) else 0.0)
     _ftl = getattr(b, 'fishlen_TL', None)
-    _put('bio_fishlen_TL', float(_ftl) if _ftl is not None and math.isfinite(float(_ftl)) else 0.0)
     _fsl = getattr(b, 'fishlen_SL', None)
-    _put('bio_fishlen_SL', float(_fsl) if _fsl is not None and math.isfinite(float(_fsl)) else 0.0)
     _xh = getattr(b, 'xsec_height', None)
-    _put(
-        'bio_xsec_height',
-        float(_xh) if _xh is not None and math.isfinite(float(_xh)) else (float(xw) if xw is not None else 8.0),
-    )
-    _put('bio_dvert', float(getattr(b, 'dvert', 0.0) or 0.0))
-    _put('bio_dhoriz', float(getattr(b, 'dhoriz', 0.0) or 0.0))
-    _put('bio_dclamp', float(dc) if dc is not None else 10.0)
-    _put('bio_xsec', float(xw) if xw is not None else 8.0)
-    _put('bio_dbend', float(getattr(b, 'dbend', 0.0) or 0.0))
-    _put('bio_temp_room', float(getattr(b, 'temp_C_room', 22.0) or 22.0))
-    _put('bio_temp_tank', float(getattr(b, 'temp_C_tank', 22.0) or 22.0))
-    _put('bio_prep_condition', str(_meta_b.get('prep_condition', '') or ''))
-    _put(
-        'bio_use_theoretical_inertial',
-        bool(getattr(b, 'use_theoretical_inertial_correction', False)),
-    )
-    # Simple 2-station profile defaults (mm)
-    _put('bio_prof_L', float(getattr(b, 'specimen_profile_length_mm', 25.0) or 25.0))
-    _put('bio_prof_rho', float(getattr(b, 'specimen_profile_density_g_per_mm3', 1.03e-3) or 1.03e-3))
-    _put('bio_prof_ph', float(4.0))
-    _put('bio_prof_pw', float(6.0))
-    _put('bio_prof_dh', float(3.5))
-    _put('bio_prof_dw', float(5.0))
-    _put('bio_prof_clamp', float(getattr(b, 'specimen_profile_clamp_offset_mm', 20.0) or 20.0))
-    _put('bio_prof_samples', int(getattr(b, 'specimen_profile_num_samples', 120) or 120))
+    return {
+        'gui_genus_species': str(meta.get('genus_species', '') or '').strip(),
+        'gui_specimen_id': str(meta.get('specimen_id') or getattr(b, 'fishcode', '') or '').strip(),
+        'bio_segment': str(getattr(b, 'segment', '') or ''),
+        'bio_fishmass': float(_fm) if _fm is not None and math.isfinite(float(_fm)) else 0.0,
+        'bio_fishlen_TL': float(_ftl) if _ftl is not None and math.isfinite(float(_ftl)) else 0.0,
+        'bio_fishlen_SL': float(_fsl) if _fsl is not None and math.isfinite(float(_fsl)) else 0.0,
+        'bio_xsec_height': float(_xh)
+        if _xh is not None and math.isfinite(float(_xh))
+        else (float(xw) if xw is not None else 8.0),
+        'bio_dvert': float(getattr(b, 'dvert', 0.0) or 0.0),
+        'bio_dhoriz': float(getattr(b, 'dhoriz', 0.0) or 0.0),
+        'bio_dclamp': float(dc) if dc is not None else 10.0,
+        'bio_xsec': float(xw) if xw is not None else 8.0,
+        'bio_dbend': float(getattr(b, 'dbend', 0.0) or 0.0),
+        'bio_temp_room': float(getattr(b, 'temp_C_room', 22.0) or 22.0),
+        'bio_temp_tank': float(getattr(b, 'temp_C_tank', 22.0) or 22.0),
+        'bio_prep_condition': str(meta.get('prep_condition', '') or ''),
+        'bio_use_theoretical_inertial': bool(getattr(b, 'use_theoretical_inertial_correction', False)),
+        'bio_prof_L': float(getattr(b, 'specimen_profile_length_mm', 25.0) or 25.0),
+        'bio_prof_rho': float(getattr(b, 'specimen_profile_density_g_per_mm3', 1.03e-3) or 1.03e-3),
+        'bio_prof_ph': ph,
+        'bio_prof_pw': pw,
+        'bio_prof_dh': dh,
+        'bio_prof_dw': dw,
+        'bio_prof_clamp': float(getattr(b, 'specimen_profile_clamp_offset_mm', 20.0) or 20.0),
+        'bio_prof_samples': int(getattr(b, 'specimen_profile_num_samples', 120) or 120),
+        'bio_prof_rho_preset': BIO_DENSITY_PRESET_LABELS[0],
+    }
+
+
+def _init_biometrics_session_state(b: Bender, *, force: bool = False):
+    """Seed Streamlit widget keys from ``b`` (``force`` overwrites after config reload)."""
+    defaults = _bio_widget_defaults_from_bender(b)
+    _seeded: list[str] = []
+    for key, val in defaults.items():
+        if force or key not in st.session_state:
+            st.session_state[key] = val
+            _seeded.append(key)
+    if _seeded:
+        # #region agent log
+        _agent_debug_log(
+            hypothesis_id='C',
+            location='bender_streamlit_gui.py:_init_biometrics_session_state',
+            message='seeded_from_bender',
+            data={
+                'force': force,
+                'seeded_keys': _seeded[:8],
+                'seeded_count': len(_seeded),
+                'route': _nav_route(),
+                'step': _stepwise_step() if _nav_route() == 'stepwise' else None,
+                'dclamp_after': st.session_state.get('bio_dclamp'),
+            },
+        )
+        # #endregion
+
+
+def _rehydrate_missing_biometrics_from_bender(b: Bender) -> None:
+    """Restore dropped or stale-empty ``bio_*`` / identity keys from ``B`` when measurements were applied.
+
+    Streamlit may omit widget keys between runs; keys can also stay as ``''``/0 while ``Bender`` still holds
+    values from **Apply all biometrics** (``setdefault`` keeps empty keys from being overwritten by ``_init``).
+    """
+    if not bool(st.session_state.get('gui_measurements_confirmed')):
+        return
+    defaults = _bio_widget_defaults_from_bender(b)
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+            continue
+        if key in ('gui_specimen_id', 'gui_genus_species'):
+            if not str(st.session_state.get(key) or '').strip():
+                if str(val or '').strip():
+                    st.session_state[key] = val
+            continue
+        if key == 'bio_fishmass':
+            m = _session_float('bio_fishmass')
+            if m is None or m <= 0:
+                fm = getattr(b, 'fishmass', None)
+                if fm is not None:
+                    try:
+                        fmf = float(fm)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(fmf) and fmf > 0:
+                        st.session_state[key] = fmf
+            continue
+        if key == 'bio_dclamp':
+            dc = _session_float('bio_dclamp')
+            if dc is None or dc <= 0:
+                bd = getattr(b, 'dclamp', None)
+                if bd is None:
+                    bd = getattr(b, 'test_segment_length_mm', None)
+                if bd is not None:
+                    try:
+                        bdf = float(bd)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(bdf) and bdf > 0:
+                        st.session_state[key] = bdf
+            continue
+        if key == 'bio_xsec':
+            xw = _session_float('bio_xsec')
+            if xw is None or xw <= 0:
+                bx = getattr(b, 'xsec_width', None)
+                if bx is not None:
+                    try:
+                        bxf = float(bx)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(bxf) and bxf > 0:
+                        st.session_state[key] = bxf
+            continue
 
 
 def _nav_route() -> str:
@@ -5111,6 +5456,23 @@ def _render_app_chrome() -> None:
 
 def _render_sidebar() -> None:
     """Sidebar: unified workflow checklist + emergency + settings."""
+    # #region agent log
+    _agent_debug_log(
+        hypothesis_id='F',
+        location='bender_streamlit_gui.py:_render_sidebar_entry',
+        message='pre_sidebar_state',
+        data={
+            'sess_fishmass': st.session_state.get('bio_fishmass'),
+            'sess_dclamp': st.session_state.get('bio_dclamp'),
+            'bender_fishmass': getattr(st.session_state.get('bender'), 'fishmass', None) if st.session_state.get('bender') is not None else None,
+            'bender_dclamp': getattr(st.session_state.get('bender'), 'dclamp', None) if st.session_state.get('bender') is not None else None,
+            'meas_conf': bool(st.session_state.get('gui_measurements_confirmed')),
+            'invalidated': bool(st.session_state.get('gui_bio_apply_invalidated')),
+            'route': _nav_route(),
+            'step': _stepwise_step() if _nav_route() == 'stepwise' else None,
+        },
+    )
+    # #endregion
     with st.sidebar:
         if _nav_route() == 'sim_compare':
             st.markdown('### Simulation & Comparison')
@@ -5125,9 +5487,11 @@ def _render_sidebar() -> None:
         st.markdown('**Workflow checklist**')
         _session_src = str(st.session_state.get('gui_session_source') or 'fresh')
         st.caption(f"Session: {'Restored' if _session_src == 'restored' else 'Fresh start'}")
-        _setup_ok = _setup_confirmed_for_checklist(b)
-        _meas_ok = _measurements_confirmed_for_checklist()
-        _proto_ok = _protocol_confirmed_for_checklist(b, checks_by_sec)
+        tt_chk = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
+        _ready = _workflow_ready_state(b, tt_chk)
+        _setup_ok = _ready['setup_ok']
+        _meas_ok = _ready['measurements_ok']
+        _proto_ok = _ready['protocol_ok']
         _review_used = bool(st.session_state.get('gui_review_data_used'))
         st.caption(f"1. Setup {'✅' if _setup_ok else '⚠️'}")
         st.caption(f"2. Measurements {'✅' if _meas_ok else '⚠️'}")
@@ -5143,6 +5507,8 @@ def _render_sidebar() -> None:
                 setup_ok=_setup_ok,
                 measurements_ok=_meas_ok,
                 protocol_ok=_proto_ok,
+                checks_by_sec=checks_by_sec,
+                tt=tt_chk,
             )
             with st.container(border=True):
                 if fix_lines:
@@ -5518,9 +5884,6 @@ def _render_template_procedure_strip() -> None:
                 elif _picked_dir:
                     _norm_p = os.path.normpath(_picked_dir)
                     _store_selected_data_folder(_norm_p)
-                    _dd_tpl = 'gui_data_folder_dd_tpl'
-                    st.session_state[_dd_tpl] = _norm_p
-                    st.session_state[f'{_dd_tpl}_synced_from_gui_data_folder'] = _norm_p
                     st.rerun()
             _preview_out = _compose_output_h5_path().strip()
             _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
@@ -5612,6 +5975,27 @@ def main():
             ),
         },
     )
+    # #region agent log
+    _agent_debug_log(
+        hypothesis_id='F',
+        location='bender_streamlit_gui.py:main_start',
+        message='entry_state',
+        data={
+            'sess_fishmass': st.session_state.get('bio_fishmass'),
+            'sess_dclamp': st.session_state.get('bio_dclamp'),
+            'sess_xsec': st.session_state.get('bio_xsec'),
+            'fishmass_in_keys': 'bio_fishmass' in st.session_state,
+            'dclamp_in_keys': 'bio_dclamp' in st.session_state,
+            'bender_fishmass': getattr(st.session_state.get('bender'), 'fishmass', None) if st.session_state.get('bender') is not None else None,
+            'bender_dclamp': getattr(st.session_state.get('bender'), 'dclamp', None) if st.session_state.get('bender') is not None else None,
+            'applied_sig_fm': st.session_state.get('gui_bio_applied_sig')[3] if isinstance(st.session_state.get('gui_bio_applied_sig'), tuple) and len(st.session_state.get('gui_bio_applied_sig')) > 3 else None,
+            'applied_sig_dc': st.session_state.get('gui_bio_applied_sig')[9] if isinstance(st.session_state.get('gui_bio_applied_sig'), tuple) and len(st.session_state.get('gui_bio_applied_sig')) > 9 else None,
+            'invalidated': bool(st.session_state.get('gui_bio_apply_invalidated')),
+            'route': str(st.session_state.get('gui_app_route') or 'landing'),
+            'step': int(st.session_state.get('gui_stepwise_step', 0) or 0),
+        },
+    )
+    # #endregion
     st.session_state.setdefault('gui_ui_theme', GUI_UI_THEME_OPTIONS[0])
     _migrate_gui_ui_theme_session()
     st.session_state.setdefault('gui_ui_large_text', False)
@@ -5642,7 +6026,9 @@ def main():
 
     _flush_pending_load_config_session()
     _consume_pending_biometrics_template()
+    _flush_pending_bio_prof_rho_sync()
     _refresh_confirmation_flags()
+    _sanitize_stale_run_state()
     # Repair data-path fields from persisted signatures before any widget binds to
     # gui_data_folder / gui_data_filename (Streamlit forbids mutating those keys later).
     _repair_data_path_fields_from_session()
@@ -6082,9 +6468,6 @@ def main():
                     elif _picked_dir:
                         _norm_p = os.path.normpath(_picked_dir)
                         _store_selected_data_folder(_norm_p)
-                        _dd_main = 'gui_data_folder_dd_main'
-                        st.session_state[_dd_main] = _norm_p
-                        st.session_state[f'{_dd_main}_synced_from_gui_data_folder'] = _norm_p
                         st.rerun()
                 _preview_out = _compose_output_h5_path().strip()
                 _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
@@ -6127,8 +6510,24 @@ def main():
     b: Bender = st.session_state['bender']
     _ensure_apply_tracking_bender(b)
     _init_biometrics_session_state(b, force=False)
-    _flush_pending_bio_prof_rho_sync()
+    _rehydrate_missing_biometrics_from_bender(b)
     _sync_biometric_flags_from_session(b)
+    # #region agent log
+    _agent_debug_log(
+        hypothesis_id='D',
+        location='bender_streamlit_gui.py:main_post_bio_sync',
+        message='session_vs_bender',
+        data={
+            'route': _nav_route(),
+            'step': _stepwise_step() if _nav_route() == 'stepwise' else None,
+            'show_sec2': _show_full_sec2(),
+            'sess_dclamp': st.session_state.get('bio_dclamp'),
+            'bender_dclamp': getattr(b, 'dclamp', None),
+            'sess_fishmass': st.session_state.get('bio_fishmass'),
+            'bender_fishmass': getattr(b, 'fishmass', None),
+        },
+    )
+    # #endregion
     _ensure_review_file_selection(
         _candidate_review_files(_output_path_anchor_for_review(b)) if _output_path_anchor_for_review(b) else []
     )
@@ -6471,11 +6870,16 @@ def main():
         b.test_type = tt
 
         st.session_state.setdefault('gui_exp_hide', False)
-        st.caption('Set procedure fields below, then click **Apply procedure**.')
+        st.caption(
+            'Set procedure fields below, then **Apply procedure** or **Refresh experiment preview** (both buttons are at the '
+            'bottom of **Procedure fields**).'
+        )
 
         updates = {}
         sub_proc_apply = False
         sub_proc_save = False
+        sub_proc_preview = False
+        pv_pts = 6000
 
         with st.expander('Procedure fields', expanded=not bool(st.session_state.get('gui_exp_hide'))):
             if sf := st.session_state.pop('gui_protocol_save_feedback', None):
@@ -6624,11 +7028,38 @@ def main():
                 elif tt == 'isovelocity':
                     st.markdown('**Required**')
                     for key in schema['isovelocity_required']:
-                        kind = 'int' if 'num_steps' in key else 'float'
-                        lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                        updates[key] = _render_field(
-                            b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                        )
+                        if key == 'isovelocity_starting_strain_mode':
+                            modes = list(ALL_AMPS_MODE_OPTIONS)
+                            skm = _widget_key('isovelocity_starting_strain_mode')
+                            cur_m = str(_get_session_value(b, key, 'strain'))
+                            if skm not in st.session_state:
+                                st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                            updates[key] = st.selectbox(
+                                ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for starting posture'),
+                                modes,
+                                key=skm,
+                                format_func=_format_strain_or_amp_mode,
+                                help=ISOVELOCITY_FIELD_HELP.get(key),
+                            )
+                        elif key == 'isovelocity_velocity_mode':
+                            vmodes = list(VELOCITY_MODE_OPTIONS)
+                            skv = _widget_key('isovelocity_velocity_mode')
+                            cur_v = str(_get_session_value(b, key, 'angle_vel'))
+                            if skv not in st.session_state:
+                                st.session_state[skv] = cur_v if cur_v in vmodes else 'angle_vel'
+                            updates[key] = st.selectbox(
+                                ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for min/max velocity'),
+                                vmodes,
+                                key=skv,
+                                format_func=_format_velocity_mode,
+                                help=ISOVELOCITY_FIELD_HELP.get(key),
+                            )
+                        else:
+                            kind = 'int' if 'num_steps' in key else 'float'
+                            lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                            updates[key] = _render_field(
+                                b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                            )
                     if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
                         updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
                     st.markdown('**Optional**')
@@ -6675,19 +7106,17 @@ def main():
                             updates[key] = _render_field(
                                 b, key, 'float', 'Left-side fraction (0-1)', help_text=ISOVELOCITY_FIELD_HELP.get(key)
                             )
-                        elif key == 'isovelocity_starting_strain_mode':
-                            modes = list(ALL_AMPS_MODE_OPTIONS)
-                            skm = _widget_key('isovelocity_starting_strain_mode')
-                            cur_m = str(_get_session_value(b, key, 'strain'))
-                            if skm not in st.session_state:
-                                st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                        elif key == 'isovelocity_velocity_mode':
+                            vmodes = list(VELOCITY_MODE_OPTIONS)
+                            skv = _widget_key('isovelocity_velocity_mode')
+                            cur_v = str(_get_session_value(b, key, 'angle_vel'))
+                            if skv not in st.session_state:
+                                st.session_state[skv] = cur_v if cur_v in vmodes else 'angle_vel'
                             updates[key] = st.selectbox(
-                                ISOVELOCITY_WIDGET_LABEL.get(
-                                    key, 'Starting posture mode'
-                                ),
-                                modes,
-                                key=skm,
-                                format_func=_format_strain_or_amp_mode,
+                                ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for min/max velocity'),
+                                vmodes,
+                                key=skv,
+                                format_func=_format_velocity_mode,
                                 help=ISOVELOCITY_FIELD_HELP.get(key),
                             )
                         elif 'random_seed' in key:
@@ -6730,7 +7159,7 @@ def main():
                     )
                     st.info(
                         'Calibration runs the **base** motion protocol. Set **test_type** to that base '
-                        '(e.g. dynamic), click **Apply** in **section 4** or **6** (and **Refresh preview** if you use it), '
+                        '(e.g. dynamic), click **Apply** in **section 4** or **6** (and **Refresh experiment preview** in **Procedure fields** if you use preview), '
                         'then switch back to **calibration** before running.'
                     )
                     st.markdown('**Optional**')
@@ -6753,6 +7182,8 @@ def main():
                         'stim_pulse_rate',
                         'S1volts',
                         'S2volts',
+                        'all_stimduties',
+                        'all_stimphases',
                     }
                     _motion_fields = [row for row in fields if row[0] not in _stim_field_names]
                     _stim_fields = [row for row in fields if row[0] in _stim_field_names]
@@ -6808,6 +7239,14 @@ def main():
                         use_container_width=True,
                         help='Copy procedure fields onto the experiment object (not **Run experiment**).',
                     )
+                sub_proc_preview = st.form_submit_button(
+                    'Refresh experiment preview',
+                    use_container_width=True,
+                    help=(
+                        'Submit this form: copy procedure fields onto the experiment object and rebuild the preview plot. '
+                        'Use after editing fields here so preview matches your inputs (same data path as **Apply procedure**).'
+                    ),
+                )
 
             if sub_proc_apply:
                 _apply_procedure_form_to_bender(b, updates, tt)
@@ -6846,12 +7285,26 @@ def main():
                     st.session_state['gui_protocol_save_feedback'] = (False, f'{type(e).__name__}: {e}')
                 st.rerun()
 
+            if sub_proc_preview:
+                _sync_biometric_flags_from_session(b)
+                _sync_genus_species_to_bender(b)
+                _apply_form_updates(b, updates, tt)
+                _mark_procedure_applied()
+                st.session_state['gui_last_preview'] = build_protocol_preview(
+                    b, requested_test_type=tt, max_plot_points=int(pv_pts)
+                )
+                st.session_state['gui_last_preview_tt'] = tt
+                if st.session_state['gui_last_preview'].get('ok'):
+                    st.session_state['gui_protocol_confirmed'] = True
+                st.toast('Preview updated.')
+                st.rerun()
+
             _touch_proc_apply_baseline_if_clean()
 
         st.checkbox(
             'Hide section (values stay; unhide to edit)',
             key='gui_exp_hide',
-            help='Collapse **Procedure fields** after you finish editing, saving a template, or clicking **Apply**.',
+            help='Collapse **Procedure fields** after you finish editing, saving a template, or using **Apply procedure** / **Refresh experiment preview**.',
         )
 
         st.divider()
@@ -6905,12 +7358,12 @@ def main():
                 settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
             st.dataframe(pd.DataFrame(settings_rows), use_container_width=True, hide_index=True)
 
-        pv_pts = 6000
-
         if st.session_state.get('gui_last_preview') is not None:
             prev = st.session_state['gui_last_preview']
             if st.session_state.get('gui_last_preview_tt') != tt:
-                st.warning('Test type changed since the last preview — click **Refresh preview** to update.')
+                st.warning(
+                    'Test type changed since the last preview — open **Procedure fields** and click **Refresh experiment preview**.'
+                )
             if prev.get('error'):
                 _ph, _pb = _preview_error_actions(str(prev.get('error') or ''))
                 _st_error_actions(
@@ -6971,6 +7424,61 @@ def main():
                                 legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
                             )
                         st.plotly_chart(fig, use_container_width=True)
+                        sp_plot = prev.get('strain_plot')
+                        kp_plot = prev.get('curvature_plot')
+                        if sp_plot is not None or kp_plot is not None:
+                            st.markdown('**Native units** (derived from motor angle)')
+                            fig_nu = go.Figure()
+                            if kp_plot is not None and len(kp_plot) > 0:
+                                fig_nu.add_trace(
+                                    go.Scatter(x=tp, y=kp_plot, mode='lines', name='Curvature κ (1/m)')
+                                )
+                            if sp_plot is not None and len(sp_plot) > 0:
+                                fig_nu.add_trace(
+                                    go.Scatter(
+                                        x=tp,
+                                        y=sp_plot,
+                                        mode='lines',
+                                        name='Surface strain ε',
+                                        yaxis='y2' if kp_plot is not None else 'y',
+                                    )
+                                )
+                            _nu_layout = dict(
+                                height=360,
+                                margin=dict(l=48, r=48, t=40, b=40),
+                                xaxis_title='Time (s)',
+                                legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                            )
+                            if sp_plot is not None and kp_plot is not None:
+                                _nu_layout['yaxis'] = dict(title='κ (1/m)')
+                                _nu_layout['yaxis2'] = dict(title='ε', overlaying='y', side='right')
+                            elif kp_plot is not None:
+                                _nu_layout['yaxis'] = dict(title='κ (1/m)')
+                            else:
+                                _nu_layout['yaxis'] = dict(title='ε')
+                            fig_nu.update_layout(**_nu_layout)
+                            st.plotly_chart(fig_nu, use_container_width=True)
+                        stim_plot = prev.get('stim_plot')
+                        if stim_plot is not None and len(stim_plot) > 0:
+                            st.markdown('**Stimulation preview** (commanded AO voltage)')
+                            fig_st = go.Figure()
+                            fig_st.add_trace(
+                                go.Scatter(x=tp, y=stim_plot, mode='lines', name='Total stim (S1+S2) (V)')
+                            )
+                            fig_st.update_layout(
+                                height=320,
+                                margin=dict(l=48, r=48, t=40, b=40),
+                                xaxis_title='Time (s)',
+                                yaxis_title='Voltage (V)',
+                                legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                            )
+                            st.plotly_chart(fig_st, use_container_width=True)
+                        elif prev.get('table') and any(
+                            row.get('metric') == 'stimulation enabled' and row.get('value') is False
+                            for row in (prev.get('table') or [])
+                            if isinstance(row, dict)
+                        ):
+                            st.caption('Stimulation disabled for this protocol.')
                         if bool(st.session_state.get('gui_simulation_mode', False)) and prev.get('t') is not None:
                             t_prev = np.asarray(prev['t'], dtype=float).reshape(-1)
                             ang_prev = np.asarray(prev['angle'], dtype=float).reshape(-1)
@@ -7034,7 +7542,9 @@ def main():
                             'Step protocols: table lists setpoints; refresh preview after fixing errors to see the plot.'
                         )
             else:
-                st.warning('Preview incomplete; click **Refresh preview** again.')
+                st.warning(
+                    'Preview incomplete — open **Procedure fields** and click **Refresh experiment preview** (bottom of that form).'
+                )
 
         st.divider()
         st.subheader('6 · Run')
@@ -7048,10 +7558,12 @@ def main():
                 st.warning('A run is already in progress.')
                 return
             st.session_state['gui_run_in_progress'] = True
+            _rehydrate_missing_biometrics_from_bender(b)
             _sync_biometric_flags_from_session(b)
             _apply_form_updates(b, updates, tt)
             _sync_genus_species_to_bender(b)
             _mark_procedure_applied()
+            st.session_state['gui_protocol_confirmed'] = True
             outp = _compose_output_h5_path().strip()
             if outp:
                 b.outputfile = outp
@@ -7122,32 +7634,31 @@ def main():
             finally:
                 st.session_state['gui_run_in_progress'] = False
 
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button('Refresh experiment preview', use_container_width=True):
-                _sync_biometric_flags_from_session(b)
-                _sync_genus_species_to_bender(b)
-                _apply_form_updates(b, updates, tt)
-                _mark_procedure_applied()
-                st.session_state['gui_last_preview'] = build_protocol_preview(
-                    b, requested_test_type=tt, max_plot_points=int(pv_pts)
-                )
-                st.session_state['gui_last_preview_tt'] = tt
-        with c2:
-            if st.button('View experiment settings', use_container_width=True):
-                _render_current_settings_table()
+        if st.button('View experiment settings', use_container_width=True):
+            _render_current_settings_table()
 
         st.session_state.setdefault('gui_run_soft_warnings', [])
         st.session_state.setdefault('gui_run_in_progress', False)
         _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
-        _run_in_progress = bool(st.session_state.get('gui_run_in_progress', False))
+        _run_disabled, _run_help = _run_button_state()
+        _ready_run = _workflow_ready_state(b, tt)
+        if _run_disabled and not bool(st.session_state.get('gui_run_in_progress', False)):
+            st.warning(_run_help)
+            if st.button('Reset run state', key='gui_run_reset_stuck', use_container_width=True, type='secondary'):
+                st.session_state['gui_run_in_progress'] = False
+                st.session_state['gui_run_pending_confirm'] = False
+                st.session_state['gui_run_soft_warnings'] = []
+                st.rerun()
+        elif _ready_run['protocol_ok'] and _ready_run['setup_ok'] and _ready_run['measurements_ok']:
+            st.caption('Checklist complete — review warnings below if any, then run or click Proceed.')
         if st.button(
             'Run experiment',
             type='primary',
             use_container_width=True,
-            disabled=_run_in_progress,
-            help='Starts NI-DAQ acquisition.',
+            disabled=_run_disabled,
+            help=_run_help,
         ):
+            _rehydrate_missing_biometrics_from_bender(b)
             run_warnings: list[str] = []
             bio_soft_missing: list[str] = []
             if not str(st.session_state.get('gui_specimen_id') or '').strip():
@@ -7173,6 +7684,7 @@ def main():
             _sync_genus_species_to_bender(b)
             _apply_form_updates(b, updates, tt)
             _mark_procedure_applied()
+            st.session_state['gui_protocol_confirmed'] = True
             rep = b.validate_dispatch_setup(test_type=tt)
             if not rep.get('ok', False):
                 run_warnings.append('Required protocol fields are missing.')
