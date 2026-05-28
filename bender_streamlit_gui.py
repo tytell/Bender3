@@ -3385,7 +3385,8 @@ def _stepwise_step() -> int:
 
 
 def _stepwise_on_data_file_path_step() -> bool:
-    return _nav_route() == 'stepwise' and _stepwise_step() == 0
+    # Single-page workflow no longer uses stepwise tab position to gate setup behavior.
+    return False
 
 
 def _template_hide_config_build_new() -> bool:
@@ -3409,8 +3410,6 @@ def _show_hw_config_section() -> bool:
     """Section 1 · hardware configuration (no data-folder block)."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
-    if _nav_route() == 'stepwise':
-        return _stepwise_step() == 0
     return True
 
 
@@ -3418,9 +3417,6 @@ def _show_data_path_section() -> bool:
     """Section 2 · data folder & file name (+ **Load hardware configuration and data path** for load-existing)."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
-    if _nav_route() == 'stepwise':
-        # Stepwise "Setup" combines hardware + data path in one tab.
-        return _stepwise_step() == 0
     return True
 
 
@@ -3428,21 +3424,15 @@ def _show_full_sec2() -> bool:
     """Section 3 · biometrics."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
-    if _nav_route() == 'stepwise' and _stepwise_step() != 1:
-        return False
     return True
 
 
 def _show_sec3_through_6() -> bool:
-    if _nav_route() != 'stepwise':
-        return True
-    return _stepwise_step() == 2
+    return True
 
 
 def _show_sec7_and_8() -> bool:
-    if _nav_route() != 'stepwise':
-        return True
-    return _stepwise_step() >= 3
+    return True
 
 
 _LANDING_STIM_HZ = 75.0
@@ -5454,7 +5444,7 @@ def _render_app_chrome() -> None:
     )
     if _nav_route() == 'sim_compare':
         st.markdown('<div class="bnd-sim-compare-active" aria-hidden="true"></div>', unsafe_allow_html=True)
-    if _nav_route() == 'stepwise':
+    if _nav_route() == 'stepwise' and bool(st.session_state.get('gui_use_legacy_stepwise_chrome', False)):
         st.markdown('<div class="bnd-stepwise-active" aria-hidden="true"></div>', unsafe_allow_html=True)
         _inject_stepwise_compact_layout_css()
         # Wide-enough columns so "Home" stays one line; align row vertically.
@@ -6164,10 +6154,7 @@ def main():
                 'loading config and biometrics.'
             )
 
-    if _nav_route() == 'stepwise':
-        _render_stepwise_rail()
-    else:
-        st.caption('Sections follow the numbered order on the page.')
+    st.caption('Sections follow the numbered order on the page.')
 
     _cfg_mods = discover_config_modules(_ROOT)
     _template_procedure_gate()
@@ -6640,7 +6627,7 @@ def main():
     _consume_pending_protocol_template(test_types)
 
     if _show_full_sec2():
-        st.subheader('3 · Measurements')
+        st.subheader('3 · Specimen identity')
         if _bio_apply_dirty():
             _soft_apply_reminder()
 
@@ -6794,7 +6781,7 @@ def main():
             with st.form('bio_main_form', clear_on_submit=False):
                 bio_l, bio_r = st.columns(2, gap='large')
                 with bio_l:
-                    st.markdown('### Specimen measurements & conditions')
+                    st.markdown('### 4 · Morphometrics & conditions')
                     if 'bio_fishlen_TL' not in st.session_state:
                         st.session_state['bio_fishlen_TL'] = 0.0
                     st.number_input(
@@ -6841,7 +6828,7 @@ def main():
                     )
 
                 with bio_r:
-                    st.markdown('### Clamp geometry')
+                    st.markdown('### 5 · Clamp geometry')
                     if 'bio_dclamp' not in st.session_state:
                         st.session_state['bio_dclamp'] = 0.0
                     st.number_input(
@@ -6873,7 +6860,7 @@ def main():
                     st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
 
                 st.divider()
-                st.markdown('### Mounted body profile (inertial model)')
+                st.markdown('### 6 · Mounted body profile (inertial model)')
                 st.selectbox(
                     'Typical density (sets g/mm³ on Apply)',
                     BIO_DENSITY_PRESET_LABELS,
@@ -6979,7 +6966,7 @@ def main():
     if _show_sec3_through_6():
 
         st.divider()
-        st.subheader('4 · Experiment type & parameters')
+        st.subheader('7 · Protocol / Run')
 
         with st.expander('Load protocol template (optional)', expanded=False):
             st.caption(
@@ -7468,6 +7455,7 @@ def main():
         )
 
         st.divider()
+        st.subheader('8 · Experiment preview')
         if _procedure_apply_dirty() or _bio_apply_dirty():
             _soft_apply_reminder()
 
@@ -7707,7 +7695,7 @@ def main():
                 )
 
         st.divider()
-        st.subheader('6 · Run')
+        st.markdown('### Run controls')
         if bool(st.session_state.get('gui_simulation_mode', False)):
             st.info('Simulation mode active: run uses numpy only (no NI-DAQ).')
         if _procedure_apply_dirty() or _bio_apply_dirty():
@@ -7969,7 +7957,7 @@ def main():
 
         st.divider()
         st.session_state.setdefault('gui_sec7_hide', False)
-        st.subheader('8 · Visualize experimental data')
+        st.subheader('9 · Review data')
         if st.session_state.get('gui_sec7_hide'):
             st.caption('Visualization panel hidden. Uncheck **Hide section** below.')
         if not st.session_state.get('gui_sec7_hide'):
@@ -8130,7 +8118,7 @@ def main():
 
         st.divider()
         st.session_state.setdefault('gui_sec8_hide', False)
-        st.subheader('9 · Add note')
+        st.subheader('9 · Review data notes')
         st.caption(
             'Optional notes (specimen, setup, data quality). Pick a file below; notes append to the chosen `.h5`. '
             'QC plot export may use **kaleido** for PNG (`pip install kaleido`); otherwise HTML.'
