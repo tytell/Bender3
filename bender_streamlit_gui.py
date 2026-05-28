@@ -850,7 +850,7 @@ def _load_save_button(
 
 
 def _hardware_configuration_mode_toggle() -> str:
-    """Two-action setup: browse existing config or switch to build new."""
+    """Two-action setup: load existing config or switch to build new."""
     st.session_state.setdefault('gui_config_setup_mode', 'Load existing')
     mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
     if mode not in ('Load existing', 'Build new'):
@@ -859,32 +859,13 @@ def _hardware_configuration_mode_toggle() -> str:
     c1, c2 = st.columns(2)
     with c1:
         if st.button(
-            'Browse…',
-            key='gui_hw_cfg_mode_browse',
+            'Load existing',
+            key='gui_hw_cfg_mode_load_existing',
             use_container_width=True,
-            type='secondary',
+            type='primary' if mode == 'Load existing' else 'secondary',
         ):
             st.session_state['gui_config_setup_mode'] = 'Load existing'
-            _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-            _init_dir = _ROOT
-            if _sel:
-                _sel_path = os.path.join(_ROOT, _sel.replace('.', os.sep) + '.py')
-                _init_dir = os.path.dirname(_sel_path) if os.path.isfile(_sel_path) else _ROOT
-            picked, err = _pick_file_with_dialog(
-                _init_dir,
-                title='Select hardware config module',
-                filetypes=[('Python files', '*.py'), ('All files', '*.*')],
-            )
-            if err:
-                st.warning(f'File dialog unavailable: {err}')
-            elif picked:
-                rel_file = os.path.relpath(picked, _ROOT).replace('\\', '/')
-                if rel_file.startswith('..'):
-                    st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
-                else:
-                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
-                    st.toast(f"Selected `{st.session_state['gui_load_cfg_select']}`")
-                    st.rerun()
+            st.rerun()
     with c2:
         if st.button(
             'Build new',
@@ -988,7 +969,10 @@ def _is_restore_safe_key(key: str) -> bool:
             '_kill_daq',
         )
         if (
-            key.startswith('gui_nav_')
+            key.startswith('gui_btn_')
+            or key.startswith('gui_biometrics_btn_')
+            or key.startswith('bio_btn_')
+            or key.startswith('gui_nav_')
             or key.startswith('gui_sw_')
             or key.startswith('gui_hw_cfg_mode_')
             or key.startswith('gui_recovery_')
@@ -5791,24 +5775,36 @@ def _store_selected_data_folder(picked_dir: str) -> None:
 
 
 def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware configuration module') -> None:
-    """Simple hardware config picker: pasted file path or native Browse button."""
+    """Hardware config picker: paste a `.py` path, confirm, then click Load."""
     _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-    _init_dir = _ROOT
     if _sel:
         _sel_path = os.path.join(_ROOT, _sel.replace('.', os.sep) + '.py')
-        _init_dir = os.path.dirname(_sel_path) if os.path.isfile(_sel_path) else _ROOT
+    else:
+        _sel_path = ''
     if 'gui_load_cfg_file_path' not in st.session_state:
         st.session_state['gui_load_cfg_file_path'] = _sel_path if _sel and os.path.isfile(_sel_path) else ''
 
-    cfg_path = str(
-        st.text_input(
-            label,
-            key='gui_load_cfg_file_path',
-            placeholder='Paste full path to a hardware config .py file',
-            help='Paste a `.py` config path. If valid and inside this project, it will be used as the selected config module.',
+    _path_col, _load_col = st.columns([5, 1])
+    with _path_col:
+        cfg_path = str(
+            st.text_input(
+                label,
+                key='gui_load_cfg_file_path',
+                placeholder='Paste full path to a hardware config .py file',
+                help='Paste a `.py` config path inside this project, then click **Load**.',
+            )
+            or ''
+        ).strip()
+    with _load_col:
+        load_clicked = st.button(
+            'Load',
+            key=f'gui_btn_load_hw_cfg_{key_prefix}',
+            use_container_width=True,
+            type='primary',
+            help='Import the pasted hardware configuration module into the app.',
         )
-        or ''
-    ).strip()
+
+    _eff_mod = None
     if cfg_path:
         norm_cfg_path = os.path.normpath(cfg_path)
         if os.path.isfile(norm_cfg_path):
@@ -5816,34 +5812,41 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
             try:
                 rel_file = os.path.relpath(norm_cfg_path, _ROOT).replace('\\', '/')
                 if not rel_file.startswith('..'):
-                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
-                    if key_prefix.startswith('tpl_'):
-                        _cb_tpl_config_module_changed()
+                    _eff_mod = _normalize_config_module_name(rel_file)
+                    st.session_state['gui_load_cfg_select'] = _eff_mod
             except Exception:
                 pass
         else:
             st.error('❌ File not found — check path')
-    if st.button('Browse…', key=f'{key_prefix}_cfg_nav_browse', use_container_width=True):
-        picked, err = _pick_file_with_dialog(
-            _init_dir,
-            title='Select hardware config module',
-            filetypes=[('Python files', '*.py'), ('All files', '*.*')],
-        )
-        if err:
-            st.warning(f'File dialog unavailable: {err}')
-        elif picked:
+
+    if load_clicked:
+        if not cfg_path:
+            st.warning('Paste a hardware config `.py` path first.')
+        elif not os.path.isfile(os.path.normpath(cfg_path)):
+            st.error('❌ File not found — check path')
+        else:
             try:
-                rel_file = os.path.relpath(picked, _ROOT).replace('\\', '/')
-                if rel_file.startswith('..'):
-                    st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
-                else:
-                    st.session_state['gui_load_cfg_file_path'] = os.path.normpath(picked)
-                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
-                    if key_prefix.startswith('tpl_'):
-                        _cb_tpl_config_module_changed()
-                    st.rerun()
+                rel_file = os.path.relpath(os.path.normpath(cfg_path), _ROOT).replace('\\', '/')
             except Exception as e:
-                st.warning(f'Could not resolve selected file: {type(e).__name__}: {e}')
+                rel_file = ''
+                st.error(f'Could not resolve path: {type(e).__name__}: {e}')
+            if rel_file.startswith('..'):
+                st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
+            elif rel_file:
+                eff = _normalize_config_module_name(rel_file)
+                err = _apply_loaded_config_module(eff)
+                if err:
+                    _st_error_detail(
+                        'Hardware config load failed.',
+                        ['Check module path', 'Read Details'],
+                        err,
+                    )
+                else:
+                    st.session_state['gui_load_cfg_select'] = eff
+                    st.success(f'Loaded `{eff}`')
+                    st.rerun()
+
+    _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
     st.caption(f'{label}: `{_sel or "(none selected)"}`')
 
 
@@ -5897,17 +5900,7 @@ def _render_template_procedure_strip() -> None:
     with st.container(border=True):
         _dfc, _fnc = st.columns(2)
         with _dfc:
-            _cur_df = str(st.session_state.get('gui_data_folder') or '').strip()
             _render_data_folder_dropdown(key_suffix='tpl')
-            if st.button('Browse…', key='gui_tpl_data_folder_browse', use_container_width=True, type='secondary'):
-                _init_dir = _cur_df or _ROOT
-                _picked_dir, _err_dir = _pick_folder_with_dialog(_init_dir)
-                if _err_dir:
-                    st.warning(f'Folder dialog unavailable: {_err_dir}')
-                elif _picked_dir:
-                    _norm_p = os.path.normpath(_picked_dir)
-                    _store_selected_data_folder(_norm_p)
-                    st.rerun()
             _preview_out = _compose_output_h5_path().strip()
             _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
             if _preview_out:
@@ -6262,17 +6255,35 @@ def main():
                 mode = _hardware_configuration_mode_toggle()
 
             if mode == 'Load existing':
-                _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-                st.caption(f"Selected config: `{_sel or '(none selected)'}`")
+                _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
             else:
                 c_top_l, c_top_r = st.columns(2, gap='large')
                 with c_top_l:
-                    st.selectbox(
-                        'Start from template (base module for import *)',
-                        options=_cfg_mods,
-                        key='gui_cfg_build_base',
-                        help='Other settings from the template stay unless you override them below.',
-                    )
+                    if 'gui_cfg_build_base_path' not in st.session_state:
+                        _base_mod = str(st.session_state.get('gui_cfg_build_base') or '')
+                        _base_path = os.path.join(_ROOT, _base_mod.replace('.', os.sep) + '.py') if _base_mod else ''
+                        st.session_state['gui_cfg_build_base_path'] = _base_path if _base_path and os.path.isfile(_base_path) else ''
+                    _base_cfg_path = str(
+                        st.text_input(
+                            'Start from template (base module for import *)',
+                            key='gui_cfg_build_base_path',
+                            placeholder='Paste full path to a base config .py file',
+                            help='Other settings from the template stay unless you override them below.',
+                        )
+                        or ''
+                    ).strip()
+                    if _base_cfg_path:
+                        _base_cfg_norm = os.path.normpath(_base_cfg_path)
+                        if os.path.isfile(_base_cfg_norm):
+                            st.success('✅ File found')
+                            try:
+                                _rel_file = os.path.relpath(_base_cfg_norm, _ROOT).replace('\\', '/')
+                                if not _rel_file.startswith('..'):
+                                    st.session_state['gui_cfg_build_base'] = _normalize_config_module_name(_rel_file)
+                            except Exception:
+                                pass
+                        else:
+                            st.error('❌ File not found — check path')
                 _maybe_seed_cfg_build_fields()
                 with c_top_r:
                     st.text_input(
@@ -6489,17 +6500,7 @@ def main():
         with _data_host.container(border=True):
             df_col, fn_col = st.columns(2)
             with df_col:
-                _cur_df = str(st.session_state.get('gui_data_folder') or '').strip()
                 _render_data_folder_dropdown(key_suffix='main')
-                if st.button('Browse…', key='gui_data_folder_browse', use_container_width=True, type='secondary'):
-                    _init_dir = _cur_df or _ROOT
-                    _picked_dir, _err_dir = _pick_folder_with_dialog(_init_dir)
-                    if _err_dir:
-                        st.warning(f'Folder dialog unavailable: {_err_dir}')
-                    elif _picked_dir:
-                        _norm_p = os.path.normpath(_picked_dir)
-                        _store_selected_data_folder(_norm_p)
-                        st.rerun()
                 _preview_out = _compose_output_h5_path().strip()
                 _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
                 if _preview_out:
