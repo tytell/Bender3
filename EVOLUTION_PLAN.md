@@ -229,3 +229,8 @@ Disposition each item as: **FIXED** / **DEFERRED** (with reason) / **SPEC-AMENDE
 - Items **84–101** (missing button `type=`): cosmetic. Fix during a styling pass.
 
 **Status:** Tier 1 in progress. Tiers 2–4 pending.
+
+## Conditional field validation
+**Bug:** Stimulation fields (`Stim cycles per step`, etc.) are flagged as required even when `Enable stimulation` is unchecked. Same class as the `prep_condition` bug — validator does not respect conditional gates.
+**Spec ref:** ux_spec §3.
+**Action:** Audit validator for fields that should be required only when an enabling checkbox is true. Common pattern, likely affects other conditional groups (sono, stim monitor, profile inertial).
