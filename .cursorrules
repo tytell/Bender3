@@ -11,7 +11,7 @@
 ## Instruction precedence and conflict handling
 
 - Tier 1 (binding): `.cursorrules` (this file).
-- Tier 2 (binding for Streamlit UI tasks): `.cursor/specs/ui_style.md`.
+- Tier 2 (binding for Streamlit UI tasks): `.cursor/specs/ux_spec.md` (behavior contract) and `.cursor/specs/ui_style.md` (visual styling).
 - Tier 3 (hybrid backlog): `EVOLUTION_PLAN.md` (advisory by default; binding only when a task explicitly references it).
 - If two sources conflict, **stop and ask the user before proceeding**.
 - If the same conflict pattern repeats, propose a concise new rule snippet for approval.
