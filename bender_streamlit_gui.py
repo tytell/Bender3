@@ -1199,9 +1199,10 @@ def _update_state_origin_summary() -> None:
 
 def _reset_workflow_session_to_home(*, clear_autosave: bool = False, target_route: str = 'landing') -> None:
     """Clear workflow state and route to target module."""
-    keep = {'gui_ui_theme', 'gui_ui_large_text', 'gui_data_folder', 'gui_data_filename'}
+    keep = {'gui_ui_theme', 'gui_ui_large_text', 'gui_data_folder', 'gui_data_filename', 'gui_autosave_bootstrapped'}
+    keep_prefixes = ('bio_', 'gui_biometrics_', 'gui_genus_', 'gui_specimen_')
     for k in list(st.session_state.keys()):
-        if k not in keep:
+        if k not in keep and not k.startswith(keep_prefixes):
             st.session_state.pop(k, None)
     st.session_state['gui_app_route'] = str(target_route or 'landing')
     st.session_state['gui_session_source'] = 'fresh'
@@ -3311,6 +3312,70 @@ def _nav_route() -> str:
     return str(st.session_state.get('gui_app_route') or 'landing')
 
 
+def _clear_pending_bio_nav_warning() -> None:
+    for _k in (
+        'gui_pending_bio_nav_route',
+        'gui_pending_bio_nav_stepwise_step',
+        'gui_pending_bio_nav_clear_stepwise',
+        'gui_pending_bio_nav_origin',
+    ):
+        st.session_state.pop(_k, None)
+
+
+def _apply_route_switch(*, target_route: str, stepwise_step: Optional[int], clear_stepwise: bool) -> None:
+    st.session_state['gui_app_route'] = str(target_route or 'landing')
+    if clear_stepwise:
+        st.session_state.pop('gui_stepwise_step', None)
+    elif stepwise_step is not None:
+        st.session_state['gui_stepwise_step'] = int(stepwise_step)
+
+
+def _attempt_route_switch_with_bio_warning(
+    *,
+    target_route: str,
+    origin: str,
+    stepwise_step: Optional[int] = None,
+    clear_stepwise: bool = False,
+) -> bool:
+    if _bio_apply_dirty():
+        st.session_state['gui_pending_bio_nav_route'] = str(target_route or 'landing')
+        st.session_state['gui_pending_bio_nav_stepwise_step'] = (
+            None if stepwise_step is None else int(stepwise_step)
+        )
+        st.session_state['gui_pending_bio_nav_clear_stepwise'] = bool(clear_stepwise)
+        st.session_state['gui_pending_bio_nav_origin'] = str(origin or '')
+        return False
+    _apply_route_switch(target_route=target_route, stepwise_step=stepwise_step, clear_stepwise=clear_stepwise)
+    _clear_pending_bio_nav_warning()
+    return True
+
+
+def _render_pending_bio_nav_warning(origin: str) -> None:
+    if str(st.session_state.get('gui_pending_bio_nav_origin') or '') != str(origin or ''):
+        return
+    _target = str(st.session_state.get('gui_pending_bio_nav_route') or '').strip()
+    if not _target:
+        return
+    _step = st.session_state.get('gui_pending_bio_nav_stepwise_step', None)
+    _clear_step = bool(st.session_state.get('gui_pending_bio_nav_clear_stepwise', False))
+    st.warning(
+        'You have unsaved biometrics form edits. Click Apply in Measurements before switching workflows, '
+        'or continue and keep edits only in this session state.'
+    )
+    st.caption('- Apply specimen identity')
+    st.caption('- Apply section or Apply all biometrics')
+    _w1, _w2 = st.columns(2, gap='small')
+    with _w1:
+        if st.button('Switch anyway', key=f'gui_bio_nav_switch_anyway_{origin}', type='primary', use_container_width=True):
+            _apply_route_switch(target_route=_target, stepwise_step=_step, clear_stepwise=_clear_step)
+            _clear_pending_bio_nav_warning()
+            st.rerun()
+    with _w2:
+        if st.button('Stay here', key=f'gui_bio_nav_stay_{origin}', use_container_width=True):
+            _clear_pending_bio_nav_warning()
+            st.rerun()
+
+
 def _stepwise_step() -> int:
     v = st.session_state.get('gui_stepwise_step', 0)
     try:
@@ -3848,23 +3913,27 @@ def _render_landing_page() -> None:
         with ba:
             if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='primary'):
                 _autosave_tick(force=True)
-                st.session_state['gui_app_route'] = 'scratch'
-                st.session_state.pop('gui_stepwise_step', None)
-                st.rerun()
+                if _attempt_route_switch_with_bio_warning(
+                    target_route='scratch', origin='landing', clear_stepwise=True
+                ):
+                    st.rerun()
         with bb:
             if st.button('Template workflow', key='land_templates', use_container_width=True, type='primary'):
                 _autosave_tick(force=True)
-                st.session_state['gui_app_route'] = 'templates'
-                st.session_state.pop('gui_stepwise_step', None)
-                st.session_state.pop('gui_tpl_bio_done', None)
-                st.session_state.pop('gui_tpl_cfg_autoloaded', None)
-                st.rerun()
+                if _attempt_route_switch_with_bio_warning(
+                    target_route='templates', origin='landing', clear_stepwise=True
+                ):
+                    st.session_state.pop('gui_tpl_bio_done', None)
+                    st.session_state.pop('gui_tpl_cfg_autoloaded', None)
+                    st.rerun()
         with bc:
             if st.button('Step-by-step', key='land_stepwise', use_container_width=True, type='primary'):
                 _autosave_tick(force=True)
-                st.session_state['gui_app_route'] = 'stepwise'
-                st.session_state['gui_stepwise_step'] = 0
-                st.rerun()
+                if _attempt_route_switch_with_bio_warning(
+                    target_route='stepwise', origin='landing', stepwise_step=0
+                ):
+                    st.rerun()
+        _render_pending_bio_nav_warning('landing')
 
         st.markdown(
             '<p class="bnd-landing-sim-cta-sub">Offline exploration (no NI hardware)</p>',
@@ -6156,8 +6225,9 @@ def main():
                     help='Use template workflow instead of continuing with current unsaved setup.',
                 ):
                     _autosave_tick(force=True)
-                    st.session_state['gui_app_route'] = 'templates'
-                    st.rerun()
+                    if _attempt_route_switch_with_bio_warning(target_route='templates', origin='setup'):
+                        st.rerun()
+            _render_pending_bio_nav_warning('setup')
 
     _show_hw = _show_hw_config_section()
     _show_data = _show_data_path_section()
