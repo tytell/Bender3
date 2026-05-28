@@ -1199,7 +1199,7 @@ def _update_state_origin_summary() -> None:
 
 def _reset_workflow_session_to_home(*, clear_autosave: bool = False, target_route: str = 'landing') -> None:
     """Clear workflow state and route to target module."""
-    keep = {'gui_ui_theme', 'gui_ui_large_text'}
+    keep = {'gui_ui_theme', 'gui_ui_large_text', 'gui_data_folder', 'gui_data_filename'}
     for k in list(st.session_state.keys()):
         if k not in keep:
             st.session_state.pop(k, None)
@@ -2876,11 +2876,13 @@ def _ensure_gui_data_path_session_keys():
     leg = str(st.session_state.get('gui_outputfile', '') or '').strip()
     if leg:
         norm = os.path.normpath(leg)
-        st.session_state['gui_data_folder'] = os.path.dirname(norm) or ''
-        st.session_state['gui_data_filename'] = os.path.basename(norm)
-    else:
-        st.session_state['gui_data_folder'] = ''
-        st.session_state['gui_data_filename'] = ''
+        folder = os.path.dirname(norm) or ''
+        filename = os.path.basename(norm)
+        if folder:
+            st.session_state['gui_data_folder'] = folder
+        if filename:
+            st.session_state['gui_data_filename'] = filename
+    # else: leave existing session_state values untouched
 
 
 def _sync_genus_species_to_bender(b: Bender) -> None:
@@ -6638,7 +6640,7 @@ def main():
             st.text_area(
                 'Description (optional)',
                 key='gui_biometrics_new_desc',
-                height=50,
+                height=68,
                 placeholder='Optional note saved inside the file.',
                 help='Stored in the file metadata when you save.',
             )
