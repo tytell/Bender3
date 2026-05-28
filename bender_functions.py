@@ -3484,6 +3484,9 @@ class Bender:
         stim_pulse_rate = stim_pulse_rate if stim_pulse_rate is not None else getattr(self, 'stim_pulse_rate', 75)
         prepoststim_dur = prepoststim_dur if prepoststim_dur is not None else getattr(self, 'prepoststim_dur', 0.06)
         prestim_time    = prestim_time    if prestim_time    is not None else getattr(self, 'prestim_time', -2.0)
+        prepoststim_sep = prepoststim_sep if prepoststim_sep is not None else getattr(self, 'prepoststim_sep', 1.0)
+        poststim_time   = poststim_time   if poststim_time   is not None else getattr(self, 'poststim_time', 2.0)
+        movedur         = movedur         if movedur         is not None else getattr(self, 'movedur', 0.0)
 
 
         # 3. HEAVY LIFTING
@@ -3520,11 +3523,37 @@ class Bender:
                 t_sub2 = t[m2]
                 Ronoff.append([t_sub2[0], t_sub2[-1]])
 
-        # 5. Pre-stimulation (The "Start" burst)
-        m_pre = (t >= prestim_time) & (t < (prestim_time + prepoststim_dur))
-        if np.any(m_pre):
-            S1stimcmd[m_pre] = pulse_wave[m_pre]
-            Lonoff.append([prestim_time, prestim_time + prepoststim_dur])
+        # 5. Pre-stimulation (bilateral sequential bursts before bending at t=0)
+        # S1 starts at prestim_time; S2 starts prepoststim_sep later; both last prepoststim_dur.
+        pre_s1_start = prestim_time
+        pre_s1_end = prestim_time + prepoststim_dur
+        m_pre_s1 = (t >= pre_s1_start) & (t < pre_s1_end)
+        if np.any(m_pre_s1):
+            S1stimcmd[m_pre_s1] = pulse_wave[m_pre_s1]
+            Lonoff.append([pre_s1_start, pre_s1_end])
+
+        pre_s2_start = prestim_time + prepoststim_sep
+        pre_s2_end = pre_s2_start + prepoststim_dur
+        m_pre_s2 = (t >= pre_s2_start) & (t < pre_s2_end)
+        if np.any(m_pre_s2):
+            S2stimcmd[m_pre_s2] = pulse_wave[m_pre_s2]
+            Ronoff.append([pre_s2_start, pre_s2_end])
+
+        # 5b. Post-stimulation (bilateral sequential bursts after motion ends)
+        # S1 starts at movedur + poststim_time; S2 starts prepoststim_sep later; both last prepoststim_dur.
+        post_s1_start = movedur + poststim_time
+        post_s1_end = post_s1_start + prepoststim_dur
+        m_post_s1 = (t >= post_s1_start) & (t < post_s1_end)
+        if np.any(m_post_s1):
+            S1stimcmd[m_post_s1] = pulse_wave[m_post_s1]
+            Lonoff.append([post_s1_start, post_s1_end])
+
+        post_s2_start = movedur + poststim_time + prepoststim_sep
+        post_s2_end = post_s2_start + prepoststim_dur
+        m_post_s2 = (t >= post_s2_start) & (t < post_s2_end)
+        if np.any(m_post_s2):
+            S2stimcmd[m_post_s2] = pulse_wave[m_post_s2]
+            Ronoff.append([post_s2_start, post_s2_end])
 
         # 6. Save and Return
         self.Lonoff = Lonoff

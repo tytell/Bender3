@@ -850,7 +850,7 @@ def _load_save_button(
 
 
 def _hardware_configuration_mode_toggle() -> str:
-    """Two-action setup: browse existing config or switch to build new."""
+    """Two-action setup: load existing config or switch to build new."""
     st.session_state.setdefault('gui_config_setup_mode', 'Load existing')
     mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
     if mode not in ('Load existing', 'Build new'):
@@ -859,32 +859,13 @@ def _hardware_configuration_mode_toggle() -> str:
     c1, c2 = st.columns(2)
     with c1:
         if st.button(
-            'Browse…',
-            key='gui_hw_cfg_mode_browse',
+            'Load existing',
+            key='gui_hw_cfg_mode_load_existing',
             use_container_width=True,
-            type='secondary',
+            type='primary' if mode == 'Load existing' else 'secondary',
         ):
             st.session_state['gui_config_setup_mode'] = 'Load existing'
-            _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-            _init_dir = _ROOT
-            if _sel:
-                _sel_path = os.path.join(_ROOT, _sel.replace('.', os.sep) + '.py')
-                _init_dir = os.path.dirname(_sel_path) if os.path.isfile(_sel_path) else _ROOT
-            picked, err = _pick_file_with_dialog(
-                _init_dir,
-                title='Select hardware config module',
-                filetypes=[('Python files', '*.py'), ('All files', '*.*')],
-            )
-            if err:
-                st.warning(f'File dialog unavailable: {err}')
-            elif picked:
-                rel_file = os.path.relpath(picked, _ROOT).replace('\\', '/')
-                if rel_file.startswith('..'):
-                    st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
-                else:
-                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
-                    st.toast(f"Selected `{st.session_state['gui_load_cfg_select']}`")
-                    st.rerun()
+            st.rerun()
     with c2:
         if st.button(
             'Build new',
@@ -988,7 +969,10 @@ def _is_restore_safe_key(key: str) -> bool:
             '_kill_daq',
         )
         if (
-            key.startswith('gui_nav_')
+            key.startswith('gui_btn_')
+            or key.startswith('gui_biometrics_btn_')
+            or key.startswith('bio_btn_')
+            or key.startswith('gui_nav_')
             or key.startswith('gui_sw_')
             or key.startswith('gui_hw_cfg_mode_')
             or key.startswith('gui_recovery_')
@@ -1215,9 +1199,10 @@ def _update_state_origin_summary() -> None:
 
 def _reset_workflow_session_to_home(*, clear_autosave: bool = False, target_route: str = 'landing') -> None:
     """Clear workflow state and route to target module."""
-    keep = {'gui_ui_theme', 'gui_ui_large_text'}
+    keep = {'gui_ui_theme', 'gui_ui_large_text', 'gui_data_folder', 'gui_data_filename', 'gui_autosave_bootstrapped'}
+    keep_prefixes = ('bio_', 'gui_biometrics_', 'gui_genus_', 'gui_specimen_')
     for k in list(st.session_state.keys()):
-        if k not in keep:
+        if k not in keep and not k.startswith(keep_prefixes):
             st.session_state.pop(k, None)
     st.session_state['gui_app_route'] = str(target_route or 'landing')
     st.session_state['gui_session_source'] = 'fresh'
@@ -2892,11 +2877,13 @@ def _ensure_gui_data_path_session_keys():
     leg = str(st.session_state.get('gui_outputfile', '') or '').strip()
     if leg:
         norm = os.path.normpath(leg)
-        st.session_state['gui_data_folder'] = os.path.dirname(norm) or ''
-        st.session_state['gui_data_filename'] = os.path.basename(norm)
-    else:
-        st.session_state['gui_data_folder'] = ''
-        st.session_state['gui_data_filename'] = ''
+        folder = os.path.dirname(norm) or ''
+        filename = os.path.basename(norm)
+        if folder:
+            st.session_state['gui_data_folder'] = folder
+        if filename:
+            st.session_state['gui_data_filename'] = filename
+    # else: leave existing session_state values untouched
 
 
 def _sync_genus_species_to_bender(b: Bender) -> None:
@@ -3325,6 +3312,70 @@ def _nav_route() -> str:
     return str(st.session_state.get('gui_app_route') or 'landing')
 
 
+def _clear_pending_bio_nav_warning() -> None:
+    for _k in (
+        'gui_pending_bio_nav_route',
+        'gui_pending_bio_nav_stepwise_step',
+        'gui_pending_bio_nav_clear_stepwise',
+        'gui_pending_bio_nav_origin',
+    ):
+        st.session_state.pop(_k, None)
+
+
+def _apply_route_switch(*, target_route: str, stepwise_step: Optional[int], clear_stepwise: bool) -> None:
+    st.session_state['gui_app_route'] = str(target_route or 'landing')
+    if clear_stepwise:
+        st.session_state.pop('gui_stepwise_step', None)
+    elif stepwise_step is not None:
+        st.session_state['gui_stepwise_step'] = int(stepwise_step)
+
+
+def _attempt_route_switch_with_bio_warning(
+    *,
+    target_route: str,
+    origin: str,
+    stepwise_step: Optional[int] = None,
+    clear_stepwise: bool = False,
+) -> bool:
+    if _bio_apply_dirty():
+        st.session_state['gui_pending_bio_nav_route'] = str(target_route or 'landing')
+        st.session_state['gui_pending_bio_nav_stepwise_step'] = (
+            None if stepwise_step is None else int(stepwise_step)
+        )
+        st.session_state['gui_pending_bio_nav_clear_stepwise'] = bool(clear_stepwise)
+        st.session_state['gui_pending_bio_nav_origin'] = str(origin or '')
+        return False
+    _apply_route_switch(target_route=target_route, stepwise_step=stepwise_step, clear_stepwise=clear_stepwise)
+    _clear_pending_bio_nav_warning()
+    return True
+
+
+def _render_pending_bio_nav_warning(origin: str) -> None:
+    if str(st.session_state.get('gui_pending_bio_nav_origin') or '') != str(origin or ''):
+        return
+    _target = str(st.session_state.get('gui_pending_bio_nav_route') or '').strip()
+    if not _target:
+        return
+    _step = st.session_state.get('gui_pending_bio_nav_stepwise_step', None)
+    _clear_step = bool(st.session_state.get('gui_pending_bio_nav_clear_stepwise', False))
+    st.warning(
+        'You have unsaved biometrics form edits. Click Apply in Measurements before switching workflows, '
+        'or continue and keep edits only in this session state.'
+    )
+    st.caption('- Apply specimen identity')
+    st.caption('- Apply section or Apply all biometrics')
+    _w1, _w2 = st.columns(2, gap='small')
+    with _w1:
+        if st.button('Switch anyway', key=f'gui_bio_nav_switch_anyway_{origin}', type='primary', use_container_width=True):
+            _apply_route_switch(target_route=_target, stepwise_step=_step, clear_stepwise=_clear_step)
+            _clear_pending_bio_nav_warning()
+            st.rerun()
+    with _w2:
+        if st.button('Stay here', key=f'gui_bio_nav_stay_{origin}', use_container_width=True):
+            _clear_pending_bio_nav_warning()
+            st.rerun()
+
+
 def _stepwise_step() -> int:
     v = st.session_state.get('gui_stepwise_step', 0)
     try:
@@ -3334,7 +3385,8 @@ def _stepwise_step() -> int:
 
 
 def _stepwise_on_data_file_path_step() -> bool:
-    return _nav_route() == 'stepwise' and _stepwise_step() == 0
+    # Single-page workflow no longer uses stepwise tab position to gate setup behavior.
+    return False
 
 
 def _template_hide_config_build_new() -> bool:
@@ -3358,8 +3410,6 @@ def _show_hw_config_section() -> bool:
     """Section 1 · hardware configuration (no data-folder block)."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
-    if _nav_route() == 'stepwise':
-        return _stepwise_step() == 0
     return True
 
 
@@ -3367,9 +3417,6 @@ def _show_data_path_section() -> bool:
     """Section 2 · data folder & file name (+ **Load hardware configuration and data path** for load-existing)."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
-    if _nav_route() == 'stepwise':
-        # Stepwise "Setup" combines hardware + data path in one tab.
-        return _stepwise_step() == 0
     return True
 
 
@@ -3377,21 +3424,15 @@ def _show_full_sec2() -> bool:
     """Section 3 · biometrics."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
-    if _nav_route() == 'stepwise' and _stepwise_step() != 1:
-        return False
     return True
 
 
 def _show_sec3_through_6() -> bool:
-    if _nav_route() != 'stepwise':
-        return True
-    return _stepwise_step() == 2
+    return True
 
 
 def _show_sec7_and_8() -> bool:
-    if _nav_route() != 'stepwise':
-        return True
-    return _stepwise_step() >= 3
+    return True
 
 
 _LANDING_STIM_HZ = 75.0
@@ -3862,23 +3903,27 @@ def _render_landing_page() -> None:
         with ba:
             if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='primary'):
                 _autosave_tick(force=True)
-                st.session_state['gui_app_route'] = 'scratch'
-                st.session_state.pop('gui_stepwise_step', None)
-                st.rerun()
+                if _attempt_route_switch_with_bio_warning(
+                    target_route='scratch', origin='landing', clear_stepwise=True
+                ):
+                    st.rerun()
         with bb:
             if st.button('Template workflow', key='land_templates', use_container_width=True, type='primary'):
                 _autosave_tick(force=True)
-                st.session_state['gui_app_route'] = 'templates'
-                st.session_state.pop('gui_stepwise_step', None)
-                st.session_state.pop('gui_tpl_bio_done', None)
-                st.session_state.pop('gui_tpl_cfg_autoloaded', None)
-                st.rerun()
+                if _attempt_route_switch_with_bio_warning(
+                    target_route='templates', origin='landing', clear_stepwise=True
+                ):
+                    st.session_state.pop('gui_tpl_bio_done', None)
+                    st.session_state.pop('gui_tpl_cfg_autoloaded', None)
+                    st.rerun()
         with bc:
             if st.button('Step-by-step', key='land_stepwise', use_container_width=True, type='primary'):
                 _autosave_tick(force=True)
-                st.session_state['gui_app_route'] = 'stepwise'
-                st.session_state['gui_stepwise_step'] = 0
-                st.rerun()
+                if _attempt_route_switch_with_bio_warning(
+                    target_route='stepwise', origin='landing', stepwise_step=0
+                ):
+                    st.rerun()
+        _render_pending_bio_nav_warning('landing')
 
         st.markdown(
             '<p class="bnd-landing-sim-cta-sub">Offline exploration (no NI hardware)</p>',
@@ -4978,6 +5023,8 @@ def _render_h5_attribute_editor(loaded: str) -> None:
             'Fix wrong metadata (e.g. **dclamp**, sample rate). Requires **write permission** on the file path. '
             'Back up important data first; arrays and opaque types are read-only here.'
         )
+        if 'gui_h5_attr_path_typed' not in st.session_state:
+            st.session_state['gui_h5_attr_path_typed'] = ''
         st.text_input(
             'Path inside the file (blank = file root)',
             key='gui_h5_attr_path_typed',
@@ -5026,10 +5073,16 @@ def _render_h5_attribute_editor(loaded: str) -> None:
         st.markdown('**Add attribute**')
         a1, a2, a3 = st.columns(3)
         with a1:
+            if 'gui_h5_attr_new_name' not in st.session_state:
+                st.session_state['gui_h5_attr_new_name'] = ''
             st.text_input('New name', key='gui_h5_attr_new_name')
         with a2:
+            if 'gui_h5_attr_new_val' not in st.session_state:
+                st.session_state['gui_h5_attr_new_val'] = ''
             st.text_input('New value', key='gui_h5_attr_new_val')
         with a3:
+            if 'gui_h5_attr_new_kind' not in st.session_state:
+                st.session_state['gui_h5_attr_new_kind'] = None
             st.selectbox(
                 'Type',
                 options=['str', 'float', 'int', 'bool'],
@@ -5391,7 +5444,7 @@ def _render_app_chrome() -> None:
     )
     if _nav_route() == 'sim_compare':
         st.markdown('<div class="bnd-sim-compare-active" aria-hidden="true"></div>', unsafe_allow_html=True)
-    if _nav_route() == 'stepwise':
+    if _nav_route() == 'stepwise' and bool(st.session_state.get('gui_use_legacy_stepwise_chrome', False)):
         st.markdown('<div class="bnd-stepwise-active" aria-hidden="true"></div>', unsafe_allow_html=True)
         _inject_stepwise_compact_layout_css()
         # Wide-enough columns so "Home" stays one line; align row vertically.
@@ -5709,46 +5762,34 @@ def _data_folder_dropdown_choice_list(current_folder: str) -> list[str]:
 
 def _render_data_folder_dropdown(*, key_suffix: str) -> None:
     """
-    Browser-native folder picker: dropdown sets ``gui_data_folder`` (works without tkinter).
-
-    Syncs from ``gui_data_folder`` when it changes via Browse/Apply; uses ``on_change`` so
-    user selections are not clobbered before ``_store_selected_data_folder`` runs.
+    Browser-native folder entry: text input accepts pasted folder paths.
     """
-    dd_key = f'gui_data_folder_dd_{key_suffix}'
-    sync_key = f'{dd_key}_synced_from_gui_data_folder'
-    cur = str(st.session_state.get('gui_data_folder') or '').strip()
-    cur_norm = os.path.normpath(cur) if cur else ''
-    choices = _data_folder_dropdown_choice_list(cur_norm)
-    if cur_norm and cur_norm not in choices and os.path.isdir(cur_norm):
-        choices.insert(0, cur_norm)
-    options = [_DATA_FOLDER_DD_SENTINEL] + choices
+    _ = key_suffix
+    if 'gui_data_folder' not in st.session_state:
+        st.session_state['gui_data_folder'] = ''
 
-    def _fmt(p: str) -> str:
-        return p if p == _DATA_FOLDER_DD_SENTINEL else str(p)
-
-    def _on_folder_dd_change() -> None:
-        raw = st.session_state.get(dd_key)
-        if raw is None or raw == _DATA_FOLDER_DD_SENTINEL or not str(raw).strip():
+    def _on_folder_text_change() -> None:
+        raw = str(st.session_state.get('gui_data_folder') or '').strip()
+        if not raw:
             return
-        picked = os.path.normpath(str(raw).strip())
+        picked = os.path.normpath(raw)
         _store_selected_data_folder(picked)
-        st.session_state[sync_key] = os.path.normpath(str(st.session_state.get('gui_data_folder') or '').strip())
 
-    if st.session_state.get(sync_key) != cur_norm:
-        st.session_state[dd_key] = cur_norm if cur_norm and cur_norm in options else _DATA_FOLDER_DD_SENTINEL
-        st.session_state[sync_key] = cur_norm
-
-    st.selectbox(
+    folder_path = st.text_input(
         'Data folder',
-        options=options,
-        format_func=_fmt,
-        key=dd_key,
-        on_change=_on_folder_dd_change,
+        key='gui_data_folder',
+        on_change=_on_folder_text_change,
         help=(
-            'Pick a folder from this list (works in the browser). The full HDF5 path is **folder + file name** '
+            'Paste a folder path. The full HDF5 path is **folder + file name** '
             'in the next column. Native **Browse…** may not work on remote desktops or hosted Streamlit.'
         ),
     )
+    folder_path = str(folder_path or '').strip()
+    if folder_path:
+        if os.path.isdir(folder_path):
+            st.success('✅ Folder found')
+        else:
+            st.error('❌ Folder not found — check path')
 
 
 def _pick_file_with_dialog(initial_dir: str, *, title: str, filetypes: list[tuple[str, str]]) -> tuple[Optional[str], Optional[str]]:
@@ -5795,32 +5836,78 @@ def _store_selected_data_folder(picked_dir: str) -> None:
 
 
 def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware configuration module') -> None:
-    """Simple hardware config picker: native Browse button + current selection display."""
+    """Hardware config picker: paste a `.py` path, confirm, then click Load."""
     _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-    _init_dir = _ROOT
     if _sel:
         _sel_path = os.path.join(_ROOT, _sel.replace('.', os.sep) + '.py')
-        _init_dir = os.path.dirname(_sel_path) if os.path.isfile(_sel_path) else _ROOT
-    if st.button('Browse…', key=f'{key_prefix}_cfg_nav_browse', use_container_width=True):
-        picked, err = _pick_file_with_dialog(
-            _init_dir,
-            title='Select hardware config module',
-            filetypes=[('Python files', '*.py'), ('All files', '*.*')],
+    else:
+        _sel_path = ''
+    if 'gui_load_cfg_file_path' not in st.session_state:
+        st.session_state['gui_load_cfg_file_path'] = _sel_path if _sel and os.path.isfile(_sel_path) else ''
+
+    _path_col, _load_col = st.columns([5, 1])
+    with _path_col:
+        cfg_path = str(
+            st.text_input(
+                label,
+                key='gui_load_cfg_file_path',
+                placeholder='Paste full path to a hardware config .py file',
+                help='Paste a `.py` config path inside this project, then click **Load**.',
+            )
+            or ''
+        ).strip()
+    with _load_col:
+        load_clicked = st.button(
+            'Load',
+            key=f'gui_btn_load_hw_cfg_{key_prefix}',
+            use_container_width=True,
+            type='primary',
+            help='Import the pasted hardware configuration module into the app.',
         )
-        if err:
-            st.warning(f'File dialog unavailable: {err}')
-        elif picked:
+
+    _eff_mod = None
+    if cfg_path:
+        norm_cfg_path = os.path.normpath(cfg_path)
+        if os.path.isfile(norm_cfg_path):
+            st.success('✅ File found')
             try:
-                rel_file = os.path.relpath(picked, _ROOT).replace('\\', '/')
-                if rel_file.startswith('..'):
-                    st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
-                else:
-                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
-                    if key_prefix.startswith('tpl_'):
-                        _cb_tpl_config_module_changed()
-                    st.rerun()
+                rel_file = os.path.relpath(norm_cfg_path, _ROOT).replace('\\', '/')
+                if not rel_file.startswith('..'):
+                    _eff_mod = _normalize_config_module_name(rel_file)
+                    st.session_state['gui_load_cfg_select'] = _eff_mod
+            except Exception:
+                pass
+        else:
+            st.error('❌ File not found — check path')
+
+    if load_clicked:
+        if not cfg_path:
+            st.warning('Paste a hardware config `.py` path first.')
+        elif not os.path.isfile(os.path.normpath(cfg_path)):
+            st.error('❌ File not found — check path')
+        else:
+            try:
+                rel_file = os.path.relpath(os.path.normpath(cfg_path), _ROOT).replace('\\', '/')
             except Exception as e:
-                st.warning(f'Could not resolve selected file: {type(e).__name__}: {e}')
+                rel_file = ''
+                st.error(f'Could not resolve path: {type(e).__name__}: {e}')
+            if rel_file.startswith('..'):
+                st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
+            elif rel_file:
+                eff = _normalize_config_module_name(rel_file)
+                err = _apply_loaded_config_module(eff)
+                if err:
+                    _st_error_detail(
+                        'Hardware config load failed.',
+                        ['Check module path', 'Read Details'],
+                        err,
+                    )
+                else:
+                    st.session_state['gui_load_cfg_select'] = eff
+                    st.success(f'Loaded `{eff}`')
+                    st.rerun()
+
+    _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
     st.caption(f'{label}: `{_sel or "(none selected)"}`')
 
 
@@ -5874,17 +5961,7 @@ def _render_template_procedure_strip() -> None:
     with st.container(border=True):
         _dfc, _fnc = st.columns(2)
         with _dfc:
-            _cur_df = str(st.session_state.get('gui_data_folder') or '').strip()
             _render_data_folder_dropdown(key_suffix='tpl')
-            if st.button('Browse…', key='gui_tpl_data_folder_browse', use_container_width=True, type='secondary'):
-                _init_dir = _cur_df or _ROOT
-                _picked_dir, _err_dir = _pick_folder_with_dialog(_init_dir)
-                if _err_dir:
-                    st.warning(f'Folder dialog unavailable: {_err_dir}')
-                elif _picked_dir:
-                    _norm_p = os.path.normpath(_picked_dir)
-                    _store_selected_data_folder(_norm_p)
-                    st.rerun()
             _preview_out = _compose_output_h5_path().strip()
             _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
             if _preview_out:
@@ -5904,6 +5981,8 @@ def _render_template_procedure_strip() -> None:
     _bio_tpl_dir = _shared_experiment_dir()
     _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
     _bio_opts: list = [None] + _bio_tpl_list
+    if 'gui_biometrics_template_select' not in st.session_state:
+        st.session_state['gui_biometrics_template_select'] = None
     st.selectbox(
         'Biometrics file',
         _bio_opts,
@@ -6049,13 +6128,19 @@ def main():
     if _nav_route() == 'templates':
         st.session_state.pop('gui_tpl_need_procedure', None)
         st.markdown('**Template mode** — check what you already have on disk.')
+        if 'gui_tpl_chk_config' not in st.session_state:
+            st.session_state['gui_tpl_chk_config'] = False
         st.checkbox('I have a saved hardware **config**', value=True, key='gui_tpl_chk_config')
+        if 'gui_tpl_chk_biometrics' not in st.session_state:
+            st.session_state['gui_tpl_chk_biometrics'] = False
         st.checkbox(
             'I have a saved **biometrics** file',
             value=True,
             key='gui_tpl_chk_biometrics',
             help='Usually a `.json` file in your data folder with lengths, clamp spacing, etc.',
         )
+        if 'gui_tpl_have_protocol_template' not in st.session_state:
+            st.session_state['gui_tpl_have_protocol_template'] = False
         st.checkbox(
             'I already have a **protocol** template',
             value=False,
@@ -6069,10 +6154,7 @@ def main():
                 'loading config and biometrics.'
             )
 
-    if _nav_route() == 'stepwise':
-        _render_stepwise_rail()
-    else:
-        st.caption('Sections follow the numbered order on the page.')
+    st.caption('Sections follow the numbered order on the page.')
 
     _cfg_mods = discover_config_modules(_ROOT)
     _template_procedure_gate()
@@ -6130,8 +6212,9 @@ def main():
                     help='Use template workflow instead of continuing with current unsaved setup.',
                 ):
                     _autosave_tick(force=True)
-                    st.session_state['gui_app_route'] = 'templates'
-                    st.rerun()
+                    if _attempt_route_switch_with_bio_warning(target_route='templates', origin='setup'):
+                        st.rerun()
+            _render_pending_bio_nav_warning('setup')
 
     _show_hw = _show_hw_config_section()
     _show_data = _show_data_path_section()
@@ -6231,17 +6314,35 @@ def main():
                 mode = _hardware_configuration_mode_toggle()
 
             if mode == 'Load existing':
-                _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-                st.caption(f"Selected config: `{_sel or '(none selected)'}`")
+                _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
             else:
                 c_top_l, c_top_r = st.columns(2, gap='large')
                 with c_top_l:
-                    st.selectbox(
-                        'Start from template (base module for import *)',
-                        options=_cfg_mods,
-                        key='gui_cfg_build_base',
-                        help='Other settings from the template stay unless you override them below.',
-                    )
+                    if 'gui_cfg_build_base_path' not in st.session_state:
+                        _base_mod = str(st.session_state.get('gui_cfg_build_base') or '')
+                        _base_path = os.path.join(_ROOT, _base_mod.replace('.', os.sep) + '.py') if _base_mod else ''
+                        st.session_state['gui_cfg_build_base_path'] = _base_path if _base_path and os.path.isfile(_base_path) else ''
+                    _base_cfg_path = str(
+                        st.text_input(
+                            'Start from template (base module for import *)',
+                            key='gui_cfg_build_base_path',
+                            placeholder='Paste full path to a base config .py file',
+                            help='Other settings from the template stay unless you override them below.',
+                        )
+                        or ''
+                    ).strip()
+                    if _base_cfg_path:
+                        _base_cfg_norm = os.path.normpath(_base_cfg_path)
+                        if os.path.isfile(_base_cfg_norm):
+                            st.success('✅ File found')
+                            try:
+                                _rel_file = os.path.relpath(_base_cfg_norm, _ROOT).replace('\\', '/')
+                                if not _rel_file.startswith('..'):
+                                    st.session_state['gui_cfg_build_base'] = _normalize_config_module_name(_rel_file)
+                            except Exception:
+                                pass
+                        else:
+                            st.error('❌ File not found — check path')
                 _maybe_seed_cfg_build_fields()
                 with c_top_r:
                     st.text_input(
@@ -6458,17 +6559,7 @@ def main():
         with _data_host.container(border=True):
             df_col, fn_col = st.columns(2)
             with df_col:
-                _cur_df = str(st.session_state.get('gui_data_folder') or '').strip()
                 _render_data_folder_dropdown(key_suffix='main')
-                if st.button('Browse…', key='gui_data_folder_browse', use_container_width=True, type='secondary'):
-                    _init_dir = _cur_df or _ROOT
-                    _picked_dir, _err_dir = _pick_folder_with_dialog(_init_dir)
-                    if _err_dir:
-                        st.warning(f'Folder dialog unavailable: {_err_dir}')
-                    elif _picked_dir:
-                        _norm_p = os.path.normpath(_picked_dir)
-                        _store_selected_data_folder(_norm_p)
-                        st.rerun()
                 _preview_out = _compose_output_h5_path().strip()
                 _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
                 if _preview_out:
@@ -6536,7 +6627,7 @@ def main():
     _consume_pending_protocol_template(test_types)
 
     if _show_full_sec2():
-        st.subheader('3 · Measurements')
+        st.subheader('3 · Specimen identity')
         if _bio_apply_dirty():
             _soft_apply_reminder()
 
@@ -6581,6 +6672,8 @@ def main():
                 )
             _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
             _bio_opts: list = [None] + _bio_tpl_list
+            if 'gui_biometrics_template_select' not in st.session_state:
+                st.session_state['gui_biometrics_template_select'] = None
             _bio_pick = st.selectbox(
                 'Biometrics file to load',
                 _bio_opts,
@@ -6598,14 +6691,18 @@ def main():
                     st.session_state['gui_pending_biometrics_path'] = _bio_pick
                 st.rerun()
 
+            if 'gui_biometrics_new_name' not in st.session_state:
+                st.session_state['gui_biometrics_new_name'] = ''
             st.text_input('Save biometrics as (name)', key='gui_biometrics_new_name', placeholder='e.g. Zebrafish adult default')
             st.text_area(
                 'Description (optional)',
                 key='gui_biometrics_new_desc',
-                height=50,
+                height=68,
                 placeholder='Optional note saved inside the file.',
                 help='Stored in the file metadata when you save.',
             )
+            if 'gui_biometrics_overwrite' not in st.session_state:
+                st.session_state['gui_biometrics_overwrite'] = False
             st.checkbox('Overwrite if same file name exists', key='gui_biometrics_overwrite')
             if _load_save_button('Save biometrics', key='gui_biometrics_btn_save'):
                 _bn = str(st.session_state.get('gui_biometrics_new_name') or '').strip()
@@ -6650,6 +6747,8 @@ def main():
                     placeholder='e.g. fish-042 or prep code',
                     help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
                 )
+            if 'bio_segment' not in st.session_state:
+                st.session_state['bio_segment'] = ''
             st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
             sub_bio_id = st.form_submit_button(
                 'Apply specimen identity',
@@ -6682,21 +6781,29 @@ def main():
             with st.form('bio_main_form', clear_on_submit=False):
                 bio_l, bio_r = st.columns(2, gap='large')
                 with bio_l:
-                    st.markdown('### Specimen measurements & conditions')
+                    st.markdown('### 4 · Morphometrics & conditions')
+                    if 'bio_fishlen_TL' not in st.session_state:
+                        st.session_state['bio_fishlen_TL'] = 0.0
                     st.number_input(
                         'Total Length (`fishlen_TL`, mm)',
                         min_value=0.0,
                         format='%.6g',
                         key='bio_fishlen_TL',
                     )
+                    if 'bio_fishlen_SL' not in st.session_state:
+                        st.session_state['bio_fishlen_SL'] = 0.0
                     st.number_input(
                         'Standard Length (`fishlen_SL`, mm)',
                         min_value=0.0,
                         format='%.6g',
                         key='bio_fishlen_SL',
                     )
+                    if 'bio_fishmass' not in st.session_state:
+                        st.session_state['bio_fishmass'] = 0.0
                     st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
                     st.divider()
+                    if 'bio_temp_room' not in st.session_state:
+                        st.session_state['bio_temp_room'] = 0.0
                     st.number_input(
                         'Room temperature (`temp_C_room`, °C)',
                         min_value=-5.0,
@@ -6704,6 +6811,8 @@ def main():
                         format='%.3f',
                         key='bio_temp_room',
                     )
+                    if 'bio_temp_tank' not in st.session_state:
+                        st.session_state['bio_temp_tank'] = 0.0
                     st.number_input(
                         'Tank / bath temperature (`temp_C_tank`, °C)',
                         min_value=-5.0,
@@ -6719,13 +6828,17 @@ def main():
                     )
 
                 with bio_r:
-                    st.markdown('### Clamp geometry')
+                    st.markdown('### 5 · Clamp geometry')
+                    if 'bio_dclamp' not in st.session_state:
+                        st.session_state['bio_dclamp'] = 0.0
                     st.number_input(
                         'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
                         min_value=0.001,
                         format='%.6g',
                         key='bio_dclamp',
                     )
+                    if 'bio_dbend' not in st.session_state:
+                        st.session_state['bio_dbend'] = 0.0
                     st.number_input(
                         'Along-body distance to center of clamped test segment (mm)',
                         min_value=0.0,
@@ -6733,13 +6846,21 @@ def main():
                         key='bio_dbend',
                         help=BIO_DBEND_FIELD_HELP,
                     )
+                    if 'bio_xsec' not in st.session_state:
+                        st.session_state['bio_xsec'] = 0.0
                     st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
+                    if 'bio_xsec_height' not in st.session_state:
+                        st.session_state['bio_xsec_height'] = 0.0
                     st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
+                    if 'bio_dvert' not in st.session_state:
+                        st.session_state['bio_dvert'] = 0.0
                     st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
+                    if 'bio_dhoriz' not in st.session_state:
+                        st.session_state['bio_dhoriz'] = 0.0
                     st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
 
                 st.divider()
-                st.markdown('### Mounted body profile (inertial model)')
+                st.markdown('### 6 · Mounted body profile (inertial model)')
                 st.selectbox(
                     'Typical density (sets g/mm³ on Apply)',
                     BIO_DENSITY_PRESET_LABELS,
@@ -6760,6 +6881,8 @@ def main():
                         '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
                     ),
                 )
+                if 'bio_prof_L' not in st.session_state:
+                    st.session_state['bio_prof_L'] = 0.0
                 st.number_input(
                     'Specimen outline length for profile model (mm)',
                     min_value=0.001,
@@ -6769,13 +6892,23 @@ def main():
                 )
                 p1, p2 = st.columns(2)
                 with p1:
+                    if 'bio_prof_ph' not in st.session_state:
+                        st.session_state['bio_prof_ph'] = 0.0
                     st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_ph')
+                    if 'bio_prof_pw' not in st.session_state:
+                        st.session_state['bio_prof_pw'] = 0.0
                     st.number_input('Proximal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_pw')
                 with p2:
+                    if 'bio_prof_dh' not in st.session_state:
+                        st.session_state['bio_prof_dh'] = 0.0
                     st.number_input('Distal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_dh')
+                    if 'bio_prof_dw' not in st.session_state:
+                        st.session_state['bio_prof_dw'] = 0.0
                     st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_dw')
                 p3, p4 = st.columns(2)
                 with p3:
+                    if 'bio_prof_clamp' not in st.session_state:
+                        st.session_state['bio_prof_clamp'] = 0.0
                     st.number_input(
                         'Distance from rotation axis to clamps (mm)',
                         min_value=0.0,
@@ -6784,9 +6917,13 @@ def main():
                         help=BIO_PROF_CLAMP_FIELD_HELP,
                     )
                 with p4:
+                    if 'bio_prof_samples' not in st.session_state:
+                        st.session_state['bio_prof_samples'] = 0.0
                     st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='bio_prof_samples')
 
                 st.divider()
+                if 'bio_use_theoretical_inertial' not in st.session_state:
+                    st.session_state['bio_use_theoretical_inertial'] = False
                 st.checkbox(
                     'Check here to perform inertial correction',
                     key='bio_use_theoretical_inertial',
@@ -6829,7 +6966,7 @@ def main():
     if _show_sec3_through_6():
 
         st.divider()
-        st.subheader('4 · Experiment type & parameters')
+        st.subheader('7 · Protocol / Run')
 
         with st.expander('Load protocol template (optional)', expanded=False):
             st.caption(
@@ -6839,6 +6976,8 @@ def main():
             _tpl_folder_top = _shared_experiment_dir()
             _tpl_files_top = list_template_files(_tpl_folder_top)
             _tpl_options_top: list = [None] + _tpl_files_top
+            if 'gui_protocol_template_select' not in st.session_state:
+                st.session_state['gui_protocol_template_select'] = None
             _tpl_pick_top = st.selectbox(
                 'Template to load',
                 _tpl_options_top,
@@ -6866,6 +7005,8 @@ def main():
                     ['Check template file', 'Read Details'],
                     txt_fb,
                 )
+        if 'test_type_select' not in st.session_state:
+            st.session_state['test_type_select'] = None
         tt = st.selectbox('Experiment type (test_type)', test_types, key='test_type_select')
         b.test_type = tt
 
@@ -7205,6 +7346,8 @@ def main():
                     st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
 
                 st.divider()
+                if 'gui_protocol_show_save_template' not in st.session_state:
+                    st.session_state['gui_protocol_show_save_template'] = False
                 _show_tpl_save = st.checkbox(
                     'Show "Save procedure as template"',
                     key='gui_protocol_show_save_template',
@@ -7212,6 +7355,8 @@ def main():
                 )
                 if _show_tpl_save:
                     st.markdown('**Save procedure as template**')
+                    if 'gui_protocol_new_name' not in st.session_state:
+                        st.session_state['gui_protocol_new_name'] = ''
                     st.text_input(
                         'Template name',
                         key='gui_protocol_new_name',
@@ -7223,6 +7368,8 @@ def main():
                         height=70,
                         placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz x strains; or calibration + base',
                     )
+                    if 'gui_protocol_overwrite' not in st.session_state:
+                        st.session_state['gui_protocol_overwrite'] = False
                     st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
                     _pc1, _pc2 = st.columns(2)
                     with _pc1:
@@ -7308,6 +7455,7 @@ def main():
         )
 
         st.divider()
+        st.subheader('8 · Experiment preview')
         if _procedure_apply_dirty() or _bio_apply_dirty():
             _soft_apply_reminder()
 
@@ -7547,7 +7695,7 @@ def main():
                 )
 
         st.divider()
-        st.subheader('6 · Run')
+        st.markdown('### Run controls')
         if bool(st.session_state.get('gui_simulation_mode', False)):
             st.info('Simulation mode active: run uses numpy only (no NI-DAQ).')
         if _procedure_apply_dirty() or _bio_apply_dirty():
@@ -7809,7 +7957,7 @@ def main():
 
         st.divider()
         st.session_state.setdefault('gui_sec7_hide', False)
-        st.subheader('8 · Visualize experimental data')
+        st.subheader('9 · Review data')
         if st.session_state.get('gui_sec7_hide'):
             st.caption('Visualization panel hidden. Uncheck **Hide section** below.')
         if not st.session_state.get('gui_sec7_hide'):
@@ -7875,6 +8023,8 @@ def main():
                                 if tt0:
                                     st.caption(f'**test_type (this trial):** `{tt0}`')
     
+                                if 'gui_h5_n_panels' not in st.session_state:
+                                    st.session_state['gui_h5_n_panels'] = 0.0
                                 n_panel = st.number_input(
                                     'Number of figure panels',
                                     min_value=1,
@@ -7968,7 +8118,7 @@ def main():
 
         st.divider()
         st.session_state.setdefault('gui_sec8_hide', False)
-        st.subheader('9 · Add note')
+        st.subheader('9 · Review data notes')
         st.caption(
             'Optional notes (specimen, setup, data quality). Pick a file below; notes append to the chosen `.h5`. '
             'QC plot export may use **kaleido** for PNG (`pip install kaleido`); otherwise HTML.'
@@ -8035,6 +8185,8 @@ def main():
                     'Uncheck **Append…** below to replace the stored note entirely.'
                 ),
             )
+            if 'gui_qc_notes_append' not in st.session_state:
+                st.session_state['gui_qc_notes_append'] = False
             st.checkbox(
                 'Append new text to existing note in this data file path (when the file already exists)',
                 value=True,
