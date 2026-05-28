@@ -5791,12 +5791,38 @@ def _store_selected_data_folder(picked_dir: str) -> None:
 
 
 def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware configuration module') -> None:
-    """Simple hardware config picker: native Browse button + current selection display."""
+    """Simple hardware config picker: pasted file path or native Browse button."""
     _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
     _init_dir = _ROOT
     if _sel:
         _sel_path = os.path.join(_ROOT, _sel.replace('.', os.sep) + '.py')
         _init_dir = os.path.dirname(_sel_path) if os.path.isfile(_sel_path) else _ROOT
+    if 'gui_load_cfg_file_path' not in st.session_state:
+        st.session_state['gui_load_cfg_file_path'] = _sel_path if _sel and os.path.isfile(_sel_path) else ''
+
+    cfg_path = str(
+        st.text_input(
+            label,
+            key='gui_load_cfg_file_path',
+            placeholder='Paste full path to a hardware config .py file',
+            help='Paste a `.py` config path. If valid and inside this project, it will be used as the selected config module.',
+        )
+        or ''
+    ).strip()
+    if cfg_path:
+        norm_cfg_path = os.path.normpath(cfg_path)
+        if os.path.isfile(norm_cfg_path):
+            st.success('✅ File found')
+            try:
+                rel_file = os.path.relpath(norm_cfg_path, _ROOT).replace('\\', '/')
+                if not rel_file.startswith('..'):
+                    st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
+                    if key_prefix.startswith('tpl_'):
+                        _cb_tpl_config_module_changed()
+            except Exception:
+                pass
+        else:
+            st.error('❌ File not found — check path')
     if st.button('Browse…', key=f'{key_prefix}_cfg_nav_browse', use_container_width=True):
         picked, err = _pick_file_with_dialog(
             _init_dir,
@@ -5811,6 +5837,7 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                 if rel_file.startswith('..'):
                     st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
                 else:
+                    st.session_state['gui_load_cfg_file_path'] = os.path.normpath(picked)
                     st.session_state['gui_load_cfg_select'] = _normalize_config_module_name(rel_file)
                     if key_prefix.startswith('tpl_'):
                         _cb_tpl_config_module_changed()
