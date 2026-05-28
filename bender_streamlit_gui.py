@@ -4978,6 +4978,8 @@ def _render_h5_attribute_editor(loaded: str) -> None:
             'Fix wrong metadata (e.g. **dclamp**, sample rate). Requires **write permission** on the file path. '
             'Back up important data first; arrays and opaque types are read-only here.'
         )
+        if 'gui_h5_attr_path_typed' not in st.session_state:
+            st.session_state['gui_h5_attr_path_typed'] = ''
         st.text_input(
             'Path inside the file (blank = file root)',
             key='gui_h5_attr_path_typed',
@@ -5026,10 +5028,16 @@ def _render_h5_attribute_editor(loaded: str) -> None:
         st.markdown('**Add attribute**')
         a1, a2, a3 = st.columns(3)
         with a1:
+            if 'gui_h5_attr_new_name' not in st.session_state:
+                st.session_state['gui_h5_attr_new_name'] = ''
             st.text_input('New name', key='gui_h5_attr_new_name')
         with a2:
+            if 'gui_h5_attr_new_val' not in st.session_state:
+                st.session_state['gui_h5_attr_new_val'] = ''
             st.text_input('New value', key='gui_h5_attr_new_val')
         with a3:
+            if 'gui_h5_attr_new_kind' not in st.session_state:
+                st.session_state['gui_h5_attr_new_kind'] = None
             st.selectbox(
                 'Type',
                 options=['str', 'float', 'int', 'bool'],
@@ -5904,6 +5912,8 @@ def _render_template_procedure_strip() -> None:
     _bio_tpl_dir = _shared_experiment_dir()
     _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
     _bio_opts: list = [None] + _bio_tpl_list
+    if 'gui_biometrics_template_select' not in st.session_state:
+        st.session_state['gui_biometrics_template_select'] = None
     st.selectbox(
         'Biometrics file',
         _bio_opts,
@@ -6049,13 +6059,19 @@ def main():
     if _nav_route() == 'templates':
         st.session_state.pop('gui_tpl_need_procedure', None)
         st.markdown('**Template mode** — check what you already have on disk.')
+        if 'gui_tpl_chk_config' not in st.session_state:
+            st.session_state['gui_tpl_chk_config'] = False
         st.checkbox('I have a saved hardware **config**', value=True, key='gui_tpl_chk_config')
+        if 'gui_tpl_chk_biometrics' not in st.session_state:
+            st.session_state['gui_tpl_chk_biometrics'] = False
         st.checkbox(
             'I have a saved **biometrics** file',
             value=True,
             key='gui_tpl_chk_biometrics',
             help='Usually a `.json` file in your data folder with lengths, clamp spacing, etc.',
         )
+        if 'gui_tpl_have_protocol_template' not in st.session_state:
+            st.session_state['gui_tpl_have_protocol_template'] = False
         st.checkbox(
             'I already have a **protocol** template',
             value=False,
@@ -6581,6 +6597,8 @@ def main():
                 )
             _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
             _bio_opts: list = [None] + _bio_tpl_list
+            if 'gui_biometrics_template_select' not in st.session_state:
+                st.session_state['gui_biometrics_template_select'] = None
             _bio_pick = st.selectbox(
                 'Biometrics file to load',
                 _bio_opts,
@@ -6598,6 +6616,8 @@ def main():
                     st.session_state['gui_pending_biometrics_path'] = _bio_pick
                 st.rerun()
 
+            if 'gui_biometrics_new_name' not in st.session_state:
+                st.session_state['gui_biometrics_new_name'] = ''
             st.text_input('Save biometrics as (name)', key='gui_biometrics_new_name', placeholder='e.g. Zebrafish adult default')
             st.text_area(
                 'Description (optional)',
@@ -6606,6 +6626,8 @@ def main():
                 placeholder='Optional note saved inside the file.',
                 help='Stored in the file metadata when you save.',
             )
+            if 'gui_biometrics_overwrite' not in st.session_state:
+                st.session_state['gui_biometrics_overwrite'] = False
             st.checkbox('Overwrite if same file name exists', key='gui_biometrics_overwrite')
             if _load_save_button('Save biometrics', key='gui_biometrics_btn_save'):
                 _bn = str(st.session_state.get('gui_biometrics_new_name') or '').strip()
@@ -6650,6 +6672,8 @@ def main():
                     placeholder='e.g. fish-042 or prep code',
                     help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
                 )
+            if 'bio_segment' not in st.session_state:
+                st.session_state['bio_segment'] = ''
             st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
             sub_bio_id = st.form_submit_button(
                 'Apply specimen identity',
@@ -6683,20 +6707,28 @@ def main():
                 bio_l, bio_r = st.columns(2, gap='large')
                 with bio_l:
                     st.markdown('### Specimen measurements & conditions')
+                    if 'bio_fishlen_TL' not in st.session_state:
+                        st.session_state['bio_fishlen_TL'] = 0.0
                     st.number_input(
                         'Total Length (`fishlen_TL`, mm)',
                         min_value=0.0,
                         format='%.6g',
                         key='bio_fishlen_TL',
                     )
+                    if 'bio_fishlen_SL' not in st.session_state:
+                        st.session_state['bio_fishlen_SL'] = 0.0
                     st.number_input(
                         'Standard Length (`fishlen_SL`, mm)',
                         min_value=0.0,
                         format='%.6g',
                         key='bio_fishlen_SL',
                     )
+                    if 'bio_fishmass' not in st.session_state:
+                        st.session_state['bio_fishmass'] = 0.0
                     st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
                     st.divider()
+                    if 'bio_temp_room' not in st.session_state:
+                        st.session_state['bio_temp_room'] = 0.0
                     st.number_input(
                         'Room temperature (`temp_C_room`, °C)',
                         min_value=-5.0,
@@ -6704,6 +6736,8 @@ def main():
                         format='%.3f',
                         key='bio_temp_room',
                     )
+                    if 'bio_temp_tank' not in st.session_state:
+                        st.session_state['bio_temp_tank'] = 0.0
                     st.number_input(
                         'Tank / bath temperature (`temp_C_tank`, °C)',
                         min_value=-5.0,
@@ -6720,12 +6754,16 @@ def main():
 
                 with bio_r:
                     st.markdown('### Clamp geometry')
+                    if 'bio_dclamp' not in st.session_state:
+                        st.session_state['bio_dclamp'] = 0.0
                     st.number_input(
                         'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
                         min_value=0.001,
                         format='%.6g',
                         key='bio_dclamp',
                     )
+                    if 'bio_dbend' not in st.session_state:
+                        st.session_state['bio_dbend'] = 0.0
                     st.number_input(
                         'Along-body distance to center of clamped test segment (mm)',
                         min_value=0.0,
@@ -6733,9 +6771,17 @@ def main():
                         key='bio_dbend',
                         help=BIO_DBEND_FIELD_HELP,
                     )
+                    if 'bio_xsec' not in st.session_state:
+                        st.session_state['bio_xsec'] = 0.0
                     st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
+                    if 'bio_xsec_height' not in st.session_state:
+                        st.session_state['bio_xsec_height'] = 0.0
                     st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
+                    if 'bio_dvert' not in st.session_state:
+                        st.session_state['bio_dvert'] = 0.0
                     st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
+                    if 'bio_dhoriz' not in st.session_state:
+                        st.session_state['bio_dhoriz'] = 0.0
                     st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
 
                 st.divider()
@@ -6760,6 +6806,8 @@ def main():
                         '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
                     ),
                 )
+                if 'bio_prof_L' not in st.session_state:
+                    st.session_state['bio_prof_L'] = 0.0
                 st.number_input(
                     'Specimen outline length for profile model (mm)',
                     min_value=0.001,
@@ -6769,13 +6817,23 @@ def main():
                 )
                 p1, p2 = st.columns(2)
                 with p1:
+                    if 'bio_prof_ph' not in st.session_state:
+                        st.session_state['bio_prof_ph'] = 0.0
                     st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_ph')
+                    if 'bio_prof_pw' not in st.session_state:
+                        st.session_state['bio_prof_pw'] = 0.0
                     st.number_input('Proximal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_pw')
                 with p2:
+                    if 'bio_prof_dh' not in st.session_state:
+                        st.session_state['bio_prof_dh'] = 0.0
                     st.number_input('Distal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_dh')
+                    if 'bio_prof_dw' not in st.session_state:
+                        st.session_state['bio_prof_dw'] = 0.0
                     st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_dw')
                 p3, p4 = st.columns(2)
                 with p3:
+                    if 'bio_prof_clamp' not in st.session_state:
+                        st.session_state['bio_prof_clamp'] = 0.0
                     st.number_input(
                         'Distance from rotation axis to clamps (mm)',
                         min_value=0.0,
@@ -6784,9 +6842,13 @@ def main():
                         help=BIO_PROF_CLAMP_FIELD_HELP,
                     )
                 with p4:
+                    if 'bio_prof_samples' not in st.session_state:
+                        st.session_state['bio_prof_samples'] = 0.0
                     st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='bio_prof_samples')
 
                 st.divider()
+                if 'bio_use_theoretical_inertial' not in st.session_state:
+                    st.session_state['bio_use_theoretical_inertial'] = False
                 st.checkbox(
                     'Check here to perform inertial correction',
                     key='bio_use_theoretical_inertial',
@@ -6839,6 +6901,8 @@ def main():
             _tpl_folder_top = _shared_experiment_dir()
             _tpl_files_top = list_template_files(_tpl_folder_top)
             _tpl_options_top: list = [None] + _tpl_files_top
+            if 'gui_protocol_template_select' not in st.session_state:
+                st.session_state['gui_protocol_template_select'] = None
             _tpl_pick_top = st.selectbox(
                 'Template to load',
                 _tpl_options_top,
@@ -6866,6 +6930,8 @@ def main():
                     ['Check template file', 'Read Details'],
                     txt_fb,
                 )
+        if 'test_type_select' not in st.session_state:
+            st.session_state['test_type_select'] = None
         tt = st.selectbox('Experiment type (test_type)', test_types, key='test_type_select')
         b.test_type = tt
 
@@ -7205,6 +7271,8 @@ def main():
                     st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
 
                 st.divider()
+                if 'gui_protocol_show_save_template' not in st.session_state:
+                    st.session_state['gui_protocol_show_save_template'] = False
                 _show_tpl_save = st.checkbox(
                     'Show "Save procedure as template"',
                     key='gui_protocol_show_save_template',
@@ -7212,6 +7280,8 @@ def main():
                 )
                 if _show_tpl_save:
                     st.markdown('**Save procedure as template**')
+                    if 'gui_protocol_new_name' not in st.session_state:
+                        st.session_state['gui_protocol_new_name'] = ''
                     st.text_input(
                         'Template name',
                         key='gui_protocol_new_name',
@@ -7223,6 +7293,8 @@ def main():
                         height=70,
                         placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz x strains; or calibration + base',
                     )
+                    if 'gui_protocol_overwrite' not in st.session_state:
+                        st.session_state['gui_protocol_overwrite'] = False
                     st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
                     _pc1, _pc2 = st.columns(2)
                     with _pc1:
@@ -7875,6 +7947,8 @@ def main():
                                 if tt0:
                                     st.caption(f'**test_type (this trial):** `{tt0}`')
     
+                                if 'gui_h5_n_panels' not in st.session_state:
+                                    st.session_state['gui_h5_n_panels'] = 0.0
                                 n_panel = st.number_input(
                                     'Number of figure panels',
                                     min_value=1,
@@ -8035,6 +8109,8 @@ def main():
                     'Uncheck **Append…** below to replace the stored note entirely.'
                 ),
             )
+            if 'gui_qc_notes_append' not in st.session_state:
+                st.session_state['gui_qc_notes_append'] = False
             st.checkbox(
                 'Append new text to existing note in this data file path (when the file already exists)',
                 value=True,

@@ -1,123 +1,178 @@
-# CritterGripper / Bender — Cursor rules
+# CritterGripper / Bender — Cursor Rules
 
 ## Authority metadata
-
 - Purpose: Product-level agent policy and architecture constraints.
 - Authority level: Tier 1 (binding).
 - Scope: Entire repository, all agent tasks.
 - Owner: Project maintainer.
-- Last reviewed: 2026-04-23.
+- Last reviewed: 2026-05-27.
+
+---
 
 ## Instruction precedence and conflict handling
-
 - Tier 1 (binding): `.cursorrules` (this file).
 - Tier 2 (binding for Streamlit UI tasks): `.cursor/specs/ui_style.md`.
-- Tier 3 (hybrid backlog): `EVOLUTION_PLAN.md` (advisory by default; binding only when a task explicitly references it).
-- If two sources conflict, **stop and ask the user before proceeding**.
-- If the same conflict pattern repeats, propose a concise new rule snippet for approval.
+- Tier 3 (hybrid backlog): `EVOLUTION_PLAN.md` (advisory by default; 
+  binding only when a task explicitly references it).
+- If two sources conflict, stop and ask the user before proceeding.
+- If the same conflict pattern repeats, propose a concise new rule 
+  snippet for approval.
+
+---
+
+## Before every task
+- Read `bender_streamlit_gui.py` structure before editing anything.
+- Confirm which route/workflow is affected before touching any code.
+- Check if a config module is involved before touching DAQ defaults.
+- Never run hardware-affecting code without explicit user confirmation.
+- Propose one fix at a time. Do not bundle multiple changes.
+
+---
+
+## Environment
+- Runtime: Python / Streamlit.
+- Hardware: NI-DAQmx (absent on non-rig machines — Mac dev machine).
+- Import failures for `nidaqmx` are expected on Mac — do not treat 
+  as bugs. Mock or skip hardware calls when testing GUI only.
+- App was developed on Windows. Path separators may need 
+  `os.path.join()` — never hardcode `/` or `\`.
+- GUI behavior (session state, routing, widget rendering) is fully 
+  testable on Mac without hardware.
+
+---
 
 ## UI stack (non-negotiable)
+- Ship the operator console on Streamlit (`bender_streamlit_gui.py`). 
+  This is the only supported path for CritterGripper.
+- `bender_nicegui/` has been removed. Do not recreate it.
+- Non-Streamlit alternatives require explicit user approval.
+- Prefer small focused edits to `bender_streamlit_gui.py`; match 
+  existing patterns rather than introducing new styling systems.
+- Medium-sized refactors allowed only to solve root-cause issues.
 
-- **Ship the operator console on Streamlit** (`bender_streamlit_gui.py`). This is the supported path for CritterGripper.
-- **Do not migrate or duplicate the main workflow in NiceGUI** for this product. Other folders (e.g. `bender_nicegui/`) are experimental or auxiliary unless explicitly scoped in a task.
-- Non-Streamlit alternatives are allowed only with explicit task/user approval.
-- Prefer **small, focused edits** to `bender_streamlit_gui.py`; match existing patterns rather than introducing parallel styling systems.
-- Medium-sized refactors are allowed when needed to solve root-cause issues.
+---
+
+## Session state rules (non-negotiable)
+
+### Apply button pattern — required everywhere
+- Users fill fields freely with no live consequences.
+- Values are written to `st.session_state` only when the user 
+  clicks an explicit Apply / Confirm button.
+- Validation and status icons run only after Apply is clicked.
+- Downstream actions (hardware config, protocol load) trigger 
+  only after Apply. Never on keystroke or widget change.
+
+### Widget rules
+- Every widget must have an explicit `key=` parameter.
+- Keys use `gui_` prefix (e.g. `key="gui_specimen_id"`).
+- Initialize every key in session_state before the widget renders:
+```python
+  if "gui_specimen_id" not in st.session_state:
+      st.session_state["gui_specimen_id"] = ""
+```
+- Read widget return values directly for validation 
+  (not session_state) to avoid one-rerun lag:
+```python
+  # Correct
+  specimen_id = st.text_input("Specimen ID", key="gui_specimen_id")
+  if specimen_id:
+      show_green_icon()
+```
+
+### Folder path input
+- Use `st.text_input` with copy-paste for all folder/file paths.
+- No dropdown filesystem search — it causes rerun conflicts.
+- Always validate with `os.path.isdir()` or `os.path.isfile()` 
+  after Apply, never on keystroke.
+```python
+  if folder_path and os.path.isdir(folder_path):
+      st.success("✅ Folder found")
+  elif folder_path:
+      st.error("❌ Folder not found — check path")
+```
+
+---
+
+## Debugging protocol
+- Reproduce the error before proposing any fix.
+- Show the exact line causing the error before changing anything.
+- Propose one fix at a time — never bundle multiple changes.
+- Never refactor while debugging unless the root cause requires it.
+- After each fix, state what to test and how to confirm it worked.
+- If a fix requires changes in more than two functions, stop and 
+  ask the user before proceeding.
 
 ---
 
 ## CSS hooks and injected themes (required for new UI)
 
-All new Streamlit UI that should match the product look must **plug into the existing hooks**. Do not rely only on raw `st.markdown("<style>…")` scattered in new places unless you extend the same injection helpers.
+All new Streamlit UI must plug into existing hooks. Do not use raw 
+`st.markdown("<style>…")` in new places unless extending the same 
+injection helpers.
 
 | Mechanism | Purpose |
 |-----------|---------|
-| `_inject_accessibility_theme()` | Skip link, optional themes (`bnd-theme-warm` / `cool` / `slateivory`), large text (`bnd-a11y-large-text`), workflow main-panel tweaks when `.bnd-workflow-active` |
-| `_inject_load_save_button_theme()` | Workflow shell (white), **primary red / secondary white** buttons, bordered panels, load/save row styling |
-| `_inject_stepwise_compact_layout_css()` | Tighter vertical rhythm when `.bnd-stepwise-active` |
-| **DOM markers (invisible divs)** | `bnd-workflow-active`, `bnd-landing-page`, `bnd-stepwise-active`, `bnd-ui-theme` + theme class |
+| `_inject_accessibility_theme()` | Skip link, themes, large text |
+| `_inject_load_save_button_theme()` | Workflow shell, primary/secondary buttons |
+| `_inject_stepwise_compact_layout_css()` | Compact layout when stepwise active |
+| DOM markers (invisible divs) | `bnd-workflow-active`, `bnd-landing-page`, etc. |
 
-**Rules for agents**
-
-1. **New buttons**: use `type='primary'` vs `type='secondary'` consistently; primary = red CTA, secondary = outlined white. Use **`_load_save_button()`** + `.bnd-ls-action` for full-width load/save-style commits.
-2. **New bordered sections**: use `st.container(border=True)` so existing `[data-testid="stVerticalBlockBorderWrapper"]` rules apply.
-3. **Landing-only styles**: belong in `_landing_style` inside `_render_landing_page()`, using **`:is(#root, body:has(.bnd-landing-page))`** so selectors work when Streamlit has no `#root`.
-4. **Selectors**: prefer `[data-testid="stMain"]` (not only `section`) for Streamlit DOM variance; mirror hover on `[data-testid="stButton"]:hover button…` where needed.
-5. **Documentation**: keep the human-readable palette and patterns in **`.cursor/specs/ui_style.md`** aligned when you change theme behavior.
+### Rules for agents
+1. New buttons: `type='primary'` = red CTA, `type='secondary'` = 
+   outlined white. Use `_load_save_button()` for full-width commits.
+2. New bordered sections: `st.container(border=True)`.
+3. Landing-only styles: belong in `_landing_style` inside 
+   `_render_landing_page()`.
+4. Selectors: prefer `[data-testid="stMain"]` for Streamlit DOM variance.
+5. Keep `.cursor/specs/ui_style.md` aligned when changing theme behavior.
 
 ---
 
 ## Streamlit layout and navigation
-
-- **Routing** uses `st.session_state['gui_app_route']`: `landing`, `scratch`, `templates`, `stepwise`, `sim_compare` (offline Simulation & Comparison), `h5_explorer`.
-- **Landing**: sidebar hidden; hero + “Choose Workflow” cards; **Settings** in an expander (theme + text size); entry to H5 explorer.
-- **Workflows**: scratch (full layout), templates (disk-backed hardware + biometrics), stepwise (numbered steps 1–5, progress UI).
-- **User-facing triad** (use consistently): **Hardware configuration**, **Biometrics**, **Protocol** (avoid mixing “procedure” vs “protocol” elsewhere).
-- If naming changes are requested, apply them consistently across affected UI/docs unless instructed otherwise.
-- **Hardware mode**: **Load existing** vs **Build new** — two **wide** column buttons (`_hardware_configuration_mode_toggle`), not a horizontal radio for that binary choice.
-- **Session state**: keys are generally prefixed `gui_*` or `gui_cfg_*` / `gui_h5_*`; follow existing naming when adding widgets.
+- Routing uses `st.session_state['gui_app_route']`: `landing`, 
+  `scratch`, `templates`, `stepwise`, `sim_compare`, `h5_explorer`.
+- Landing: sidebar hidden; hero + workflow cards; Settings expander.
+- Workflows: scratch, templates, stepwise (steps 1–5).
+- User-facing triad: Hardware configuration, Biometrics, Protocol.
+- Session state keys: `gui_*` or `gui_cfg_*` / `gui_h5_*`.
 
 ---
 
 ## Controls: dropdowns, inputs, outputs, feedback
-
-- **Dropdowns**: `st.selectbox` with explicit `key=`; protocol/template UIs map JSON keys to selectboxes and other widgets.
-- **Numbers / text**: `st.number_input`, `st.text_input` with keys aligned to builder dicts when writing config modules.
-- **Outputs**: experiment path produces **HDF5** (`.h5`); QC plots; success/warning messages via `st.success` / `st.warning` / `st.error`.
-- **Errors**: use **`_show_friendly_error`** for user-visible failures (e.g. around `run_experiment`).
-- **Warnings (examples)**: missing calibration file, preview stale vs protocol, H5 path missing, empty series in explorer — prefer **`st.warning`** with actionable text.
-
----
-
-## Features (high level)
-
-- Live experiment **preview** (cycles / timing) before run where implemented.
-- **Run** invokes `Bender.run_experiment(test_type=…)` under **`st.spinner(...)`** (blocking on the Streamlit server thread for that run).
-- **H5 data explorer** (`bender_h5_explore.py`): path or upload, trial selection for v2 schema, X/Y series, Plotly.
-- **Accessibility**: skip link to `#bnd-main-content`; focus-visible styles in theme CSS.
-
----
-
-## Settings
-
-- **Display**: theme + optional large text from landing expander or sidebar; persisted in session via existing helpers.
-- **Config**: hardware lives in user-selected or generated **Python config modules** (e.g. `*_bender_config_*.py`) loaded by `Bender(config_module_name)`.
+- Dropdowns: `st.selectbox` with explicit `key=`.
+- Numbers/text: `st.number_input`, `st.text_input` with keys.
+- Outputs: HDF5 (`.h5`), QC plots, `st.success/warning/error`.
+- Errors: use `_show_friendly_error` for user-visible failures.
+- Warnings: missing calibration, stale preview, missing H5 path — 
+  use `st.warning` with actionable text.
 
 ---
 
 ## NI-DAQ and motor control (backend)
+- Source of truth: `bender_functions.py` + config modules.
+- Uses NI-DAQmx: import failures log a warning on Mac — expected.
+- Rates: `daq_ai_sample_rate_hz` and `daq_ao_do_sample_rate_hz` — 
+  must stay consistent with protocol timing.
+- Safety checks: invalid timebases, NaN/Inf signals, empty cycles — 
+  raise `ValueError` with actionable messages.
+- GUI runs synchronously inside `st.spinner` during acquisition. 
+  Do not introduce asyncio in the main GUI path.
 
-**Source of truth**: `bender_functions.py` (`Bender` class) + per-rig **config modules** (see e.g. `jimenez_bender_config_A.py`).
+---
 
-### Channels and tasks
-
-- Uses **NI-DAQmx** (`nidaqmx`): `Task`, `AnalogMultiChannelWriter`, `DigitalSingleChannelWriter`, `AnalogMultiChannelReader`, `CounterReader` when installed; import failures log a warning and limit live hardware.
-- **Typical mapping** (from config): `device_name`; **AI** for strain gauge / sonomicrometry / optional stim monitor (`input_channels`, `input_channel_names`); **AO** for stim (`stim_channels`); **DO** stream for **motor** (`motor_port`); **counter** for **encoder** (`encoder_chan`).
-- **Rates**: `daq_ai_sample_rate_hz` (AI + encoder clock), `daq_ao_do_sample_rate_hz` (AO + DO stream) — must stay consistent with protocol timing.
-
-### Motor and kinematics (config + code)
-
-- **Stepping / gearing**: `motor_full_steps_per_rev`, `motor_gear_ratio`, `encoder_pulses_per_rev`.
-- **Convention**: `positive_motor_direction`, `specimen_lateral_index_on_positive_motor_side`, `motor_axis`, `bending_axis_sensor`, `primary_bending_axis`, `bending_axis_specimen` — affect signs and plotting, not optional for correct science UX.
-- **Motion shaping**: `rampdur` (and related protocol timing) for ramp on/off; other waits (`waitbefore`, `waitafter`, etc.) from config.
-
-### Safety and validation
-
-- **Drive-level limits** (torque, velocity, following error, etc.) live in **motor drive / tuning files** (e.g. `.mtr`), not in Streamlit — document rig changes there for hardware safety.
-- **Python-side checks** (examples in `bender_functions`): invalid or non-uniform timebases, NaN/Inf in signals, invalid inferred sample rate from `dt` (guards against `round(1/dt)` bugs), empty cycles — raise **`ValueError`** with actionable messages.
-- **GUI**: warn on missing **force/torque calibration** before run where implemented; never silently bypass user-visible risk.
-
-### Concurrency / “async”
-
-- The Streamlit app is **rerun-driven**: long work runs **synchronously** inside **`st.spinner`** during acquisition/save (not `asyncio` in the main GUI path). Do not assume an async event loop for DAQ unless a future change explicitly introduces it and documents thread-safety with NI-DAQmx.
+## Safety (hardware-affecting edits)
+- Include a safety checklist in every change summary that touches 
+  DAQ or motor behavior: stop/reset path, timeout behavior, 
+  stale-export prevention, user-visible warnings.
+- Never silently bypass user-visible risk.
+- Drive-level limits live in motor drive files, not in Streamlit.
 
 ---
 
 ## When editing
-
-- Read neighboring code and **reuse** `_load_save_button`, `_hardware_configuration_mode_toggle`, and theme injectors.
-- After UI changes, sanity-check **landing**, **workflow**, and **stepwise** together.
-- For hardware or DAQ behavior, trace **`Bender`** and the loaded **config module** before changing defaults.
-- If uncertainty remains after reading instructions, ask before coding.
-- For DAQ/hardware-affecting edits, include a safety checklist in your change summary (stop/reset path, timeout behavior, stale-export prevention, user-visible warnings).
-- After substantive edits, run the full test suite by default; if blocked, report why and run the largest feasible subset.
+- Read neighboring code and reuse existing helpers.
+- After UI changes, sanity-check landing, workflow, and stepwise.
+- For hardware/DAQ changes, trace `Bender` and config module first.
+- If uncertainty remains after reading, ask before coding.
+- After substantive edits, run the full test suite; if blocked, 
+  report why and run the largest feasible subset.
