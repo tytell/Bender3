@@ -175,3 +175,12 @@ injection helpers.
 - If uncertainty remains after reading, ask before coding.
 - After substantive edits, run the full test suite; if blocked, 
   report why and run the largest feasible subset.
+---
+
+## Session & git discipline
+
+- Pull before starting. Begin every session with `git pull origin <branch>`.
+- One active agent per repo at a time. Multiple chats fine; only one editing/committing at once.
+- Commit + push before starting new work. Never begin with uncommitted changes sitting around.
+- Edit config files via terminal when a terminal check follows (OneDrive can desync editor from disk).
+- If a push is rejected: `git pull --no-rebase`, resolve any conflict, commit the merge, push again.
