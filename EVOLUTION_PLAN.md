@@ -199,3 +199,33 @@ Goal: Improve clarity, consistency, and usability so operators trust the app and
 - Build as its own focused session, not bundled with other fixes.
 
 **Status:** Logged. Not started.
+
+---
+
+# GUI Spec Audit — 2026-05-28
+
+Master violation list of bender_streamlit_gui.py against ux_spec.md and ui_style.md.
+**101 items total.** Full table lives in `.cursor/plans/gui_spec_audit_list_75d7dbea.plan.md`.
+
+Disposition each item as: **FIXED** / **DEFERRED** (with reason) / **SPEC-AMENDED**. None dropped silently.
+
+## Triage tiers
+
+### Tier 1 — Crash or correctness risk (this session)
+- Items **52–58** (widget-write rule): same crash class hit 3× during 2026-05-27 session.
+- Items **9, 10, 25** (hardware/run actions firing without Apply): scientific-correctness risk.
+
+### Tier 2 — Root of original GUI bugs (next session)
+- Items **1–8, 11–17** (Apply-commit model violations): why status icons misfire and values feel unstable.
+- Items **30–35** (missing guarded init): the field-clearing class.
+
+### Tier 3 — Cleanup
+- Items **36, 78** (theme/large-text widgets): remov
+- Items **64–66, 69–73** (layout: dead stepwise route, duplicate section numbers, three-mode launcher).
+
+### Tier 4 — Decide, do not drop
+- Items **26–29** (`gui_` prefix violations on `fld_*` / `bio_*`): **DEFERRED** for safety — renames must change reads, writes, and HDF5 saves together or data breaks. Revisit as dedicated session.
+- Items **59–63** (filesystem selectboxes vs paste-only §7): **DECISION NEEDED** — either fix to match spec, or amend §7 to allow short known-list pickers. Likely resolves naturally with JLAB_ROOT path anchor (see backlog above).
+- Items **84–101** (missing button `type=`): cosmetic. Fix during a styling pass.
+
+**Status:** Tier 1 in progress. Tiers 2–4 pending.
