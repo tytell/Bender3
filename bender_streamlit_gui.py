@@ -5717,46 +5717,34 @@ def _data_folder_dropdown_choice_list(current_folder: str) -> list[str]:
 
 def _render_data_folder_dropdown(*, key_suffix: str) -> None:
     """
-    Browser-native folder picker: dropdown sets ``gui_data_folder`` (works without tkinter).
-
-    Syncs from ``gui_data_folder`` when it changes via Browse/Apply; uses ``on_change`` so
-    user selections are not clobbered before ``_store_selected_data_folder`` runs.
+    Browser-native folder entry: text input accepts pasted folder paths.
     """
-    dd_key = f'gui_data_folder_dd_{key_suffix}'
-    sync_key = f'{dd_key}_synced_from_gui_data_folder'
-    cur = str(st.session_state.get('gui_data_folder') or '').strip()
-    cur_norm = os.path.normpath(cur) if cur else ''
-    choices = _data_folder_dropdown_choice_list(cur_norm)
-    if cur_norm and cur_norm not in choices and os.path.isdir(cur_norm):
-        choices.insert(0, cur_norm)
-    options = [_DATA_FOLDER_DD_SENTINEL] + choices
+    _ = key_suffix
+    if 'gui_data_folder' not in st.session_state:
+        st.session_state['gui_data_folder'] = ''
 
-    def _fmt(p: str) -> str:
-        return p if p == _DATA_FOLDER_DD_SENTINEL else str(p)
-
-    def _on_folder_dd_change() -> None:
-        raw = st.session_state.get(dd_key)
-        if raw is None or raw == _DATA_FOLDER_DD_SENTINEL or not str(raw).strip():
+    def _on_folder_text_change() -> None:
+        raw = str(st.session_state.get('gui_data_folder') or '').strip()
+        if not raw:
             return
-        picked = os.path.normpath(str(raw).strip())
+        picked = os.path.normpath(raw)
         _store_selected_data_folder(picked)
-        st.session_state[sync_key] = os.path.normpath(str(st.session_state.get('gui_data_folder') or '').strip())
 
-    if st.session_state.get(sync_key) != cur_norm:
-        st.session_state[dd_key] = cur_norm if cur_norm and cur_norm in options else _DATA_FOLDER_DD_SENTINEL
-        st.session_state[sync_key] = cur_norm
-
-    st.selectbox(
+    folder_path = st.text_input(
         'Data folder',
-        options=options,
-        format_func=_fmt,
-        key=dd_key,
-        on_change=_on_folder_dd_change,
+        key='gui_data_folder',
+        on_change=_on_folder_text_change,
         help=(
-            'Pick a folder from this list (works in the browser). The full HDF5 path is **folder + file name** '
+            'Paste a folder path. The full HDF5 path is **folder + file name** '
             'in the next column. Native **Browse…** may not work on remote desktops or hosted Streamlit.'
         ),
     )
+    folder_path = str(folder_path or '').strip()
+    if folder_path:
+        if os.path.isdir(folder_path):
+            st.success('✅ Folder found')
+        else:
+            st.error('❌ Folder not found — check path')
 
 
 def _pick_file_with_dialog(initial_dir: str, *, title: str, filetypes: list[tuple[str, str]]) -> tuple[Optional[str], Optional[str]]:
