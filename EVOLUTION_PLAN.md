@@ -170,3 +170,32 @@ Goal: Improve clarity, consistency, and usability so operators trust the app and
 - [ ] 99. Are session restore and autosave behaviors transparent enough that operators understand what state was reused?
 - [ ] 100. Does the UI provide a concise end-of-run summary (what ran, where it was saved, timestamps, QC outputs) in one place?
 
+
+---
+
+# Backlog item: JLAB_ROOT path anchor — 2026-05-28
+
+**What:** Add a project-root anchor so the app resolves all file/folder paths relative to a single base, rather than requiring full absolute paths everywhere.
+
+**Why:**
+- Matches existing JLab convention from jlab_folder_architecture SOP ("Set JLAB_ROOT once per machine").
+- Satisfies .cursorrules rule "Paths read from manifest, never hardcoded."
+- Addresses GUI audit items 7, 59-63 (file selection ergonomics).
+- Cross-machine portable — same relative path works on Mac dev and Windows rig.
+
+**Approach (preferred): environment variable**
+- Set once per machine: `export JLAB_ROOT="/Users/yjimenez/.../01_JimenezLab"` (Mac) or equivalent on Windows.
+- App reads via `os.environ.get('JLAB_ROOT', <fallback>)`.
+- All template / data / config paths in the UI become short relative paths.
+- Full path resolved internally: `os.path.join(JLAB_ROOT, uselative_path)`.
+
+**Touches:**
+- bender_streamlit_gui.py — every file/folder text_input and selectbox.
+- bender_functions.py — any path resolution that bypasses the UI.
+- Template loaders for biometrics, protocols, hardware config.
+
+**Risk:**
+- Touches every file path in the app. Requires the validation-gate discipline from jlab_project_consolidation_sop §5: run end-to-end against a known-good output before declaring done.
+- Build as its own focused session, not bundled with other fixes.
+
+**Status:** Logged. Not started.
