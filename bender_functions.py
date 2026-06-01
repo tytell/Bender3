@@ -1349,6 +1349,13 @@ class Bender:
             raise ValueError(
                 f'Run preflight failed: digital buffer length must match tout ({tout.size}); got {dig.size}.'
             )
+        ch = list(getattr(self, 'input_channels', []) or [])
+        nm = list(getattr(self, 'input_channel_names', []) or [])
+        if len(ch) != len(nm):
+            raise ValueError(
+                f'Run preflight failed: input_channels ({len(ch)}) and input_channel_names ({len(nm)}) '
+                'must be the same length (check sono_channel vs sono_name in the hardware config).'
+            )
 
     def _protocol_log(self, protocol, f0=None, f1=None, c0=None, c1=None, **extra):
         """Write compact protocol fields: frequency_hz, curvature_1_per_m (float or [lo, hi])."""
@@ -1412,8 +1419,10 @@ class Bender:
         motorstep = np.concatenate((np.array([0], dtype='uint8'), (dstep != 0).astype('uint8')))
         motordirection = (velhi <= 0).astype('uint8')
 
-        # Change enable back to ones_like (High = 5V)
+        # High = enable on driver; last sample low so DO idles off after FINITE playback.
         motorenable = np.ones_like(motordirection, dtype='uint8')
+        if motorenable.size:
+            motorenable[-1] = 0
 
         # Ensure the columns match your wires:
         dig = np.packbits(np.column_stack((
@@ -1855,9 +1864,10 @@ class Bender:
 
             # set up the input channels
             for c1, name1 in zip(input_channels, self.input_channel_names):
-                # Check for 'sono' to set RSE mode, otherwise use Differential
-                if 'sono' in name1.lower():
-                    t_config = TerminalConfiguration.RSE # Need to reconfigure for Sonometrics DAC output channels
+                low_nm = name1.lower()
+                # Sonometrics + stim monitor AI lines are single-ended on this rig (not DIFF).
+                if 'sono' in low_nm or low_nm == 'stim_monitor':
+                    t_config = TerminalConfiguration.RSE
                 else:
                     t_config = TerminalConfiguration.DIFF
                 
@@ -1915,10 +1925,16 @@ class Bender:
             analog_writer = AnalogMultiChannelWriter(analog_out.out_stream, 
                                                     auto_start=False)
             analog_writer.write_many_sample(self.stimcmdhi)
-            
+
             digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
                                                         auto_start=False)
             nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
+            expected_out = int(len(self.tout))
+            if int(nwritten) != expected_out:
+                raise RuntimeError(
+                    f'DO write incomplete: wrote {nwritten} of {expected_out} samples. '
+                    'Try lowering daq_ao_do_sample_rate_hz or shortening the protocol.'
+                )
 
             # start everthing
             # make sure to start the output first, because it'll wait until the input starts
@@ -1954,7 +1970,6 @@ class Bender:
                 angle_reader.read_many_sample_double(self.angledata)
                 self.angle_measured = self.angledata
             except Exception:
-                _stop_run_tasks()
                 time.sleep(0.05)
                 try:
                     from bender_daq_kill import daq_emergency_stop
@@ -1962,6 +1977,8 @@ class Bender:
                 except Exception:
                     pass
                 raise
+            finally:
+                _stop_run_tasks()
 
         return(self.aidata)
 

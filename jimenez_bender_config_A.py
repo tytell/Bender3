@@ -16,7 +16,7 @@ specimen_lateral_index_on_positive_motor_side = -1
 motor_axis = "z"           # Motor physically rotates along global 'Y' axis
 bending_axis_sensor = "z" # Sensor's 'X' is actually the motor's rotation
 primary_bending_axis = "zTorque"  # Preferred torque axis for QC plots/correction: xTorque|yTorque|zTorque
-bending_axis_specimen = "dorsoventral" # "dorsoventral", "lateral", or "anteroposterior"
+bending_axis_specimen = "lateral" # "dorsoventral", "lateral", or "anteroposterior"
 
 S1side = 'left' # Double check stimulator channel 1 side!
 S2side = 'right'
@@ -37,13 +37,13 @@ SG_chan = ['ai0', 'ai1', 'ai2', 'ai3', 'ai4', 'ai5']
 SG_name = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
 
 # Add stim monitor channel (if applicable) from S88 stimulator. Make sure to assign correct channel and name based on your specific setup!
-stim_monitor_chan = ['ai8']
+stim_monitor_chan = ['ai7']
 stim_monitor_name = ['stim_monitor']
 
 # Add sonomicrometry channels from Sonometrics DS3 (if applicable)
 use_sono = True
-sono_channel = ["ai6", "ai7"] # If using sonomicrometry, assign output channels for sonomicrometer excitation
-sono_name = ["sono_left", "sono_right"]
+sono_channel = ["ai6"] # If using sonomicrometry, assign output channels for sonomicrometer excitation
+sono_name = ["sono_left"]
 sono_internal_samplefreq = 241 # Internal sample rate of the sonomicrometry system (e.g., 981 or 251 Hz for Sonometrics DS3)
 # --- Sonometer Calibration (Linear: Volts to mm) ---
 # Format: [Low_Volts, High_Volts, Low_mm, High_mm]
