@@ -684,6 +684,7 @@ class Bender:
         self.angledata = None
         self.master_logger.clear()
         self.trial_records = []
+        self.acquisition_start = None
 
         # Now, if the DAQ fails, you won't accidentally save old data!
         # Set input and output names/channels
@@ -762,9 +763,7 @@ class Bender:
 
         # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
         if motion_test_type == 'dynamic':
-            if self.period_by_cycle is None:
-                raise AttributeError("Dynamic test requires 'period_by_cycle' to be set via organize_cycles first.")
-
+            self._organize_cycles_for_dynamic_run()
             duration = np.sum(self.period_by_cycle)
 
             angle, anglevel, tnorm, t = self.make_cycles_dynamic(
@@ -981,7 +980,10 @@ class Bender:
         try:
             self.make_cycle_tags()
             cyc = np.array(getattr(self, 'cycle_index_history', np.array([])), copy=True)
-        except Exception:
+        except Exception as exc:
+            if not getattr(self, 'simulation_mode', False):
+                import warnings
+                warnings.warn(f'make_cycle_tags failed: {exc}', UserWarning, stacklevel=2)
             cyc = np.array([], dtype=int)
         entry = self._build_trial_record(
             test_type=requested_test_type,
@@ -1076,6 +1078,86 @@ class Bender:
             out['curvature_rate_1_per_m_s'] = kdot
             out['angle_vel_deg_s'] = np.rad2deg(kdot * (dc / 1000.0))
         return out
+
+    def _organize_cycles_for_dynamic_run(self):
+        """
+        Build per-cycle motion/stim arrays from current instance fields.
+
+        Called at dynamic run start and by the GUI preview so Apply+Run and preview
+        share the same cycle organization (no stale ``period_by_cycle``).
+        """
+        dc = getattr(self, 'dclamp', None)
+        if dc is None:
+            raise ValueError(
+                'Dynamic run needs test_segment_length_mm (internally `dclamp`) on the Bender — '
+                'usually set in the biometrics section.'
+            )
+        xw = getattr(self, 'xsec_width', None)
+        if xw is None:
+            raise ValueError(
+                'Dynamic run needs xsec_width (mm) on the Bender (organize_cycles uses it for strain metadata).'
+            )
+
+        af_raw = getattr(self, 'all_freqs', None)
+        try:
+            af_arr = np.asarray(af_raw, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            af_arr = np.array([], dtype=float)
+        if af_arr.size == 0 or not np.all(np.isfinite(af_arr)) or np.any(af_arr <= 0):
+            raise ValueError('Set all_freqs (Hz list) with finite values > 0 Hz for dynamic run.')
+        af = [float(v) for v in af_arr.tolist()]
+
+        aa = getattr(self, 'all_amps', None)
+        mode = getattr(self, 'all_amps_mode', None) or 'strain'
+        if aa is not None:
+            conv = self.get_all_amps(aa, mode=mode)
+            all_curves = np.asarray(conv['curvature_1_per_m'], dtype=float).reshape(-1)
+        else:
+            ac = getattr(self, 'all_curves', None)
+            if ac is None:
+                raise ValueError('Set all_amps (or all_curves) for dynamic run.')
+            all_curves = np.asarray(ac, dtype=float).reshape(-1)
+            if all_curves.size == 0:
+                raise ValueError('Set all_amps (or all_curves) for dynamic run.')
+
+        randomize = bool(getattr(self, 'randomize', False))
+        rs = getattr(self, 'random_seed', None)
+        if randomize and rs is not None:
+            np.random.seed(int(rs))
+
+        cps = int(getattr(self, 'cycles_per_step', 0) or 0)
+        nec = int(getattr(self, 'n_end_cycles', 0) or 0)
+        if cps <= 0:
+            raise ValueError('cycles_per_step must be a positive integer for dynamic run.')
+
+        stim_ix = getattr(self, 'stim_cycles_in_step', None)
+        if stim_ix is None:
+            stim_ix = []
+        stim_ix = np.asarray(stim_ix, dtype=int).reshape(-1).tolist()
+
+        d = getattr(self, 'all_stimduties', None)
+        p = getattr(self, 'all_stimphases', None)
+        if d is None or (isinstance(d, (list, tuple, np.ndarray)) and len(d) == 0):
+            d = [0.3]
+        if p is None or (isinstance(p, (list, tuple, np.ndarray)) and len(p) == 0):
+            p = [0.5]
+        duties = np.asarray(d, dtype=float).reshape(-1).tolist()
+        phases = np.asarray(p, dtype=float).reshape(-1).tolist()
+        spr = float(getattr(self, 'stim_pulse_rate', 0.0) or 0.0)
+
+        self.organize_cycles(
+            list(all_curves),
+            af,
+            randomize,
+            cps,
+            nec,
+            float(dc),
+            float(xw),
+            stim_ix,
+            duties,
+            phases,
+            spr,
+        )
 
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate):
         """Build per-cycle arrays. ``all_curves`` is κ (1/m); use :meth:`get_all_amps` to build it from strain/angle."""
@@ -1676,6 +1758,8 @@ class Bender:
         (see ``bender_simulation``). Raw voltages are chosen so existing calibration reproduces
         the simulated wrench.
         """
+        if not getattr(self, 'acquisition_start', None):
+            self.acquisition_start = datetime.now().replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%S')
         from bender_simulation import (
             forcetorque_six_from_bending,
             forcetorque_to_raw_voltages,
@@ -1839,6 +1923,8 @@ class Bender:
             # start everthing
             # make sure to start the output first, because it'll wait until the input starts
             try:
+                if not getattr(self, 'acquisition_start', None):
+                    self.acquisition_start = datetime.now().replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%S')
                 digital_out.start()
                 analog_out.start()
                 angle_in.start()
@@ -3994,10 +4080,30 @@ class Bender:
         return {'ok': len(missing) == 0, 'missing': missing, 'test_type': tt}
 
     def make_cycle_tags(self):
-   
-        # 1. Total samples from your data matrix [samples, channels]
-        total_pts = self.aidata.shape[0]
-        cycle_tag = np.full(total_pts, -1, dtype=int) # Initialize all as -1 (Pre/Post)
+        aidata = getattr(self, 'aidata', None)
+        if aidata is None:
+            raise ValueError('make_cycle_tags requires aidata')
+        arr = np.asarray(aidata)
+        if arr.ndim == 2:
+            n_ai = int(arr.shape[1])
+        elif arr.ndim == 1:
+            n_ai = int(arr.size)
+        else:
+            raise ValueError(f'make_cycle_tags: aidata must be 1D or 2D; got ndim={arr.ndim}')
+        t_arr = np.asarray(getattr(self, 't', np.array([])), dtype=float).reshape(-1)
+        total_pts = int(t_arr.size) if t_arr.size > 0 else n_ai
+        if t_arr.size > 0 and n_ai > 0 and t_arr.size != n_ai:
+            import warnings
+            warnings.warn(
+                f'make_cycle_tags: len(t)={t_arr.size} != aidata samples={n_ai}; using len(t).',
+                UserWarning,
+                stacklevel=2,
+            )
+            total_pts = int(t_arr.size)
+        freq_by_cycle = getattr(self, 'freq_by_cycle', None)
+        if freq_by_cycle is None:
+            raise AttributeError('make_cycle_tags requires freq_by_cycle')
+        cycle_tag = np.full(total_pts, -1, dtype=int)  # -1 = pre/post motion (not a numbered cycle)
         
         # 2. Convert Pre-Stim Time to Points
         pre_time = abs(getattr(self, 'prestim_time', 0)) 
@@ -4007,8 +4113,7 @@ class Bender:
         # We start 'current_pos' after the pre_pts (which remain -1)
         current_pos = pre_pts
         
-        # Using 'freq_by_cycle' which you already organized
-        for i, freq in enumerate(self.freq_by_cycle):
+        for i, freq in enumerate(freq_by_cycle):
             cycle_num = i  # 0, 1, 2... 21
             pts = int(round(self.daq_ai_sample_rate_hz / freq))
             end_pos = current_pos + pts

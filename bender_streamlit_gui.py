@@ -53,8 +53,10 @@ def _agent_debug_log(*, hypothesis_id: str, location: str, message: str, data: d
             'data': data,
             'timestamp': int(time.time() * 1000),
         }
+        _safe_data = to_json_persistent(data, path='data')
+        _payload['data'] = _safe_data
         with open(_DEBUG_LOG_PATH, 'a', encoding='utf-8') as _df:
-            _df.write(_json.dumps(_payload, default=str) + '\n')
+            _df.write(_json.dumps(_payload) + '\n')
     except Exception:
         pass
     # #endregion
@@ -77,6 +79,7 @@ def _img_data_uri(path: str) -> str:
     return f'data:{mime};base64,{b64}'
 
 
+from bender_json_persistent import JsonPersistTypeError, to_json_persistent  # noqa: E402
 from bender_daq_kill import daq_emergency_stop  # noqa: E402
 from bender_config_builder import (  # noqa: E402
     discover_config_modules,
@@ -913,17 +916,15 @@ _AUTOSAVE_EXCLUDE_KEYS = {
     'gui_nav_home_stepwise',
     'gui_nav_home_main',
     'gui_kill_daq',
+    # Derived caches — recompute after restore; never stringify ndarrays into JSON.
+    'gui_last_preview',
+    'gui_last_preview_tt',
+    'gui_h5_explore_catalog',
+    'gui_h5_explore_schema',
+    'gui_h5_explore_notes',
+    'gui_h5_explore_loaded_path',
+    'gui_h5_explore_upload_path',
 }
-
-
-def _json_safe(v):
-    if isinstance(v, (str, int, float, bool)) or v is None:
-        return v
-    if isinstance(v, (list, tuple)):
-        return [_json_safe(x) for x in v]
-    if isinstance(v, dict):
-        return {str(k): _json_safe(x) for k, x in v.items()}
-    return str(v)
 
 
 def _autosave_latest_path() -> str:
@@ -940,11 +941,19 @@ def _collect_persistable_state() -> dict[str, object]:
         for k in st.session_state.keys()
         if k.startswith(_AUTOSAVE_PREFIXES) and k not in _AUTOSAVE_EXCLUDE_KEYS and _is_restore_safe_key(k)
     ]
-    return {k: _json_safe(st.session_state.get(k)) for k in sorted(keys)}
+    out: dict[str, object] = {}
+    for k in sorted(keys):
+        try:
+            out[k] = to_json_persistent(st.session_state.get(k), path=k)
+        except JsonPersistTypeError as e:
+            raise JsonPersistTypeError(f'Autosave cannot serialize session key {k!r}: {e}') from e
+    return out
 
 
 def _is_restore_safe_key(key: str) -> bool:
     if key in _AUTOSAVE_EXCLUDE_KEYS:
+        return False
+    if key in {'gui_ui_large_text', 'gui_ui_theme'}:
         return False
     if key in {'gui_setup_confirmed', 'gui_measurements_confirmed', 'gui_protocol_confirmed', 'gui_session_source'}:
         return False
@@ -970,6 +979,8 @@ def _is_restore_safe_key(key: str) -> bool:
         )
         if (
             key.startswith('gui_btn_')
+            or key.startswith('gui_save_')
+            or key.startswith('gui_go_')
             or key.startswith('gui_biometrics_btn_')
             or key.startswith('bio_btn_')
             or key.startswith('gui_nav_')
@@ -989,9 +1000,9 @@ def _build_state_origin_map(state: dict[str, object]) -> dict[str, str]:
     recovered_base = dict(st.session_state.get('gui_recovered_state_baseline') or {})
     origin: dict[str, str] = {}
     for k, v in state.items():
-        if k in recovered_base and _json_safe(recovered_base.get(k)) == v:
+        if k in recovered_base and to_json_persistent(recovered_base.get(k), path=k) == v:
             origin[k] = 'recovered'
-        elif k in default_base and _json_safe(default_base.get(k)) == v and k not in recovered_base:
+        elif k in default_base and to_json_persistent(default_base.get(k), path=k) == v and k not in recovered_base:
             origin[k] = 'default'
         else:
             origin[k] = 'user'
@@ -1046,7 +1057,12 @@ def _read_json_file(path: str) -> tuple[Optional[dict], Optional[str]]:
 
 
 def _write_snapshot_payload(*, source: str, update_latest: bool) -> tuple[bool, str]:
-    payload = _build_snapshot_payload(source=source)
+    try:
+        payload = _build_snapshot_payload(source=source)
+    except JsonPersistTypeError as e:
+        msg = f'{type(e).__name__}: {e}'
+        st.session_state['gui_autosave_last_error'] = msg
+        return False, msg
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     hist_path = _autosave_history_path(stamp) if source == 'autosave' else os.path.join(
         _session_snapshots_dir(), f'session_snapshot_{stamp}.json'
@@ -1071,22 +1087,39 @@ def _save_progress_snapshot() -> tuple[bool, str]:
     return _write_snapshot_payload(source='manual_snapshot', update_latest=False)
 
 
-def _load_latest_autosave() -> tuple[Optional[dict], Optional[str]]:
-    payload, err = _read_json_file(_autosave_latest_path())
-    if err:
-        return None, err
-    if payload is None:
-        return None, None
+def _list_manual_snapshot_files(*, max_entries: int = 50) -> list[str]:
+    """Most-recent manual session snapshots from ``SessionSnapshots``."""
+    root = _session_snapshots_dir()
+    if not os.path.isdir(root):
+        return []
+    out: list[tuple[float, str]] = []
+    try:
+        for name in os.listdir(root):
+            if not (name.startswith('session_snapshot_') and name.endswith('.json')):
+                continue
+            p = os.path.normpath(os.path.join(root, name))
+            try:
+                mt = float(os.path.getmtime(p))
+            except OSError:
+                mt = 0.0
+            out.append((mt, p))
+    except OSError:
+        return []
+    out.sort(key=lambda row: row[0], reverse=True)
+    return [p for _, p in out[: max(1, int(max_entries))]]
+
+
+def _validate_snapshot_payload(payload: dict, *, context: str) -> Optional[str]:
     schema = int(payload.get('schema_version', 0) or 0)
     if schema != _AUTOSAVE_SCHEMA_VERSION:
-        return None, f'Unsupported autosave schema version: {schema}.'
+        return f'Unsupported {context} schema version: {schema}.'
     state = payload.get('state')
     if not isinstance(state, dict):
-        return None, 'Autosave payload missing valid `state` object.'
-    return payload, None
+        return f'{context.capitalize()} payload missing valid `state` object.'
+    return None
 
 
-def _restore_autosave_payload(payload: dict) -> None:
+def _restore_snapshot_payload(payload: dict, *, source_label: str) -> None:
     state = dict(payload.get('state') or {})
     for k, v in state.items():
         if _is_restore_safe_key(k):
@@ -1094,21 +1127,63 @@ def _restore_autosave_payload(payload: dict) -> None:
                 st.session_state[k] = v
             except Exception as e:
                 # Streamlit forbids assigning certain widget-managed keys (buttons/uploaders).
-                # Ignore those stale keys from older autosave payloads.
+                # Ignore those stale keys from older payloads.
                 if 'cannot be set using `st.session_state`' not in str(e):
                     raise
-    st.session_state['gui_recovered_state_baseline'] = {k: _json_safe(v) for k, v in state.items()}
+    st.session_state['gui_recovered_state_baseline'] = {
+        k: to_json_persistent(v, path=k) for k, v in state.items()
+    }
     st.session_state['gui_recovery_summary'] = {
         'saved_at': str(payload.get('saved_at') or ''),
         'app_route': str(payload.get('app_route') or ''),
-        'source': str(payload.get('source') or 'autosave'),
+        'source': str(payload.get('source') or source_label),
     }
     st.session_state['gui_recovery_banner_message'] = (
-        f"Recovered from autosave ({st.session_state['gui_recovery_summary']['saved_at'] or 'unknown time'})."
+        f"Recovered from {source_label} ({st.session_state['gui_recovery_summary']['saved_at'] or 'unknown time'})."
     )
     st.session_state['gui_recovery_banner_level'] = 'success'
     st.session_state['gui_session_source'] = 'restored'
     _repair_data_path_fields_from_session()
+
+
+def _load_manual_snapshot(path: str) -> tuple[bool, str]:
+    snap_path = os.path.normpath(str(path or '').strip())
+    if not snap_path:
+        return False, 'Choose a snapshot file first.'
+    payload, err = _read_json_file(snap_path)
+    if err:
+        return False, err
+    if payload is None:
+        return False, f'Snapshot file not found: `{snap_path}`'
+    verr = _validate_snapshot_payload(payload, context='snapshot')
+    if verr:
+        return False, verr
+    _restore_snapshot_payload(payload, source_label='snapshot')
+    cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+    if cfg_sel:
+        mods = discover_config_modules(_ROOT)
+        if cfg_sel not in mods:
+            st.session_state['gui_recovery_banner_message'] = (
+                f"Recovered snapshot, but config module `{cfg_sel}` is missing. Choose a config in Setup."
+            )
+            st.session_state['gui_recovery_banner_level'] = 'warning'
+    return True, snap_path
+
+
+def _load_latest_autosave() -> tuple[Optional[dict], Optional[str]]:
+    payload, err = _read_json_file(_autosave_latest_path())
+    if err:
+        return None, err
+    if payload is None:
+        return None, None
+    verr = _validate_snapshot_payload(payload, context='autosave')
+    if verr:
+        return None, verr
+    return payload, None
+
+
+def _restore_autosave_payload(payload: dict) -> None:
+    _restore_snapshot_payload(payload, source_label='autosave')
 
 
 def _bootstrap_autosave_recovery() -> None:
@@ -2246,6 +2321,21 @@ def _procedure_apply_dirty() -> bool:
     return _procedure_fingerprint() != st.session_state['gui_proc_applied_sig']
 
 
+def _procedure_ready_for_run() -> tuple[bool, str]:
+    """Procedure committed via Apply / preview — not silently on Run."""
+    if _procedure_apply_dirty():
+        return (
+            False,
+            'Procedure fields changed — click **Apply procedure** or **Refresh experiment preview** first.',
+        )
+    if not bool(st.session_state.get('gui_protocol_confirmed')):
+        return (
+            False,
+            'Click **Apply procedure** or **Refresh experiment preview** before **Run experiment**.',
+        )
+    return True, ''
+
+
 def _soft_apply_reminder() -> None:
     # Intentionally silent: setup readiness is shown in the sidebar checklist.
     return
@@ -2847,6 +2937,18 @@ def _maybe_seed_cfg_build_fields() -> None:
         return
     _seed_cfg_build_from_base(base)
     st.session_state['gui_cfg_build_seeded_for'] = base
+
+
+def _flush_pending_cfg_build_base() -> None:
+    """Apply deferred base-module selection before build-form widgets mount."""
+    if 'gui_pending_cfg_build_base' not in st.session_state:
+        return
+    base = str(st.session_state.pop('gui_pending_cfg_build_base') or '').strip()
+    if not base:
+        return
+    if base != str(st.session_state.get('gui_cfg_build_base') or ''):
+        st.session_state['gui_cfg_build_base'] = base
+        st.session_state.pop('gui_cfg_build_seeded_for', None)
 
 
 def _flush_pending_load_config_session():
@@ -4836,8 +4938,28 @@ def _h5_custom_axis_folder_suffix(axis: str, cwd: str) -> str:
     return hashlib.sha256(f'{axis}|{cwd or ""}'.encode('utf-8', errors='replace')).hexdigest()[:16]
 
 
+def _flush_pending_h5_custom_axis_nav(axis: str) -> None:
+    """Apply folder navigation queued by Enter / Up / Root before axis widgets mount."""
+    pk = f'gui_pending_h5_custom_nav_{axis}'
+    if pk not in st.session_state:
+        return
+    op = st.session_state.pop(pk)
+    cwd_key = f'gui_h5_custom_cwd_{axis}'
+    cwd = str(st.session_state.get(cwd_key) or '')
+    if op == 'root':
+        st.session_state[cwd_key] = ''
+    elif op == 'up':
+        parts = cwd.split('/')
+        st.session_state[cwd_key] = '/'.join(parts[:-1]) if parts else ''
+    elif isinstance(op, str) and op.startswith('enter:'):
+        pick = op[6:]
+        if pick and pick != '—':
+            st.session_state[cwd_key] = h5_join_internal_path(cwd, pick)
+
+
 def _render_h5_custom_axis_browser(loaded: str, axis: str, heading: str) -> None:
     """One column: independent cwd, subfolder nav, dataset pick, optional 6×N channel."""
+    _flush_pending_h5_custom_axis_nav(axis)
     cwd_key = f'gui_h5_custom_cwd_{axis}'
     st.session_state.setdefault(cwd_key, '')
     cwd = str(st.session_state.get(cwd_key) or '')
@@ -4863,16 +4985,15 @@ def _render_h5_custom_axis_browser(loaded: str, axis: str, heading: str) -> None
             key=f'gui_h5_custom_{axis}_sub_{_ks}',
         )
         if st.button('Enter', key=f'gui_h5_custom_{axis}_enter_{_ks}', disabled=pick == '—'):
-            st.session_state[cwd_key] = h5_join_internal_path(cwd, pick)
+            st.session_state[f'gui_pending_h5_custom_nav_{axis}'] = f'enter:{pick}'
             st.rerun()
     with nav2:
         if st.button('Up', key=f'gui_h5_custom_{axis}_up_{_ks}', disabled=not cwd):
-            parts = cwd.split('/')
-            st.session_state[cwd_key] = '/'.join(parts[:-1]) if parts else ''
+            st.session_state[f'gui_pending_h5_custom_nav_{axis}'] = 'up'
             st.rerun()
     with nav3:
         if st.button('Root', key=f'gui_h5_custom_{axis}_root_{_ks}'):
-            st.session_state[cwd_key] = ''
+            st.session_state[f'gui_pending_h5_custom_nav_{axis}'] = 'root'
             st.rerun()
 
     plottable = [e for e in ds_list if e['plot'] in ('1d', 'six')]
@@ -4953,6 +5074,8 @@ def _h5_custom_resolve_axis_path(loaded: str, axis: str) -> Tuple[str, Optional[
 
 def _render_h5_custom_hierarchy_dropdowns(loaded: str) -> None:
     """Non-standard HDF5: **X** and **Y** each have their own folder navigation and dataset pick."""
+    if st.session_state.pop('gui_pending_h5_custom_swap_xy', False):
+        _h5_custom_swap_xy_session()
     st.caption(
         '**X** and **Y** use **separate folders**. In each column: open subfolders with **Enter**, pick a **Dataset**, '
         'and set **6×N channel** when needed (Fx…Tz).'
@@ -4970,7 +5093,7 @@ def _render_h5_custom_hierarchy_dropdowns(loaded: str) -> None:
             key='gui_h5_custom_swap_xy',
             help='Exchange X and Y (each column’s folder, dataset, and 6×N channel).',
         ):
-            _h5_custom_swap_xy_session()
+            st.session_state['gui_pending_h5_custom_swap_xy'] = True
             st.rerun()
 
     st.divider()
@@ -5025,6 +5148,10 @@ def _render_h5_attribute_editor(loaded: str) -> None:
         )
         if 'gui_h5_attr_path_typed' not in st.session_state:
             st.session_state['gui_h5_attr_path_typed'] = ''
+        if 'gui_pending_h5_attr_edit_target' in st.session_state:
+            st.session_state['gui_h5_attr_edit_target'] = str(
+                st.session_state.pop('gui_pending_h5_attr_edit_target') or ''
+            ).strip()
         st.text_input(
             'Path inside the file (blank = file root)',
             key='gui_h5_attr_path_typed',
@@ -5032,7 +5159,7 @@ def _render_h5_attribute_editor(loaded: str) -> None:
             help='Use forward slashes. Leave empty to edit attributes on the file itself.',
         )
         if st.button('Load attributes', key='gui_h5_attr_load_btn', type='secondary'):
-            st.session_state['gui_h5_attr_edit_target'] = str(
+            st.session_state['gui_pending_h5_attr_edit_target'] = str(
                 st.session_state.get('gui_h5_attr_path_typed') or ''
             ).strip()
             st.rerun()
@@ -5874,7 +6001,6 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                 rel_file = os.path.relpath(norm_cfg_path, _ROOT).replace('\\', '/')
                 if not rel_file.startswith('..'):
                     _eff_mod = _normalize_config_module_name(rel_file)
-                    st.session_state['gui_load_cfg_select'] = _eff_mod
             except Exception:
                 pass
         else:
@@ -5907,8 +6033,8 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                     st.success(f'Loaded `{eff}`')
                     st.rerun()
 
-    _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-    st.caption(f'{label}: `{_sel or "(none selected)"}`')
+    _display_mod = _eff_mod or _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+    st.caption(f'{label}: `{_display_mod or "(none selected)"}`')
 
 
 def _render_template_procedure_strip() -> None:
@@ -5941,10 +6067,6 @@ def _render_template_procedure_strip() -> None:
         if _default_pick not in _cfg_mods:
             _default_pick = _cfg_mods[0]
         st.session_state.setdefault('gui_load_cfg_select', _default_pick)
-        if st.session_state.get('bender') is None and not st.session_state.get('gui_tpl_cfg_autoloaded'):
-            st.session_state['gui_tpl_cfg_autoloaded'] = True
-            st.session_state['gui_tpl_reload_config'] = True
-            st.rerun()
         _render_config_module_navigator(key_prefix='tpl', label='Hardware configuration module')
         if _load_save_button(
             'Load hardware configuration',
@@ -6105,7 +6227,6 @@ def main():
 
     _flush_pending_load_config_session()
     _consume_pending_biometrics_template()
-    _flush_pending_bio_prof_rho_sync()
     _refresh_confirmation_flags()
     _sanitize_stale_run_state()
     # Repair data-path fields from persisted signatures before any widget binds to
@@ -6191,6 +6312,37 @@ def main():
                         _st_error_detail(
                             'Could not save progress snapshot.',
                             ['Check write permissions', 'Verify workspace is writable'],
+                            msg,
+                        )
+                _snap_files = _list_manual_snapshot_files(max_entries=40)
+                st.selectbox(
+                    'Recent snapshots',
+                    options=[''] + _snap_files,
+                    key='gui_snapshot_file_pick',
+                    format_func=lambda p: '— Select saved snapshot —' if not p else os.path.basename(str(p)),
+                    help='Manual snapshots saved in SessionSnapshots.',
+                )
+                st.text_input(
+                    'Snapshot file path',
+                    key='gui_manual_snapshot_path',
+                    placeholder='Paste full path to session_snapshot_*.json',
+                    help='Use a recent snapshot above or paste a full path.',
+                )
+                if _load_save_button('Load snapshot', key='gui_btn_load_snapshot', button_type='secondary'):
+                    _picked = str(st.session_state.get('gui_snapshot_file_pick') or '').strip()
+                    _typed = str(st.session_state.get('gui_manual_snapshot_path') or '').strip()
+                    _path = _typed or _picked
+                    ok, msg = _load_manual_snapshot(_path)
+                    if ok:
+                        st.success(f'Snapshot loaded: `{msg}`')
+                        st.info('Re-apply setup, biometrics, and procedure before running hardware.')
+                        st.rerun()
+                    elif msg == 'Choose a snapshot file first.':
+                        st.warning(msg)
+                    else:
+                        _st_error_detail(
+                            'Could not load snapshot.',
+                            ['Check file path', 'Verify JSON schema and state object'],
                             msg,
                         )
             with _a_home:
@@ -6316,6 +6468,8 @@ def main():
             if mode == 'Load existing':
                 _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
             else:
+                _flush_pending_cfg_build_base()
+                _maybe_seed_cfg_build_fields()
                 c_top_l, c_top_r = st.columns(2, gap='large')
                 with c_top_l:
                     if 'gui_cfg_build_base_path' not in st.session_state:
@@ -6331,6 +6485,7 @@ def main():
                         )
                         or ''
                     ).strip()
+                    _resolved_base = None
                     if _base_cfg_path:
                         _base_cfg_norm = os.path.normpath(_base_cfg_path)
                         if os.path.isfile(_base_cfg_norm):
@@ -6338,12 +6493,16 @@ def main():
                             try:
                                 _rel_file = os.path.relpath(_base_cfg_norm, _ROOT).replace('\\', '/')
                                 if not _rel_file.startswith('..'):
-                                    st.session_state['gui_cfg_build_base'] = _normalize_config_module_name(_rel_file)
+                                    _resolved_base = _normalize_config_module_name(_rel_file)
                             except Exception:
                                 pass
                         else:
                             st.error('❌ File not found — check path')
-                _maybe_seed_cfg_build_fields()
+                    if _resolved_base and _resolved_base != str(
+                        st.session_state.get('gui_cfg_build_base') or ''
+                    ).strip():
+                        st.session_state['gui_pending_cfg_build_base'] = _resolved_base
+                        st.rerun()
                 with c_top_r:
                     st.text_input(
                         'Save new config as (module name, no `.py`)',
@@ -6871,6 +7030,7 @@ def main():
                         'or **Apply all** (or choose **Custom** and edit the number).'
                     ),
                 )
+                _flush_pending_bio_prof_rho_sync()
                 st.number_input(
                     'Specimen density (g / mm³)',
                     min_value=1e-9,
@@ -7705,13 +7865,13 @@ def main():
             if bool(st.session_state.get('gui_run_in_progress', False)):
                 st.warning('A run is already in progress.')
                 return
+            _proc_ok, _proc_msg = _procedure_ready_for_run()
+            if not _proc_ok:
+                st.error(_proc_msg)
+                return
             st.session_state['gui_run_in_progress'] = True
             _rehydrate_missing_biometrics_from_bender(b)
-            _sync_biometric_flags_from_session(b)
-            _apply_form_updates(b, updates, tt)
             _sync_genus_species_to_bender(b)
-            _mark_procedure_applied()
-            st.session_state['gui_protocol_confirmed'] = True
             outp = _compose_output_h5_path().strip()
             if outp:
                 b.outputfile = outp
@@ -7806,7 +7966,11 @@ def main():
             disabled=_run_disabled,
             help=_run_help,
         ):
-            _rehydrate_missing_biometrics_from_bender(b)
+            _proc_ok, _proc_msg = _procedure_ready_for_run()
+            if not _proc_ok:
+                st.error(_proc_msg)
+            else:
+                _rehydrate_missing_biometrics_from_bender(b)
             run_warnings: list[str] = []
             bio_soft_missing: list[str] = []
             if not str(st.session_state.get('gui_specimen_id') or '').strip():
@@ -7828,21 +7992,17 @@ def main():
                 run_warnings.append('No calibration file detected.')
             if _section2_destination_incomplete():
                 run_warnings.append('No designated file destination in section 2.')
-            _sync_biometric_flags_from_session(b)
-            _sync_genus_species_to_bender(b)
-            _apply_form_updates(b, updates, tt)
-            _mark_procedure_applied()
-            st.session_state['gui_protocol_confirmed'] = True
-            rep = b.validate_dispatch_setup(test_type=tt)
-            if not rep.get('ok', False):
-                run_warnings.append('Required protocol fields are missing.')
-            if run_warnings:
-                st.session_state['gui_run_soft_warnings'] = run_warnings
-                st.session_state['gui_run_pending_confirm'] = True
-            else:
-                st.session_state['gui_run_soft_warnings'] = []
-                st.session_state['gui_run_pending_confirm'] = False
-                _execute_run()
+            if _proc_ok:
+                rep = b.validate_dispatch_setup(test_type=tt)
+                if not rep.get('ok', False):
+                    run_warnings.append('Required protocol fields are missing.')
+                if run_warnings:
+                    st.session_state['gui_run_soft_warnings'] = run_warnings
+                    st.session_state['gui_run_pending_confirm'] = True
+                else:
+                    st.session_state['gui_run_soft_warnings'] = []
+                    st.session_state['gui_run_pending_confirm'] = False
+                    _execute_run()
             _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
 
         if _pending_run_confirm:

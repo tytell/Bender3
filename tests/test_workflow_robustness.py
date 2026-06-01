@@ -11,6 +11,7 @@ from streamlit.testing.v1 import AppTest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import bender_h5_explore as h5x
+import bender_json_persistent as jp
 import bender_streamlit_gui as gui
 
 
@@ -145,6 +146,54 @@ def test_autosave_roundtrip_and_start_fresh_cleanup(tmp_path, monkeypatch):
     assert st.session_state.get('gui_app_route') == 'landing'
     assert st.session_state.get('gui_session_source') == 'fresh'
     assert not os.path.isfile(gui._autosave_latest_path())
+
+
+def test_autosave_excludes_ndarray_caches(tmp_path, monkeypatch):
+    _clear_streamlit_session_state()
+    monkeypatch.setattr(gui, '_ROOT', str(tmp_path))
+    st.session_state['gui_app_route'] = 'scratch'
+    st.session_state['gui_data_folder'] = str(tmp_path)
+    st.session_state['gui_last_preview'] = {
+        'ok': True,
+        't': np.array([0.0, 1.0]),
+        'angle': np.array([0.0, 5.0]),
+        't_plot': np.array([0.0, 1.0]),
+    }
+    st.session_state['gui_h5_explore_catalog'] = {'Time (s)': np.linspace(0.0, 1.0, 4)}
+
+    ok, _ = gui._write_snapshot_payload(source='autosave', update_latest=True)
+    assert ok
+    payload, err = gui._load_latest_autosave()
+    assert err is None
+    assert payload is not None
+    state = payload['state']
+    assert 'gui_last_preview' not in state
+    assert 'gui_h5_explore_catalog' not in state
+
+
+def test_autosave_rejects_non_persistable_gui_value(tmp_path, monkeypatch):
+    _clear_streamlit_session_state()
+    monkeypatch.setattr(gui, '_ROOT', str(tmp_path))
+    st.session_state['gui_app_route'] = 'scratch'
+    st.session_state['gui_data_folder'] = str(tmp_path)
+
+    class _Opaque:
+        pass
+
+    st.session_state['gui_opaque_test_holder'] = _Opaque()
+
+    ok, msg = gui._write_snapshot_payload(source='autosave', update_latest=True)
+    assert not ok
+    assert 'JsonPersistTypeError' in msg or 'Non-JSON-persistable' in msg
+    assert st.session_state.get('gui_autosave_last_error')
+
+
+def test_to_json_persistent_never_stringifies_ndarray():
+    arr = np.array([-3.0, -2.998])
+    out = jp.to_json_persistent(arr)
+    assert isinstance(out, list)
+    assert out == [-3.0, -2.998]
+    assert not isinstance(out, str)
 
 
 def test_autosave_corrupt_and_schema_mismatch_fallback(tmp_path, monkeypatch):
