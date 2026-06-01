@@ -204,6 +204,11 @@ class Bender:
         self.encoder_chan = cfg.encoder_chan
         self.stim_channels = cfg.stim_channels  
         self.S1stim_chan, self.S2stim_chan = self.stim_channels # Map names for run_experiment and run
+        # Canonical AI acquisition rate from the hardware config. The instance
+        # daq_ai_sample_rate_hz (a validated property) is checked against this so a
+        # stale/garbage value (e.g. 0.5 Hz) can never under-sample dynamic sine
+        # commands into a ramp and make the motor "walk".
+        self._config_daq_ai_sample_rate_hz = float(cfg.daq_ai_sample_rate_hz)
         self.daq_ai_sample_rate_hz = cfg.daq_ai_sample_rate_hz
         self.daq_ao_do_sample_rate_hz = cfg.daq_ao_do_sample_rate_hz
         self.motor_gear_ratio = cfg.motor_gear_ratio
@@ -1292,6 +1297,41 @@ class Bender:
         padding_steps = np.full(n_end_cycles, -1) 
         self.step_by_cycle = np.concatenate((step_by_cycle, padding_steps))
                 
+
+    # Floor below which an AI/command-timeline sample rate is treated as corruption.
+    # Real acquisition for this rig runs far above this; dynamic sine commands need
+    # many samples per cycle, so anything this low is a stale/garbage value.
+    DAQ_AI_RATE_FLOOR_HZ = 50.0
+
+    @property
+    def daq_ai_sample_rate_hz(self):
+        return self._daq_ai_sample_rate_hz
+
+    @daq_ai_sample_rate_hz.setter
+    def daq_ai_sample_rate_hz(self, value):
+        """Validate the AI/command sample rate on every assignment.
+
+        record_motor_signal() writes this from 1/dt of the last timeline, so a single
+        bad value (e.g. 0.5 Hz, which equals a typical drive frequency) would otherwise
+        re-save itself every run, under-sampling dynamic sine commands into a ramp and
+        making the motor walk. Reject implausibly low/invalid values and snap back to
+        the hardware config rate.
+        """
+        cfg_hz = float(getattr(self, '_config_daq_ai_sample_rate_hz', 0.0) or 0.0)
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            v = float('nan')
+        if (not np.isfinite(v) or v < self.DAQ_AI_RATE_FLOOR_HZ) and cfg_hz >= self.DAQ_AI_RATE_FLOOR_HZ:
+            if getattr(self, '_daq_ai_sample_rate_hz', None) != cfg_hz:
+                logging.warning(
+                    'daq_ai_sample_rate_hz=%r Hz is invalid/implausibly low; resetting to '
+                    'config rate %r Hz so dynamic commands stay correctly sampled.',
+                    v, cfg_hz,
+                )
+            self._daq_ai_sample_rate_hz = cfg_hz
+        else:
+            self._daq_ai_sample_rate_hz = v
 
     def record_motor_signal(self, t, angle, anglevel, tnorm=None):
         t_arr = np.asarray(t, dtype=float)
