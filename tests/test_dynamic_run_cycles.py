@@ -48,6 +48,16 @@ def test_organize_cycles_for_dynamic_run_rebuilds_after_freq_change():
     assert dur2 > dur1
 
 
+def test_organize_cycles_for_dynamic_run_uses_existing_curves_without_mode():
+    """Avoid re-interpreting all_amps as strain when GUI already stored all_curves."""
+    b = _minimal_dynamic_bender()
+    b.all_amps = [10.0]
+    b.all_amps_mode = None
+    b.all_curves = [0.1]
+    b._organize_cycles_for_dynamic_run()
+    assert np.isclose(float(np.max(np.asarray(b.amp_by_cycle))), np.rad2deg(0.1 * (10.0 / 1000.0)))
+
+
 def test_organize_cycles_for_dynamic_run_requires_dclamp():
     b = _minimal_dynamic_bender()
     b.dclamp = None

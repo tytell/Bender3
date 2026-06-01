@@ -885,6 +885,12 @@ class Bender:
         self.h5_protocol_metadata = self.master_logger.as_dict()
 
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
+        ang_cmd = np.asarray(self.angle, dtype=float).reshape(-1)
+        if ang_cmd.size:
+            print(
+                f"Motor command preview: max|angle|={float(np.max(np.abs(ang_cmd))):.4g} deg, "
+                f"gear_ratio={self.motor_gear_ratio}, motor_full_steps_per_rev={self.motor_full_steps_per_rev}"
+            )
         self.make_motor_stepper_pulses(
                         daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
                         motor_gear_ratio=self.motor_gear_ratio,
@@ -1108,17 +1114,27 @@ class Bender:
         af = [float(v) for v in af_arr.tolist()]
 
         aa = getattr(self, 'all_amps', None)
-        mode = getattr(self, 'all_amps_mode', None) or 'strain'
-        if aa is not None:
+        mode = getattr(self, 'all_amps_mode', None) or getattr(self, 'curve_input_mode', None)
+        ac = getattr(self, 'all_curves', None)
+        if aa is not None and mode is not None:
             conv = self.get_all_amps(aa, mode=mode)
             all_curves = np.asarray(conv['curvature_1_per_m'], dtype=float).reshape(-1)
-        else:
-            ac = getattr(self, 'all_curves', None)
-            if ac is None:
-                raise ValueError('Set all_amps (or all_curves) for dynamic run.')
+        elif ac is not None:
             all_curves = np.asarray(ac, dtype=float).reshape(-1)
             if all_curves.size == 0:
                 raise ValueError('Set all_amps (or all_curves) for dynamic run.')
+            if aa is not None and mode is None:
+                logging.warning(
+                    'Dynamic run: using existing all_curves; set all_amps_mode so all_amps '
+                    'is converted with the same interpretation as the GUI.'
+                )
+        elif aa is not None:
+            raise ValueError(
+                'Dynamic run: set all_amps_mode (strain, strain_pct, angle, etc.) when using '
+                'all_amps — otherwise amplitudes may be misread and the motor will move too far.'
+            )
+        else:
+            raise ValueError('Set all_amps (or all_curves) for dynamic run.')
 
         randomize = bool(getattr(self, 'randomize', False))
         rs = getattr(self, 'random_seed', None)
