@@ -1250,8 +1250,13 @@ class Bender:
         is_stim_cycle = np.tile(is_stim_cycle, len(all_freqs_arr))
         is_stim_cycle = np.concatenate((is_stim_cycle, [False] * n_end_cycles))
 
-        stimburstdur = duty_by_cycle / freq_by_cycle
-        stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
+        # When stim is disabled / stim_pulse_rate <= 0, the quantization below would be
+        # 0/0 -> NaN (RuntimeWarning). Non-stim cycles are zeroed anyway, so just skip it.
+        if np.isfinite(stim_pulse_rate) and stim_pulse_rate > 0:
+            stimburstdur = duty_by_cycle / freq_by_cycle
+            stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
+        else:
+            stimburstdur = np.zeros_like(freq_by_cycle, dtype=float)
         stimburstdur[is_stim_cycle == False] = 0
 
         # --- 6. STORE RESULTS (For BOTH Motor Control & H5 Metadata) ---
@@ -1995,6 +2000,15 @@ class Bender:
                 raise
             finally:
                 _stop_run_tasks()
+                # Reset/free the NI device after EVERY run (success or failure).
+                # On Windows/NI a second back-to-back FINITE acquisition wedges in
+                # wait_until_done() unless the device is released first. Fully guarded
+                # so teardown can never raise and mask the real error.
+                try:
+                    from bender_daq_kill import daq_emergency_stop
+                    daq_emergency_stop(device_name)
+                except Exception:
+                    pass
 
         return(self.aidata)
 

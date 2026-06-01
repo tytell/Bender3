@@ -1722,8 +1722,18 @@ def _render_field(b: Bender, name: str, kind: str, label: str, *, help_text: Opt
 
     if kind == 'int':
         if sk not in st.session_state:
-            st.session_state[sk] = int(cur) if cur is not None else 0
-        return int(st.number_input(label, key=sk, step=1, help=h))
+            seed = int(cur) if cur is not None else 0
+            if name == 'n_end_cycles' and seed < 0:
+                seed = 0
+            if name == 'cycles_per_step' and seed < 1:
+                seed = 1
+            st.session_state[sk] = seed
+        elif name == 'n_end_cycles' and int(st.session_state.get(sk, 0) or 0) < 0:
+            st.session_state[sk] = 0
+        elif name == 'cycles_per_step' and int(st.session_state.get(sk, 1) or 1) < 1:
+            st.session_state[sk] = 1
+        min_v = 0 if name == 'n_end_cycles' else (1 if name == 'cycles_per_step' else None)
+        return int(st.number_input(label, key=sk, step=1, min_value=min_v, help=h))
 
     if kind == 'optional_int':
         use_key = f'{sk}_use'
@@ -3067,6 +3077,16 @@ def _apply_pair(b: Bender, name: str, value):
     if name == 'lateral_mode' and isinstance(value, str) and not value.strip():
         setattr(b, 'lateral_mode', None)
         return
+    if name == 'n_end_cycles':
+        try:
+            value = max(0, int(value))
+        except (TypeError, ValueError):
+            value = 0
+    if name == 'cycles_per_step':
+        try:
+            value = max(1, int(value))
+        except (TypeError, ValueError):
+            value = 1
     setattr(b, name, value)
 
 
@@ -7950,7 +7970,14 @@ def main():
         _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
         _run_disabled, _run_help = _run_button_state()
         _ready_run = _workflow_ready_state(b, tt)
-        if _run_disabled and not bool(st.session_state.get('gui_run_in_progress', False)):
+        if bool(st.session_state.get('gui_run_in_progress', False)):
+            st.warning(_run_help)
+            if st.button('Reset run state', key='gui_run_reset_inprogress', use_container_width=True, type='secondary'):
+                st.session_state['gui_run_in_progress'] = False
+                st.session_state['gui_run_pending_confirm'] = False
+                st.session_state['gui_run_soft_warnings'] = []
+                st.rerun()
+        elif _run_disabled:
             st.warning(_run_help)
             if st.button('Reset run state', key='gui_run_reset_stuck', use_container_width=True, type='secondary'):
                 st.session_state['gui_run_in_progress'] = False
