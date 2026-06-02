@@ -651,58 +651,16 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
 
 def _preview_dynamic(b: Any, max_plot_points: int) -> PreviewResult:
     r: PreviewResult = {'table': [], 't': None, 'angle': None, 'anglevel': None, 'error': None}
-    dc = getattr(b, 'dclamp', None)
-    xw = getattr(b, 'xsec_width', None)
-    if dc is None:
-        r['error'] = (
-            'Dynamic preview needs test_segment_length_mm (internally `dclamp`) on the Bender — '
-            'usually set in the biometrics section.'
-        )
+    organize = getattr(b, '_organize_cycles_for_dynamic_run', None)
+    if not callable(organize):
+        r['error'] = 'Dynamic preview requires a Bender with _organize_cycles_for_dynamic_run.'
         return r
-    af = _as_float_list(getattr(b, 'all_freqs', None))
-    aa = getattr(b, 'all_amps', None)
-    mode = getattr(b, 'all_amps_mode', None) or 'strain'
-    if xw is None:
-        r['error'] = (
-            'Dynamic preview needs xsec_width (mm) on the Bender (organize_cycles uses it for strain metadata).'
-        )
+    try:
+        organize()
+    except ValueError as e:
+        r['error'] = str(e)
         return r
-    if not af:
-        r['error'] = 'Set all_freqs (Hz list) for dynamic preview.'
-        return r
-    if aa is None:
-        r['error'] = 'Set all_amps for dynamic preview.'
-        return r
-    conv = b.get_all_amps(aa, mode=mode)
-    all_curves = np.asarray(conv['curvature_1_per_m'], dtype=float).reshape(-1)
-    randomize = bool(getattr(b, 'randomize', False))
-    rs = getattr(b, 'random_seed', None)
-    if randomize and rs is not None:
-        np.random.seed(int(rs))
-    cps = int(getattr(b, 'cycles_per_step', 0) or 0)
-    nec = int(getattr(b, 'n_end_cycles', 0) or 0)
-    if cps <= 0:
-        r['error'] = 'cycles_per_step must be a positive integer.'
-        return r
-    stim_ix = getattr(b, 'stim_cycles_in_step', None)
-    if stim_ix is None:
-        stim_ix = []
-    stim_ix = np.asarray(stim_ix, dtype=int).reshape(-1).tolist()
-    duties, phases = _default_stim_duties_phases(b)
     spr = float(getattr(b, 'stim_pulse_rate', 0.0) or 0.0)
-    b.organize_cycles(
-        list(all_curves),
-        af,
-        randomize,
-        cps,
-        nec,
-        float(dc),
-        float(xw),
-        stim_ix,
-        duties,
-        phases,
-        spr,
-    )
     angle, anglevel, tnorm, t = b.make_cycles_dynamic(
         b.period_by_cycle, b.freq_by_cycle, b.amp_by_cycle, record_protocol=False
     )

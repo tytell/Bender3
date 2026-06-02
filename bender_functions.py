@@ -204,6 +204,11 @@ class Bender:
         self.encoder_chan = cfg.encoder_chan
         self.stim_channels = cfg.stim_channels  
         self.S1stim_chan, self.S2stim_chan = self.stim_channels # Map names for run_experiment and run
+        # Canonical AI acquisition rate from the hardware config. The instance
+        # daq_ai_sample_rate_hz (a validated property) is checked against this so a
+        # stale/garbage value (e.g. 0.5 Hz) can never under-sample dynamic sine
+        # commands into a ramp and make the motor "walk".
+        self._config_daq_ai_sample_rate_hz = float(cfg.daq_ai_sample_rate_hz)
         self.daq_ai_sample_rate_hz = cfg.daq_ai_sample_rate_hz
         self.daq_ao_do_sample_rate_hz = cfg.daq_ao_do_sample_rate_hz
         self.motor_gear_ratio = cfg.motor_gear_ratio
@@ -684,6 +689,7 @@ class Bender:
         self.angledata = None
         self.master_logger.clear()
         self.trial_records = []
+        self.acquisition_start = None
 
         # Now, if the DAQ fails, you won't accidentally save old data!
         # Set input and output names/channels
@@ -762,9 +768,7 @@ class Bender:
 
         # THIS LEVEL IS ABOUT CREATING MOTOR ANGLES
         if motion_test_type == 'dynamic':
-            if self.period_by_cycle is None:
-                raise AttributeError("Dynamic test requires 'period_by_cycle' to be set via organize_cycles first.")
-
+            self._organize_cycles_for_dynamic_run()
             duration = np.sum(self.period_by_cycle)
 
             angle, anglevel, tnorm, t = self.make_cycles_dynamic(
@@ -886,6 +890,12 @@ class Bender:
         self.h5_protocol_metadata = self.master_logger.as_dict()
 
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
+        ang_cmd = np.asarray(self.angle, dtype=float).reshape(-1)
+        if ang_cmd.size:
+            print(
+                f"Motor command preview: max|angle|={float(np.max(np.abs(ang_cmd))):.4g} deg, "
+                f"gear_ratio={self.motor_gear_ratio}, motor_full_steps_per_rev={self.motor_full_steps_per_rev}"
+            )
         self.make_motor_stepper_pulses(
                         daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
                         motor_gear_ratio=self.motor_gear_ratio,
@@ -981,7 +991,10 @@ class Bender:
         try:
             self.make_cycle_tags()
             cyc = np.array(getattr(self, 'cycle_index_history', np.array([])), copy=True)
-        except Exception:
+        except Exception as exc:
+            if not getattr(self, 'simulation_mode', False):
+                import warnings
+                warnings.warn(f'make_cycle_tags failed: {exc}', UserWarning, stacklevel=2)
             cyc = np.array([], dtype=int)
         entry = self._build_trial_record(
             test_type=requested_test_type,
@@ -1077,6 +1090,96 @@ class Bender:
             out['angle_vel_deg_s'] = np.rad2deg(kdot * (dc / 1000.0))
         return out
 
+    def _organize_cycles_for_dynamic_run(self):
+        """
+        Build per-cycle motion/stim arrays from current instance fields.
+
+        Called at dynamic run start and by the GUI preview so Apply+Run and preview
+        share the same cycle organization (no stale ``period_by_cycle``).
+        """
+        dc = getattr(self, 'dclamp', None)
+        if dc is None:
+            raise ValueError(
+                'Dynamic run needs test_segment_length_mm (internally `dclamp`) on the Bender — '
+                'usually set in the biometrics section.'
+            )
+        xw = getattr(self, 'xsec_width', None)
+        if xw is None:
+            raise ValueError(
+                'Dynamic run needs xsec_width (mm) on the Bender (organize_cycles uses it for strain metadata).'
+            )
+
+        af_raw = getattr(self, 'all_freqs', None)
+        try:
+            af_arr = np.asarray(af_raw, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            af_arr = np.array([], dtype=float)
+        if af_arr.size == 0 or not np.all(np.isfinite(af_arr)) or np.any(af_arr <= 0):
+            raise ValueError('Set all_freqs (Hz list) with finite values > 0 Hz for dynamic run.')
+        af = [float(v) for v in af_arr.tolist()]
+
+        aa = getattr(self, 'all_amps', None)
+        mode = getattr(self, 'all_amps_mode', None) or getattr(self, 'curve_input_mode', None)
+        ac = getattr(self, 'all_curves', None)
+        if aa is not None and mode is not None:
+            conv = self.get_all_amps(aa, mode=mode)
+            all_curves = np.asarray(conv['curvature_1_per_m'], dtype=float).reshape(-1)
+        elif ac is not None:
+            all_curves = np.asarray(ac, dtype=float).reshape(-1)
+            if all_curves.size == 0:
+                raise ValueError('Set all_amps (or all_curves) for dynamic run.')
+            if aa is not None and mode is None:
+                logging.warning(
+                    'Dynamic run: using existing all_curves; set all_amps_mode so all_amps '
+                    'is converted with the same interpretation as the GUI.'
+                )
+        elif aa is not None:
+            raise ValueError(
+                'Dynamic run: set all_amps_mode (strain, strain_pct, angle, etc.) when using '
+                'all_amps — otherwise amplitudes may be misread and the motor will move too far.'
+            )
+        else:
+            raise ValueError('Set all_amps (or all_curves) for dynamic run.')
+
+        randomize = bool(getattr(self, 'randomize', False))
+        rs = getattr(self, 'random_seed', None)
+        if randomize and rs is not None:
+            np.random.seed(int(rs))
+
+        cps = int(getattr(self, 'cycles_per_step', 0) or 0)
+        nec = int(getattr(self, 'n_end_cycles', 0) or 0)
+        if cps <= 0:
+            raise ValueError('cycles_per_step must be a positive integer for dynamic run.')
+
+        stim_ix = getattr(self, 'stim_cycles_in_step', None)
+        if stim_ix is None:
+            stim_ix = []
+        stim_ix = np.asarray(stim_ix, dtype=int).reshape(-1).tolist()
+
+        d = getattr(self, 'all_stimduties', None)
+        p = getattr(self, 'all_stimphases', None)
+        if d is None or (isinstance(d, (list, tuple, np.ndarray)) and len(d) == 0):
+            d = [0.3]
+        if p is None or (isinstance(p, (list, tuple, np.ndarray)) and len(p) == 0):
+            p = [0.5]
+        duties = np.asarray(d, dtype=float).reshape(-1).tolist()
+        phases = np.asarray(p, dtype=float).reshape(-1).tolist()
+        spr = float(getattr(self, 'stim_pulse_rate', 0.0) or 0.0)
+
+        self.organize_cycles(
+            list(all_curves),
+            af,
+            randomize,
+            cps,
+            nec,
+            float(dc),
+            float(xw),
+            stim_ix,
+            duties,
+            phases,
+            spr,
+        )
+
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate):
         """Build per-cycle arrays. ``all_curves`` is κ (1/m); use :meth:`get_all_amps` to build it from strain/angle."""
         start = time.time()
@@ -1152,8 +1255,13 @@ class Bender:
         is_stim_cycle = np.tile(is_stim_cycle, len(all_freqs_arr))
         is_stim_cycle = np.concatenate((is_stim_cycle, [False] * n_end_cycles))
 
-        stimburstdur = duty_by_cycle / freq_by_cycle
-        stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
+        # When stim is disabled / stim_pulse_rate <= 0, the quantization below would be
+        # 0/0 -> NaN (RuntimeWarning). Non-stim cycles are zeroed anyway, so just skip it.
+        if np.isfinite(stim_pulse_rate) and stim_pulse_rate > 0:
+            stimburstdur = duty_by_cycle / freq_by_cycle
+            stimburstdur = np.floor(stimburstdur * stim_pulse_rate * 2) / (stim_pulse_rate * 2)
+        else:
+            stimburstdur = np.zeros_like(freq_by_cycle, dtype=float)
         stimburstdur[is_stim_cycle == False] = 0
 
         # --- 6. STORE RESULTS (For BOTH Motor Control & H5 Metadata) ---
@@ -1189,6 +1297,41 @@ class Bender:
         padding_steps = np.full(n_end_cycles, -1) 
         self.step_by_cycle = np.concatenate((step_by_cycle, padding_steps))
                 
+
+    # Floor below which an AI/command-timeline sample rate is treated as corruption.
+    # Real acquisition for this rig runs far above this; dynamic sine commands need
+    # many samples per cycle, so anything this low is a stale/garbage value.
+    DAQ_AI_RATE_FLOOR_HZ = 50.0
+
+    @property
+    def daq_ai_sample_rate_hz(self):
+        return self._daq_ai_sample_rate_hz
+
+    @daq_ai_sample_rate_hz.setter
+    def daq_ai_sample_rate_hz(self, value):
+        """Validate the AI/command sample rate on every assignment.
+
+        record_motor_signal() writes this from 1/dt of the last timeline, so a single
+        bad value (e.g. 0.5 Hz, which equals a typical drive frequency) would otherwise
+        re-save itself every run, under-sampling dynamic sine commands into a ramp and
+        making the motor walk. Reject implausibly low/invalid values and snap back to
+        the hardware config rate.
+        """
+        cfg_hz = float(getattr(self, '_config_daq_ai_sample_rate_hz', 0.0) or 0.0)
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            v = float('nan')
+        if (not np.isfinite(v) or v < self.DAQ_AI_RATE_FLOOR_HZ) and cfg_hz >= self.DAQ_AI_RATE_FLOOR_HZ:
+            if getattr(self, '_daq_ai_sample_rate_hz', None) != cfg_hz:
+                logging.warning(
+                    'daq_ai_sample_rate_hz=%r Hz is invalid/implausibly low; resetting to '
+                    'config rate %r Hz so dynamic commands stay correctly sampled.',
+                    v, cfg_hz,
+                )
+            self._daq_ai_sample_rate_hz = cfg_hz
+        else:
+            self._daq_ai_sample_rate_hz = v
 
     def record_motor_signal(self, t, angle, anglevel, tnorm=None):
         t_arr = np.asarray(t, dtype=float)
@@ -1267,6 +1410,13 @@ class Bender:
             raise ValueError(
                 f'Run preflight failed: digital buffer length must match tout ({tout.size}); got {dig.size}.'
             )
+        ch = list(getattr(self, 'input_channels', []) or [])
+        nm = list(getattr(self, 'input_channel_names', []) or [])
+        if len(ch) != len(nm):
+            raise ValueError(
+                f'Run preflight failed: input_channels ({len(ch)}) and input_channel_names ({len(nm)}) '
+                'must be the same length (check sono_channel vs sono_name in the hardware config).'
+            )
 
     def _protocol_log(self, protocol, f0=None, f1=None, c0=None, c1=None, **extra):
         """Write compact protocol fields: frequency_hz, curvature_1_per_m (float or [lo, hi])."""
@@ -1330,8 +1480,10 @@ class Bender:
         motorstep = np.concatenate((np.array([0], dtype='uint8'), (dstep != 0).astype('uint8')))
         motordirection = (velhi <= 0).astype('uint8')
 
-        # Change enable back to ones_like (High = 5V)
+        # High = enable on driver; last sample low so DO idles off after FINITE playback.
         motorenable = np.ones_like(motordirection, dtype='uint8')
+        if motorenable.size:
+            motorenable[-1] = 0
 
         # Ensure the columns match your wires:
         dig = np.packbits(np.column_stack((
@@ -1676,6 +1828,8 @@ class Bender:
         (see ``bender_simulation``). Raw voltages are chosen so existing calibration reproduces
         the simulated wrench.
         """
+        if not getattr(self, 'acquisition_start', None):
+            self.acquisition_start = datetime.now().replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%S')
         from bender_simulation import (
             forcetorque_six_from_bending,
             forcetorque_to_raw_voltages,
@@ -1771,9 +1925,10 @@ class Bender:
 
             # set up the input channels
             for c1, name1 in zip(input_channels, self.input_channel_names):
-                # Check for 'sono' to set RSE mode, otherwise use Differential
-                if 'sono' in name1.lower():
-                    t_config = TerminalConfiguration.RSE # Need to reconfigure for Sonometrics DAC output channels
+                low_nm = name1.lower()
+                # Sonometrics + stim monitor AI lines are single-ended on this rig (not DIFF).
+                if 'sono' in low_nm or low_nm == 'stim_monitor':
+                    t_config = TerminalConfiguration.RSE
                 else:
                     t_config = TerminalConfiguration.DIFF
                 
@@ -1831,14 +1986,22 @@ class Bender:
             analog_writer = AnalogMultiChannelWriter(analog_out.out_stream, 
                                                     auto_start=False)
             analog_writer.write_many_sample(self.stimcmdhi)
-            
+
             digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
                                                         auto_start=False)
             nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
+            expected_out = int(len(self.tout))
+            if int(nwritten) != expected_out:
+                raise RuntimeError(
+                    f'DO write incomplete: wrote {nwritten} of {expected_out} samples. '
+                    'Try lowering daq_ao_do_sample_rate_hz or shortening the protocol.'
+                )
 
             # start everthing
             # make sure to start the output first, because it'll wait until the input starts
             try:
+                if not getattr(self, 'acquisition_start', None):
+                    self.acquisition_start = datetime.now().replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%S')
                 digital_out.start()
                 analog_out.start()
                 angle_in.start()
@@ -1868,7 +2031,6 @@ class Bender:
                 angle_reader.read_many_sample_double(self.angledata)
                 self.angle_measured = self.angledata
             except Exception:
-                _stop_run_tasks()
                 time.sleep(0.05)
                 try:
                     from bender_daq_kill import daq_emergency_stop
@@ -1876,6 +2038,17 @@ class Bender:
                 except Exception:
                     pass
                 raise
+            finally:
+                _stop_run_tasks()
+                # Reset/free the NI device after EVERY run (success or failure).
+                # On Windows/NI a second back-to-back FINITE acquisition wedges in
+                # wait_until_done() unless the device is released first. Fully guarded
+                # so teardown can never raise and mask the real error.
+                try:
+                    from bender_daq_kill import daq_emergency_stop
+                    daq_emergency_stop(device_name)
+                except Exception:
+                    pass
 
         return(self.aidata)
 
@@ -3994,10 +4167,30 @@ class Bender:
         return {'ok': len(missing) == 0, 'missing': missing, 'test_type': tt}
 
     def make_cycle_tags(self):
-   
-        # 1. Total samples from your data matrix [samples, channels]
-        total_pts = self.aidata.shape[0]
-        cycle_tag = np.full(total_pts, -1, dtype=int) # Initialize all as -1 (Pre/Post)
+        aidata = getattr(self, 'aidata', None)
+        if aidata is None:
+            raise ValueError('make_cycle_tags requires aidata')
+        arr = np.asarray(aidata)
+        if arr.ndim == 2:
+            n_ai = int(arr.shape[1])
+        elif arr.ndim == 1:
+            n_ai = int(arr.size)
+        else:
+            raise ValueError(f'make_cycle_tags: aidata must be 1D or 2D; got ndim={arr.ndim}')
+        t_arr = np.asarray(getattr(self, 't', np.array([])), dtype=float).reshape(-1)
+        total_pts = int(t_arr.size) if t_arr.size > 0 else n_ai
+        if t_arr.size > 0 and n_ai > 0 and t_arr.size != n_ai:
+            import warnings
+            warnings.warn(
+                f'make_cycle_tags: len(t)={t_arr.size} != aidata samples={n_ai}; using len(t).',
+                UserWarning,
+                stacklevel=2,
+            )
+            total_pts = int(t_arr.size)
+        freq_by_cycle = getattr(self, 'freq_by_cycle', None)
+        if freq_by_cycle is None:
+            raise AttributeError('make_cycle_tags requires freq_by_cycle')
+        cycle_tag = np.full(total_pts, -1, dtype=int)  # -1 = pre/post motion (not a numbered cycle)
         
         # 2. Convert Pre-Stim Time to Points
         pre_time = abs(getattr(self, 'prestim_time', 0)) 
@@ -4007,8 +4200,7 @@ class Bender:
         # We start 'current_pos' after the pre_pts (which remain -1)
         current_pos = pre_pts
         
-        # Using 'freq_by_cycle' which you already organized
-        for i, freq in enumerate(self.freq_by_cycle):
+        for i, freq in enumerate(freq_by_cycle):
             cycle_num = i  # 0, 1, 2... 21
             pts = int(round(self.daq_ai_sample_rate_hz / freq))
             end_pos = current_pos + pts

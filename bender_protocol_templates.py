@@ -19,6 +19,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from bender_json_persistent import JsonPersistTypeError, to_json_persistent
+
 PROTOCOL_TEMPLATE_VERSION = 2
 _PROTOCOL_TEMPLATE_DIR = 'TemplateProtocols'
 _LEGACY_PROTOCOL_TEMPLATE_DIR = 'ProtocolTemplates'
@@ -145,25 +147,6 @@ def template_display_label(path: str) -> str:
         return os.path.basename(path)
 
 
-def _to_json_safe(v: Any) -> Any:
-    if hasattr(v, 'item') and callable(getattr(v, 'item', None)):
-        try:
-            return _to_json_safe(v.item())
-        except Exception:
-            pass
-    if v is None or isinstance(v, (str, bool)):
-        return v
-    if isinstance(v, (int, float)):
-        if isinstance(v, float) and not (v == v):  # NaN
-            return None
-        return v
-    if isinstance(v, dict):
-        return {str(kk): _to_json_safe(vv) for kk, vv in v.items()}
-    if isinstance(v, (list, tuple)):
-        return [_to_json_safe(x) for x in v]
-    return str(v)
-
-
 def save_protocol_template(
     path: str,
     *,
@@ -179,10 +162,16 @@ def save_protocol_template(
         'description': str(description or '').strip(),
         'saved_utc': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'test_type': str(test_type),
-        'procedure': {str(k): _to_json_safe(v) for k, v in procedure.items()},
+        'procedure': {
+            str(k): to_json_persistent(v, path=f'procedure.{k}') for k, v in procedure.items()
+        },
     }
     if base_protocol is not None:
-        payload['base_protocol'] = _to_json_safe(base_protocol)
+        payload['base_protocol'] = to_json_persistent(base_protocol, path='base_protocol')
+    try:
+        json.dumps(payload, allow_nan=False)
+    except (TypeError, ValueError) as e:
+        raise JsonPersistTypeError(f'Protocol template not JSON-serializable: {e}') from e
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -213,7 +202,7 @@ def snapshot_bender_procedure(b: Any, schema: Dict[str, Any], tt: str) -> Dict[s
     out: Dict[str, Any] = {}
     for name in procedure_field_names_for_test_type(schema, tt):
         if hasattr(b, name):
-            out[name] = _to_json_safe(getattr(b, name))
+            out[name] = to_json_persistent(getattr(b, name), path=name)
     return out
 
 

@@ -12,6 +12,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from bender_json_persistent import JsonPersistTypeError, to_json_persistent
+
 BIOMETRICS_TEMPLATE_VERSION = 1
 _BIOMETRICS_TEMPLATE_DIR = 'TemplateBiometrics'
 _LEGACY_BIOMETRICS_TEMPLATE_DIR = 'BiometricsTemplates'
@@ -147,11 +149,7 @@ def build_biometrics_payload(session_state: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for k in BIOMETRICS_SESSION_KEYS:
         if k in session_state:
-            v = session_state[k]
-            if isinstance(v, (bool, int, float, str)):
-                out[k] = v
-            else:
-                out[k] = v
+            out[k] = to_json_persistent(session_state[k], path=k)
     return out
 
 
@@ -169,8 +167,12 @@ def save_biometrics_template(
         'saved_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'session': build_biometrics_payload(session_state),
     }
+    try:
+        json.dumps(payload, allow_nan=False)
+    except (TypeError, ValueError) as e:
+        raise JsonPersistTypeError(f'Biometrics template not JSON-serializable: {e}') from e
     with open(path, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, indent=2)
+        json.dump(payload, f, indent=2, allow_nan=False)
 
 
 def load_biometrics_template(path: str) -> Dict[str, Any]:
