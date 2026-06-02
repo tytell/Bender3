@@ -13,3 +13,4 @@ TestData/
 .Rproj.user
 .Rhistory
 *.nb.html
+debug-*.log
