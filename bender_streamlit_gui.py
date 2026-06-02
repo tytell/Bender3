@@ -3081,6 +3081,8 @@ def _flush_pending_load_config_session():
             st.session_state['gui_data_filename'] = _pending_file
     if 'gui_pending_post_notes' in st.session_state:
         st.session_state['gui_post_notes'] = st.session_state.pop('gui_pending_post_notes')
+    if 'gui_pending_load_cfg_file_path' in st.session_state:
+        st.session_state['gui_load_cfg_file_path'] = st.session_state.pop('gui_pending_load_cfg_file_path')
 
 
 def _ensure_gui_data_path_session_keys():
@@ -6147,7 +6149,7 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                     )
                 else:
                     st.session_state['gui_load_cfg_select'] = eff
-                    st.session_state['gui_load_cfg_file_path'] = norm_cfg_path
+                    st.session_state['gui_pending_load_cfg_file_path'] = norm_cfg_path
                     st.success(f'Loaded `{eff}`')
                     st.rerun()
 
