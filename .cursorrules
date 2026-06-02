@@ -211,3 +211,31 @@ Validate values against what's sane for their PURPOSE, not just
 must be within the rig's real range; etc. The check must encode 
 the physical meaning, because a number valid for one role 
 (0.5 Hz frequency) is absurd for another (0.5 Hz sample rate).
+
+## Keep comments and names truthful to current behavior
+
+When changing behavior, update the comments, docstrings, help 
+text, and identifier names that describe it — in the SAME change. 
+Stale descriptions that contradict the new behavior are not 
+harmless; they mislead the next reader (human or agent) into 
+believing constraints or designs that no longer exist.
+
+Specifically:
+- Do not leave comments or help text that describe the OLD 
+  behavior after changing it. If a comment says "inside this 
+  project" and the code now loads from anywhere, update the 
+  comment in the same edit.
+- Names must not imply constraints the code no longer enforces. 
+  If a parameter is named `base` because there was once a fixed 
+  base config, and that constraint is gone, rename it to reflect 
+  what it actually is now (e.g. `source_config`, `selected_cfg`).
+- A comment or name that contradicts the code is a defect, even 
+  though it doesn't change runtime behavior. Treat it as part of 
+  the change's correctness, not as optional cleanup.
+- When an agent edits a function, it must scan that function's 
+  comments, docstring, and parameter names for statements made 
+  false by the edit, and fix them in the same diff.
+
+Rationale: stale descriptions are silent misinformation — the 
+documentation-layer version of stale data. They cost future 
+debugging time by encoding a world that no longer exists.
