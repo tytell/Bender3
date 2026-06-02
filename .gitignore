@@ -1,4 +1,4 @@
-/.DS_Store
+﻿/.DS_Store
 /.ipynb_checkpoints
 /.vscode
 /Bender2
@@ -13,3 +13,4 @@ TestData/
 .Rproj.user
 .Rhistory
 *.nb.html
+debug-*.log

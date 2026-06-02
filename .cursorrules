@@ -5,7 +5,7 @@
 - Authority level: Tier 1 (binding).
 - Scope: Entire repository, all agent tasks.
 - Owner: Project maintainer.
-- Last reviewed: 2026-05-27.
+- Last reviewed: 2026-06-01.
 
 ---
 
@@ -184,3 +184,30 @@ injection helpers.
 - Commit + push before starting new work. Never begin with uncommitted changes sitting around.
 - Edit config files via terminal when a terminal check follows (OneDrive can desync editor from disk).
 - If a push is rejected: `git pull --no-rebase`, resolve any conflict, commit the merge, push again.
+
+## Settings are read-only after config load
+
+Values loaded from the hardware config that represent fixed 
+facts (daq_ai_sample_rate_hz, daq_ao_do_sample_rate_hz, 
+motor_gear_ratio, motor_full_steps_per_rev, etc.) must be READ 
+during runs, never written/reassigned. Do not assign back to a 
+config-sourced setting at runtime. If a computed value is needed 
+(e.g. an actual measured rate), store it in a DIFFERENTLY-NAMED 
+variable — never overwrite the canonical setting.
+
+## Don't reuse one variable for two physical quantities
+
+Frequency, sample rate, amplitude, curvature, strain are 
+different physical things even though all are floats. Never 
+assign one into another's variable. When two quantities could 
+hold similar numeric values (e.g. a 0.5 Hz frequency and a rate), 
+keep their names distinct and explicit (freq_hz vs 
+sample_rate_hz) so a mix-up is visible in the code, not hidden.
+
+## Guard by ROLE, not just type
+
+Validate values against what's sane for their PURPOSE, not just 
+"is it a number." A sample rate must be >= 50 Hz; a frequency 
+must be within the rig's real range; etc. The check must encode 
+the physical meaning, because a number valid for one role 
+(0.5 Hz frequency) is absurd for another (0.5 Hz sample rate).
