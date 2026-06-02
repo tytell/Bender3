@@ -2099,6 +2099,63 @@ def _normalize_config_module_name(raw: str) -> str:
     return s
 
 
+def _project_config_py_path_for_stem(stem: str) -> str:
+    """Absolute path to ``<stem>.py`` under the app folder when that layout applies."""
+    mod = _normalize_config_module_name(stem)
+    if not mod:
+        return ''
+    return os.path.normpath(os.path.join(_ROOT, mod.replace('.', os.sep) + '.py'))
+
+
+def _resolve_hardware_config_import_target(raw: str) -> tuple[str, str]:
+    """Return ``(module_stem, absolute_.py_path)`` for ``Bender(stem)`` import."""
+    s = str(raw or '').strip()
+    if not s:
+        raise ValueError('Enter a config module name or `.py` path.')
+    candidate = os.path.normpath(s)
+    if s.lower().endswith('.py') or os.path.isfile(candidate):
+        if not candidate.lower().endswith('.py'):
+            raise ValueError('Hardware config path must be a `.py` file.')
+        abs_path = os.path.normpath(os.path.abspath(candidate))
+        if not os.path.isfile(abs_path):
+            raise FileNotFoundError(f'Config file not found: `{abs_path}`')
+        stem = os.path.splitext(os.path.basename(abs_path))[0]
+        if not stem:
+            raise ValueError('Invalid config file name.')
+        return stem, abs_path
+    stem = _normalize_config_module_name(s)
+    if not stem:
+        raise ValueError('Enter a config module name or `.py` path.')
+    project_py = _project_config_py_path_for_stem(stem)
+    if os.path.isfile(project_py):
+        return stem, os.path.normpath(project_py)
+    return stem, ''
+
+
+def _ensure_config_dir_on_syspath_for_file(abs_py_path: str) -> None:
+    if not abs_py_path:
+        return
+    cfg_dir = os.path.dirname(os.path.normpath(abs_py_path))
+    if cfg_dir and cfg_dir not in sys.path:
+        sys.path.insert(0, cfg_dir)
+
+
+def _raw_mod_for_hardware_config_load(*, module_stem: str) -> str:
+    """Prefer ``gui_load_cfg_file_path`` when it points at the intended module stem."""
+    stem = _normalize_config_module_name(module_stem)
+    cfg_path = str(st.session_state.get('gui_load_cfg_file_path') or '').strip()
+    if cfg_path:
+        norm = os.path.normpath(cfg_path)
+        if os.path.isfile(norm):
+            try:
+                path_stem, _ = _resolve_hardware_config_import_target(norm)
+                if path_stem == stem:
+                    return norm
+            except (OSError, ValueError):
+                pass
+    return stem
+
+
 def _ensure_hw_config_session_defaults() -> None:
     """Keep ``gui_load_cfg_select`` valid when **section 1** is off-screen or session state is stale."""
     mods = discover_config_modules(_ROOT)
@@ -2114,24 +2171,54 @@ def _ensure_hw_config_session_defaults() -> None:
 
 
 def _selected_config_matches_bender(b: Bender, eff_raw: str) -> bool:
-    """True if ``b`` was loaded from the same module name as ``eff_raw`` (current picker selection)."""
+    """True if ``b`` matches the current selection (module stem and path when known)."""
     eff = _normalize_config_module_name(eff_raw)
     if not eff:
         return False
     loaded = _normalize_config_module_name(getattr(b, 'config_name', '') or '')
-    return bool(loaded) and loaded == eff
+    if not loaded or loaded != eff:
+        return False
+    loaded_path = str(st.session_state.get('gui_loaded_cfg_abs_path') or '').strip()
+    sel_path = str(st.session_state.get('gui_load_cfg_file_path') or '').strip()
+    if sel_path:
+        sel_norm = os.path.normpath(sel_path)
+        if not os.path.isfile(sel_norm):
+            return True
+        if loaded_path:
+            return _paths_equal_norm(sel_norm, loaded_path)
+        project_py = _project_config_py_path_for_stem(eff)
+        if project_py and os.path.isfile(project_py):
+            return _paths_equal_norm(sel_norm, project_py)
+        return True
+    if loaded_path:
+        project_py = _project_config_py_path_for_stem(eff)
+        if project_py and os.path.isfile(project_py):
+            return _paths_equal_norm(loaded_path, project_py)
+    return True
 
 
 def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
     """Instantiate ``Bender`` from a config module and refresh session. Returns an error message or ``None``."""
-    _cm = _normalize_config_module_name(raw_mod)
-    if not _cm:
-        return 'Enter a config module name.'
+    try:
+        _cm, _cfg_abs = _resolve_hardware_config_import_target(raw_mod)
+    except FileNotFoundError as e:
+        st.session_state.pop('bender', None)
+        st.session_state.pop('gui_loaded_cfg_abs_path', None)
+        return str(e)
+    except ValueError as e:
+        st.session_state.pop('bender', None)
+        st.session_state.pop('gui_loaded_cfg_abs_path', None)
+        return str(e)
     if _ROOT not in sys.path:
         sys.path.insert(0, _ROOT)
+    _ensure_config_dir_on_syspath_for_file(_cfg_abs)
     try:
         st.session_state['bender'] = Bender(_cm)
         st.session_state['cfg_mod'] = _cm
+        if _cfg_abs:
+            st.session_state['gui_loaded_cfg_abs_path'] = _cfg_abs
+        else:
+            st.session_state.pop('gui_loaded_cfg_abs_path', None)
         b0 = st.session_state['bender']
         outp0 = str(getattr(b0, 'outputfile', '') or '').strip()
         if outp0:
@@ -2148,15 +2235,18 @@ def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
         return None
     except ImportError as e:
         st.session_state.pop('bender', None)
+        st.session_state.pop('gui_loaded_cfg_abs_path', None)
+        _path_hint = f'- Config file: `{_cfg_abs}`\n' if _cfg_abs else f'- App folder: `{_ROOT}`\n'
         return (
             f'Could not import config module `{_cm}`.\n\n'
-            f'- Enter the **module name only** (no `.py`), e.g. `jimenez_bender_config_A`.\n'
-            f'- The file must be importable from the app folder: `{_ROOT}`\n'
+            f'- Use a **module name** (e.g. `jimenez_bender_config_A`) or a full path to a `.py` file.\n'
+            f'{_path_hint}'
             f'- Current working directory: `{os.getcwd()}`\n\n'
             f'Detail: {e}'
         )
     except Exception as e:
         st.session_state.pop('bender', None)
+        st.session_state.pop('gui_loaded_cfg_abs_path', None)
         return f'{type(e).__name__}: {e}'
 
 
@@ -2898,7 +2988,18 @@ def _render_simulation_sidebar() -> None:
 def _seed_cfg_build_from_base(base: str) -> None:
     """Fill ``gui_cfg_bld_*`` widget defaults from an existing config module."""
     try:
-        d = read_base_defaults(base)
+        if _ROOT not in sys.path:
+            sys.path.insert(0, _ROOT)
+        base_stem = _normalize_config_module_name(base)
+        build_path = str(st.session_state.get('gui_cfg_build_base_path') or '').strip()
+        if build_path and os.path.isfile(os.path.normpath(build_path)):
+            try:
+                path_stem, abs_path = _resolve_hardware_config_import_target(build_path)
+                if path_stem == base_stem:
+                    _ensure_config_dir_on_syspath_for_file(abs_path)
+            except (OSError, ValueError):
+                pass
+        d = read_base_defaults(base_stem)
     except Exception:
         return
     st.session_state['gui_cfg_bld_forcetorque_calibration_file'] = str(d['forcetorque_calibration_file'])
@@ -5999,7 +6100,7 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                 label,
                 key='gui_load_cfg_file_path',
                 placeholder='Paste full path to a hardware config .py file',
-                help='Paste a `.py` config path inside this project, then click **Load**.',
+                help='Paste any `.py` hardware config path, then click **Load**.',
             )
             or ''
         ).strip()
@@ -6018,10 +6119,8 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
         if os.path.isfile(norm_cfg_path):
             st.success('✅ File found')
             try:
-                rel_file = os.path.relpath(norm_cfg_path, _ROOT).replace('\\', '/')
-                if not rel_file.startswith('..'):
-                    _eff_mod = _normalize_config_module_name(rel_file)
-            except Exception:
+                _eff_mod, _ = _resolve_hardware_config_import_target(norm_cfg_path)
+            except ValueError:
                 pass
         else:
             st.error('❌ File not found — check path')
@@ -6032,16 +6131,14 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
         elif not os.path.isfile(os.path.normpath(cfg_path)):
             st.error('❌ File not found — check path')
         else:
+            norm_cfg_path = os.path.normpath(cfg_path)
             try:
-                rel_file = os.path.relpath(os.path.normpath(cfg_path), _ROOT).replace('\\', '/')
-            except Exception as e:
-                rel_file = ''
-                st.error(f'Could not resolve path: {type(e).__name__}: {e}')
-            if rel_file.startswith('..'):
-                st.warning(f'Selected file must be inside project folder: `{_ROOT}`')
-            elif rel_file:
-                eff = _normalize_config_module_name(rel_file)
-                err = _apply_loaded_config_module(eff)
+                eff, _ = _resolve_hardware_config_import_target(norm_cfg_path)
+            except ValueError as e:
+                st.error(str(e))
+                eff = ''
+            if eff:
+                err = _apply_loaded_config_module(norm_cfg_path)
                 if err:
                     _st_error_detail(
                         'Hardware config load failed.',
@@ -6050,6 +6147,7 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                     )
                 else:
                     st.session_state['gui_load_cfg_select'] = eff
+                    st.session_state['gui_load_cfg_file_path'] = norm_cfg_path
                     st.success(f'Loaded `{eff}`')
                     st.rerun()
 
@@ -6068,7 +6166,7 @@ def _render_template_procedure_strip() -> None:
         if not eff:
             st.session_state['gui_tpl_config_load_err'] = 'Choose a config module with Browse.'
         else:
-            err = _apply_loaded_config_module(eff)
+            err = _apply_loaded_config_module(_raw_mod_for_hardware_config_load(module_stem=eff))
             if err:
                 st.session_state['gui_tpl_config_load_err'] = err
             else:
@@ -6414,7 +6512,11 @@ def main():
                 return
             b0 = st.session_state.get('bender')
             need_hw_reload = b0 is None or not _selected_config_matches_bender(b0, eff)
-            err = _apply_loaded_config_module(eff) if need_hw_reload else None
+            err = (
+                _apply_loaded_config_module(_raw_mod_for_hardware_config_load(module_stem=eff))
+                if need_hw_reload
+                else None
+            )
             if err:
                 _st_error_detail(
                     'Hardware config load failed.',
@@ -6511,10 +6613,8 @@ def main():
                         if os.path.isfile(_base_cfg_norm):
                             st.success('✅ File found')
                             try:
-                                _rel_file = os.path.relpath(_base_cfg_norm, _ROOT).replace('\\', '/')
-                                if not _rel_file.startswith('..'):
-                                    _resolved_base = _normalize_config_module_name(_rel_file)
-                            except Exception:
+                                _resolved_base, _ = _resolve_hardware_config_import_target(_base_cfg_norm)
+                            except ValueError:
                                 pass
                         else:
                             st.error('❌ File not found — check path')
