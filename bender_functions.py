@@ -3470,6 +3470,8 @@ class Bender:
             'angle': angle,
             'anglevel': anglevel,
             't_iso0': t_iso0,
+            't_pre0': 0.0,
+            't_pre1': t_iso0,
             't_stim0': t_stim0,
             't_stim1': t_stim1,
             'stim_onset_s': float(stim_onset_s),
