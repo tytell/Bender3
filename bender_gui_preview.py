@@ -106,6 +106,7 @@ def _stim_for_ramp_hold(
     *,
     mirror: bool = False,
     hold_windows: Optional[Tuple[Tuple[float, float], Tuple[float, float]]] = None,
+    pre_baseline_s: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     spr_raw = sp.get('stim_pulse_rate', None)
     spr = float(spr_raw) if spr_raw is not None else float(getattr(b, 'stim_pulse_rate', 75.0) or 75.0)
@@ -132,7 +133,7 @@ def _stim_for_ramp_hold(
             return s1, s2
         return np.zeros_like(t), np.zeros_like(t)
     onset, dur = b._resolve_stim_onset_duration_s(sp, segment_duration_s=float(hold_s))
-    t_active = float(ramp_s)
+    t_active = float(ramp_s) + max(0.0, float(pre_baseline_s))
     t_stim0 = t_active + onset
     t_stim1 = t_stim0 + dur
     t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
@@ -266,6 +267,7 @@ def _isovelocity_stim_params_from_b(b: Any) -> dict:
     sp = {
         'iso_duration_s': float(getattr(b, 'isovelocity_iso_duration_s', 0.2) or 0.2),
         'pre_hold_s': float(getattr(b, 'isovelocity_pre_hold_s', 0.3) or 0.3),
+        'post_baseline_s': float(getattr(b, 'post_baseline_s', 1.0) or 0.0),
         'stim_onset_s': None,
         'settle_before_stim_s': 0.02,
         'pre_iso_stim_duration_s': 0.0,
@@ -300,6 +302,7 @@ def _preview_concat_isovelocity_timeline(
         daq_hz = 1000.0
     pre_hold_s = float(sp['pre_hold_s'])
     iso_duration_s = float(sp['iso_duration_s'])
+    post_b = max(0.0, float(sp.get('post_baseline_s', 1.0) or 0.0))
     is_stim = bool(sp.get('is_stim', False))
     stim_voltage = float(sp.get('stim_voltage', 5.0))
     rec = b._normalize_recruitment(
@@ -359,6 +362,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='left',
+                post_baseline_s=0.0,
                 **iso_timing_kw,
                 **iso_extra,
             )
@@ -375,6 +379,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='right',
+                post_baseline_s=post_b,
                 **iso_timing_kw,
                 **iso_extra,
             )
@@ -404,6 +409,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side=None,
+                post_baseline_s=post_b,
                 **iso_timing_kw,
                 **iso_extra,
             )
@@ -483,6 +489,8 @@ def _isometric_stim_params_from_b(b: Any) -> dict:
     sp = {
         'ramp_duration_s': 2.0,
         'hold_duration_s': 5.0,
+        'pre_baseline_s': float(getattr(b, 'pre_baseline_s', 1.0) or 0.0),
+        'post_baseline_s': float(getattr(b, 'post_baseline_s', 1.0) or 0.0),
         'stim_onset_s': None,
         'settle_before_stim_s': 0.5,
         'stim_duration_s': None,
@@ -511,6 +519,9 @@ def _preview_concat_isometric_timeline(
         daq_hz = 1000.0
     ramp = float(sp.get('ramp_duration_s', 2.0))
     hold = float(sp.get('hold_duration_s', 5.0))
+    pre_b = max(0.0, float(sp.get('pre_baseline_s', 1.0) or 0.0))
+    post_b = max(0.0, float(sp.get('post_baseline_s', 1.0) or 0.0))
+    total_hold = pre_b + hold + post_b
     gap_s = float(sp.get('inter_step_interval_s', 0.0) or 0.0)
     rec = b._normalize_recruitment(
         sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
@@ -582,8 +593,8 @@ def _preview_concat_isometric_timeline(
             tloc, aloc, _wloc, h1, h2 = b._timeline_mirror_two_holds(prev, target, ramp, hold, daq_hz, **kw)
             s1loc, s2loc = _stim_for_ramp_hold(b, tloc, ramp, hold, sp, rec, mirror=True, hold_windows=(h1, h2))
         else:
-            tloc, aloc, _wloc = b._timeline_ramp_hold(prev, target, ramp, hold, daq_hz)
-            s1loc, s2loc = _stim_for_ramp_hold(b, tloc, ramp, hold, sp, rec)
+            tloc, aloc, _wloc = b._timeline_ramp_hold(prev, target, ramp, total_hold, daq_hz)
+            s1loc, s2loc = _stim_for_ramp_hold(b, tloc, ramp, hold, sp, rec, pre_baseline_s=pre_b)
         t_chunks.append(tloc + toff)
         a_chunks.append(aloc)
         s1_chunks.append(s1loc)

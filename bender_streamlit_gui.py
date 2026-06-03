@@ -1831,6 +1831,7 @@ def _seed_isovelocity_stim_widget_state(b: Bender) -> None:
         'isovelocity_stim_pulse_rate': spr_default,
         'isovelocity_stim_onset_s': onset,
         'isovelocity_stim_duration_s': duration,
+        'isovelocity_post_baseline_s': float(sp.get('post_baseline_s', 1.0) or 0.0),
     }
     for name, val in defaults.items():
         sk = _widget_key(name)
@@ -1890,6 +1891,20 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
             help='How long stimulation runs from onset.',
         )
     )
+    post_baseline_sk = _widget_key('isovelocity_post_baseline_s')
+    post_baseline = float(
+        st.number_input(
+            'Post-stim baseline (s)',
+            key=post_baseline_sk,
+            format='%.6g',
+            min_value=0.0,
+            help=(
+                'After the constant-velocity segment, ramp the motor back to neutral (0 deg) over this '
+                'many seconds with stim off, recording continuously. Captures a post-stimulus baseline / '
+                'relaxation. Set 0 to disable.'
+            ),
+        )
+    )
 
     # Validation guards apply only when stim will fire; disabled stim never blocks Apply so
     # values are preserved for pre-conditioning and tuning.
@@ -1906,11 +1921,15 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
         if not np.isfinite(onset):
             _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
             return None
+    if not (np.isfinite(post_baseline) and post_baseline >= 0):
+        _st_error_actions('Post-stim baseline invalid.', ['Enter a value >= 0 s'])
+        return None
 
     params: dict = {
         'is_stim': enable,
         'stim_onset_s': onset if np.isfinite(onset) else 0.0,
         'stim_duration_s': duration,
+        'post_baseline_s': post_baseline,
         'stim_pulse_rate': pulse_rate,
     }
     return params
@@ -1930,6 +1949,8 @@ def _seed_isometric_stim_widget_state(b: Bender) -> None:
         'isometric_stim_onset_s': onset,
         'isometric_stim_duration_s': duration,
         'isometric_hold_duration_s': float(sp.get('hold_duration_s', 5.0)),
+        'isometric_pre_baseline_s': float(sp.get('pre_baseline_s', 1.0) or 0.0),
+        'isometric_post_baseline_s': float(sp.get('post_baseline_s', 1.0) or 0.0),
     }
     for name, val in defaults.items():
         sk = _widget_key(name)
@@ -1966,6 +1987,34 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
             help=(
                 'How long (seconds) the motor holds at each target angle (the active segment). '
                 'Stim onset and duration are measured relative to the start of this hold.'
+            ),
+        )
+    )
+
+    pre_baseline_sk = _widget_key('isometric_pre_baseline_s')
+    pre_baseline = float(
+        st.number_input(
+            'Pre-stim baseline (s)',
+            key=pre_baseline_sk,
+            format='%.6g',
+            min_value=0.0,
+            help=(
+                'Quiet hold at the target angle BEFORE the active segment, with stim off. Captures a '
+                'pre-stimulus baseline. Set 0 to disable. Does not shift stim onset, which is measured '
+                'from the active-segment start.'
+            ),
+        )
+    )
+    post_baseline_sk = _widget_key('isometric_post_baseline_s')
+    post_baseline = float(
+        st.number_input(
+            'Post-stim baseline (s)',
+            key=post_baseline_sk,
+            format='%.6g',
+            min_value=0.0,
+            help=(
+                'Quiet hold at the target angle AFTER the active segment, with stim off. Captures a '
+                'post-stimulus baseline / relaxation. Set 0 to disable.'
             ),
         )
     )
@@ -2019,12 +2068,20 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     if not (np.isfinite(hold_duration) and hold_duration > 0):
         _st_error_actions('Hold duration invalid.', ['Enter a value > 0 s'])
         return None
+    if not (np.isfinite(pre_baseline) and pre_baseline >= 0):
+        _st_error_actions('Pre-stim baseline invalid.', ['Enter a value >= 0 s'])
+        return None
+    if not (np.isfinite(post_baseline) and post_baseline >= 0):
+        _st_error_actions('Post-stim baseline invalid.', ['Enter a value >= 0 s'])
+        return None
 
     params: dict = {
         'is_stim': enable,
         'stim_onset_s': onset if np.isfinite(onset) else 0.0,
         'stim_duration_s': duration,
         'hold_duration_s': hold_duration,
+        'pre_baseline_s': pre_baseline,
+        'post_baseline_s': post_baseline,
         'stim_pulse_rate': pulse_rate,
     }
     return params

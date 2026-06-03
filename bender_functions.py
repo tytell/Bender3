@@ -2914,6 +2914,8 @@ class Bender:
         *,
         ramp_duration_s=2.0,
         hold_duration_s=5.0,
+        pre_baseline_s=1.0,
+        post_baseline_s=1.0,
         stim_onset_s=None,
         settle_before_stim_s=0.5,
         stim_duration_s=None,
@@ -3015,9 +3017,21 @@ class Bender:
                     s2 = np.zeros_like(t)
                 t_stim0 = float(h1[0] + float(settle_before_stim_s))
                 t_stim1 = float(h2[1])
+                # Mirror two-hold mode does not add silent baselines; report the active stim span
+                # and zero-length pre/post windows so the metadata keys are always present.
+                t_active_start = t_stim0
+                t_active_end = t_stim1
+                t_pre_baseline_start = t_pre_baseline_end = float(ramp_duration_s)
+                t_post_baseline_start = t_post_baseline_end = float(t[-1])
             else:
+                pre_b = max(0.0, float(pre_baseline_s))
+                post_b = max(0.0, float(post_baseline_s))
+                # Bracket the active hold with silent baseline holds at the commanded angle: the
+                # motor holds for ``pre_b`` (stim off), then the active window (``hold_duration_s``),
+                # then ``post_b`` (stim off). All three are a single continuous hold at ``target``.
+                total_hold = pre_b + float(hold_duration_s) + post_b
                 t, angle, anglevel = self._timeline_ramp_hold(
-                    prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz
+                    prev, target, float(ramp_duration_s), total_hold, daq_hz
                 )
                 onset, dur = self._resolve_stim_onset_duration_s(
                     {
@@ -3027,11 +3041,16 @@ class Bender:
                     },
                     segment_duration_s=float(hold_duration_s),
                 )
-                t_active = float(ramp_duration_s)
-                t_stim0 = t_active + onset
+                t_active_start = float(ramp_duration_s) + pre_b
+                t_active_end = t_active_start + float(hold_duration_s)
+                t_stim0 = t_active_start + onset
                 t_stim1 = t_stim0 + dur
                 t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
                 active = (t >= t_stim0) & (t < t_stim1)
+                t_pre_baseline_start = float(ramp_duration_s)
+                t_pre_baseline_end = t_active_start
+                t_post_baseline_start = t_active_end
+                t_post_baseline_end = t_active_end + post_b
                 if is_stim and np.any(active):
                     if use_block_stim:
                         s1, s2 = self._route_stim_sides_volts(
@@ -3074,6 +3093,12 @@ class Bender:
                 'angle_measured': np.array(self.angle_measured, copy=True),
                 'stim_t0': t_stim0,
                 'stim_t1': t_stim1,
+                't_pre_baseline_start': float(t_pre_baseline_start),
+                't_pre_baseline_end': float(t_pre_baseline_end),
+                't_active_start': float(t_active_start),
+                't_active_end': float(t_active_end),
+                't_post_baseline_start': float(t_post_baseline_start),
+                't_post_baseline_end': float(t_post_baseline_end),
                 'forcetorque': None,
                 'mean_xforce_stim': None,
             }
@@ -3215,6 +3240,8 @@ class Bender:
         sp = {
             'ramp_duration_s': 2.0,
             'hold_duration_s': 5.0,
+            'pre_baseline_s': 1.0,
+            'post_baseline_s': 1.0,
             'stim_onset_s': None,
             'settle_before_stim_s': 0.5,
             'stim_duration_s': None,
@@ -3227,6 +3254,9 @@ class Bender:
         if stim_params:
             sp.update(stim_params)
         sp.update(kwargs)
+        for _bk in ('pre_baseline_s', 'post_baseline_s'):
+            if sp.get(_bk, None) is None and getattr(self, _bk, None) is not None:
+                sp[_bk] = getattr(self, _bk)
         if sp.get('inter_step_interval_s', None) is None:
             sp['inter_step_interval_s'] = float(getattr(self, 'isometric_inter_step_interval_s', 0.0) or 0.0)
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
@@ -3295,6 +3325,8 @@ class Bender:
                     targets_block,
                     ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
                     hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
+                    pre_baseline_s=float(sp.get('pre_baseline_s', 1.0) or 0.0),
+                    post_baseline_s=float(sp.get('post_baseline_s', 1.0) or 0.0),
                     stim_onset_s=sp.get('stim_onset_s'),
                     settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
                     stim_duration_s=sp.get('stim_duration_s'),
@@ -3385,6 +3417,8 @@ class Bender:
             targets_deg,
             ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
             hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
+            pre_baseline_s=float(sp.get('pre_baseline_s', 1.0) or 0.0),
+            post_baseline_s=float(sp.get('post_baseline_s', 1.0) or 0.0),
             stim_onset_s=sp.get('stim_onset_s'),
             settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
             stim_duration_s=sp.get('stim_duration_s'),
@@ -3507,6 +3541,7 @@ class Bender:
         right_stim_voltage=None,
         settle_before_stim_s=None,
         pre_iso_stim_duration_s=None,
+        post_baseline_s=1.0,
     ):
         """
         Build one isovelocity timeline + stim commands.
@@ -3529,10 +3564,29 @@ class Bender:
         t, angle, anglevel, t_iso0 = self._timeline_prehold_isovelocity(
             float(theta_start_deg), float(vel_deg_per_s), float(pre_hold_s), float(iso_duration_s), daq_hz
         )
+        t_seg_end = t_iso0 + float(iso_duration_s)
+        # Post-stimulus baseline: ramp the motor back to neutral (0 deg) with stim off; recording
+        # continues through the return ramp so the trial is one flat, continuous time series.
+        post_b = max(0.0, float(post_baseline_s))
+        if post_b > 0:
+            final_ang = float(angle[-1])
+            n_post = max(2, int(round(post_b * float(daq_hz))) + 1)
+            t_post = float(t[-1]) + np.linspace(0.0, post_b, n_post)[1:]
+            if t_post.size < 1:
+                t_post = np.array([float(t[-1]) + post_b])
+            frac = (t_post - float(t[-1])) / post_b
+            ang_post = final_ang + (0.0 - final_ang) * frac
+            w_post = np.full(t_post.size, (0.0 - final_ang) / post_b)
+            t = np.concatenate([t, t_post])
+            angle = np.concatenate([angle, ang_post])
+            anglevel = np.concatenate([anglevel, w_post])
+        t_post0 = t_seg_end
+        t_post1 = t_seg_end + post_b
         t_stim0 = t_iso0 + float(stim_onset_s)
         t_stim1 = t_stim0 + float(stim_duration_s)
-        t_seg_end = t_iso0 + float(iso_duration_s)
-        t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
+        # Stim is confined to the active (constant-velocity) segment; it never bleeds into the
+        # post-baseline return ramp.
+        t_stim1 = min(t_stim1, t_seg_end + 1e-9)
         active = (t >= t_stim0) & (t < t_stim1) if is_stim else np.zeros_like(t, dtype=bool)
         if is_stim and np.any(active):
             if stim_sides is not None:
@@ -3564,6 +3618,8 @@ class Bender:
             't_pre1': t_iso0,
             't_stim0': t_stim0,
             't_stim1': t_stim1,
+            't_post0': t_post0,
+            't_post1': t_post1,
             'stim_onset_s': float(stim_onset_s),
             'stim_duration_s': float(stim_duration_s),
             'iso_t1': t_seg_end,
@@ -3579,6 +3635,7 @@ class Bender:
         *,
         pre_hold_s=0.3,
         iso_duration_s=0.2,
+        post_baseline_s=1.0,
         stim_onset_s=None,
         settle_before_stim_s=0.02,
         pre_iso_stim_duration_s=0.0,
@@ -3641,6 +3698,7 @@ class Bender:
         self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
         self.set_stim_channels(*self.stim_channels)
         th0_fixed = float(theta_start_deg)
+        post_b = max(0.0, float(post_baseline_s))
         iso_kw = dict(
             pre_hold_s=pre_hold_s,
             iso_duration_s=iso_duration_s,
@@ -3671,12 +3729,14 @@ class Bender:
                 d1 = self._isovelocity_one_block(
                     th0, v1,
                     mirror_stim_side='left',
+                    post_baseline_s=0.0,
                     **iso_kw,
                 )
                 th_mid = float(d1['angle'][-1])
                 d2 = self._isovelocity_one_block(
                     th_mid, v2,
                     mirror_stim_side='right',
+                    post_baseline_s=post_b,
                     **iso_kw,
                 )
                 off = float(d1['t'][-1])
@@ -3693,6 +3753,8 @@ class Bender:
                 active = np.concatenate([d1['active'], d2['active'][1:]])
                 v_report = float(vels[i])
                 iso_t1_end = d2['iso_t1'] + off
+                t_post0 = d2['t_post0'] + off
+                t_post1 = d2['t_post1'] + off
             else:
                 if block_dir_sign is not None:
                     v_sign = v_mag * block_dir_sign
@@ -3718,6 +3780,8 @@ class Bender:
                 active = d0['active']
                 v_report = float(v_sign)
                 iso_t1_end = d0['iso_t1']
+                t_post0 = d0['t_post0']
+                t_post1 = d0['t_post1']
 
             self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
             self.record_stim_signal(s1, s2)
@@ -3753,6 +3817,12 @@ class Bender:
                 'stim_t1': t_stim1,
                 'iso_t0': t_iso0,
                 'iso_t1': float(iso_t1_end),
+                't_pre_baseline_start': float(t_pre0),
+                't_pre_baseline_end': float(t_pre1),
+                't_active_start': float(t_iso0),
+                't_active_end': float(iso_t1_end),
+                't_post_baseline_start': float(t_post0),
+                't_post_baseline_end': float(t_post1),
                 'forcetorque': None,
                 'mean_xforce_stim': None,
             }
@@ -3863,6 +3933,7 @@ class Bender:
         sp = {
             'iso_duration_s': iso_duration_s,
             'pre_hold_s': pre_hold_s,
+            'post_baseline_s': 1.0,
             'stim_onset_s': None,
             'settle_before_stim_s': 0.02,
             'pre_iso_stim_duration_s': 0.0,
@@ -3875,6 +3946,8 @@ class Bender:
         if stim_params:
             sp.update(stim_params)
         sp.update(kwargs)
+        if sp.get('post_baseline_s', None) is None and getattr(self, 'post_baseline_s', None) is not None:
+            sp['post_baseline_s'] = getattr(self, 'post_baseline_s')
 
         self._validate_stim_timing_for_steps(
             sp,
@@ -3957,6 +4030,7 @@ class Bender:
                     vels_mag,
                     pre_hold_s=float(sp['pre_hold_s']),
                     iso_duration_s=float(sp['iso_duration_s']),
+                    post_baseline_s=float(sp.get('post_baseline_s', 1.0) or 0.0),
                     stim_onset_s=sp.get('stim_onset_s'),
                     settle_before_stim_s=float(sp['settle_before_stim_s']),
                     pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
@@ -4016,6 +4090,7 @@ class Bender:
             vels,
             pre_hold_s=float(sp['pre_hold_s']),
             iso_duration_s=float(sp['iso_duration_s']),
+            post_baseline_s=float(sp.get('post_baseline_s', 1.0) or 0.0),
             stim_onset_s=sp.get('stim_onset_s'),
             settle_before_stim_s=float(sp['settle_before_stim_s']),
             pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),

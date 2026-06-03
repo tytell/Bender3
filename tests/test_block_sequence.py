@@ -311,3 +311,54 @@ def test_validate_stim_timing_bounds_accepts_valid_window(b):
 def test_lateral_index_for_block_direction(b):
     assert b._lateral_index_for_block_direction('left') == b.specimen_side_index_left
     assert b._lateral_index_for_block_direction('right') == b.specimen_side_index_right
+
+
+# --- Issue 12: post-stim baseline for isovelocity -------------------------------------------
+
+def _iso_block_kw(**over):
+    kw = dict(
+        pre_hold_s=0.3,
+        iso_duration_s=0.2,
+        stim_onset_s=0.0,
+        stim_duration_s=0.1,
+        is_stim=True,
+        spr=75.0,
+        stim_voltage=5.0,
+        daq_hz=2000.0,
+        recruitment='bilateral_simultaneous',
+        sequential_left_frac=0.5,
+        mirror_stim_side=None,
+    )
+    kw.update(over)
+    return kw
+
+
+def test_isovelocity_one_block_post_baseline_extends_and_returns_to_neutral(b):
+    post_b = 0.5
+    d = b._isovelocity_one_block(0.0, 30.0, post_baseline_s=post_b, **_iso_block_kw())
+    seg_end = d['t_iso0'] + 0.2
+    # Post-baseline window is reported and lengthens the timeline by ~post_b.
+    assert d['t_post0'] == pytest.approx(seg_end, abs=1e-6)
+    assert d['t_post1'] == pytest.approx(seg_end + post_b, abs=1e-6)
+    assert d['t'][-1] == pytest.approx(seg_end + post_b, abs=1e-2)
+    # Motor returns to neutral (0 deg) at the end of the post-baseline ramp.
+    assert d['angle'][-1] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_isovelocity_one_block_zero_post_baseline_no_extension(b):
+    d = b._isovelocity_one_block(0.0, 30.0, post_baseline_s=0.0, **_iso_block_kw())
+    seg_end = d['t_iso0'] + 0.2
+    assert d['t_post0'] == pytest.approx(seg_end, abs=1e-6)
+    assert d['t_post1'] == pytest.approx(seg_end, abs=1e-6)
+    assert d['t'][-1] == pytest.approx(seg_end, abs=1e-2)
+
+
+def test_isovelocity_one_block_stim_never_bleeds_into_post_baseline(b):
+    # Stim duration longer than the active segment must be clamped to the segment end and never
+    # fire during the post-baseline return ramp.
+    d = b._isovelocity_one_block(
+        0.0, 30.0, post_baseline_s=0.5, **_iso_block_kw(stim_onset_s=0.0, stim_duration_s=5.0)
+    )
+    seg_end = d['t_iso0'] + 0.2
+    stim_on = (np.abs(d['s1']) + np.abs(d['s2'])) > 0
+    assert np.all(d['t'][stim_on] < seg_end + 1e-6)

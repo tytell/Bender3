@@ -134,6 +134,23 @@ def test_isovelocity_preview_includes_stim():
     assert out.get('stim_total') is not None or out.get('stim_plot') is not None
 
 
+def test_isometric_preview_baselines_extend_timeline():
+    # Issue 12: pre/post baselines should lengthen each isometric step's ramp+hold segment.
+    b = _PreviewBender()
+    targets = np.array([5.0, 10.0])
+    sp_none = pv._isometric_stim_params_from_b(b)
+    sp_none.update({'ramp_duration_s': 2.0, 'hold_duration_s': 5.0,
+                    'pre_baseline_s': 0.0, 'post_baseline_s': 0.0, 'inter_step_interval_s': 0.0})
+    t0, *_ = pv._preview_concat_isometric_timeline(b, targets, sp_none, mode='strain')
+
+    sp_base = dict(sp_none)
+    sp_base.update({'pre_baseline_s': 1.5, 'post_baseline_s': 2.0})
+    t1, *_ = pv._preview_concat_isometric_timeline(b, targets, sp_base, mode='strain')
+
+    # Two steps each gain (1.5 + 2.0) s of silent baseline hold.
+    assert float(t1[-1]) == pytest.approx(float(t0[-1]) + 2 * (1.5 + 2.0), rel=0.05)
+
+
 def test_isometric_preview_errors_without_clamp():
     b = _PreviewBender()
     b.dclamp = None
