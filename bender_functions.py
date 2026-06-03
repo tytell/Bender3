@@ -745,6 +745,7 @@ class Bender:
         self.master_logger.clear()
         self.trial_records = []
         self.acquisition_start = None
+        self.stim_clamp_notices = []
 
         # Now, if the DAQ fails, you won't accidentally save old data!
         # Set input and output names/channels
@@ -2459,6 +2460,46 @@ class Bender:
                 f"({seg} s); reduce onset and/or duration."
             )
 
+    def _clamp_stim_window_to_segment(
+        self,
+        onset,
+        dur,
+        *,
+        pre_hold_at_start_s,
+        segment_duration_s,
+    ):
+        """Clamp ``(onset, dur)`` so the stim window can never overrun the active segment.
+
+        ``onset`` and ``dur`` are relative to active-segment start. The window is clamped into
+        ``[-pre_hold_at_start_s, segment_duration_s]`` so stim never starts before the pre-hold
+        window nor ends past the active-segment end, regardless of user input. Returns
+        ``(onset, dur, notices)`` where ``notices`` is a list of human-readable strings describing
+        any clamping that occurred (empty when the window already fit).
+        """
+        onset = float(onset)
+        dur = float(dur)
+        pre_hold = float(pre_hold_at_start_s)
+        seg = float(segment_duration_s)
+        notices = []
+        if onset < -pre_hold:
+            notices.append(
+                f"Stim onset clamped from {onset:.4g} s to {-pre_hold:.4g} s "
+                f"(cannot begin before the pre-hold window)."
+            )
+            onset = -pre_hold
+        if onset > seg:
+            notices.append(
+                f"Stim onset clamped from {onset:.4g} s to {seg:.4g} s (active-segment end)."
+            )
+            onset = seg
+        max_dur = seg - onset
+        if dur > max_dur + 1e-9:
+            notices.append(
+                f"Stim duration clamped to fit active segment ({seg:.4g} s)."
+            )
+            dur = max(0.0, max_dur)
+        return onset, dur, notices
+
     def _validate_stim_timing_for_steps(
         self,
         sp,
@@ -2468,20 +2509,38 @@ class Bender:
         pre_hold_at_start_s,
         segment_duration_s,
     ):
-        """Run anti-bleed stim timing checks for each step when stimulation is enabled."""
+        """Auto-clamp stim timing into the pre-hold + active-segment bounds when stim is enabled.
+
+        Stim windows that would overrun the active segment (or begin before the pre-hold window)
+        are silently clamped so the run is never blocked. Truly invalid inputs (non-finite onset,
+        non-positive / non-finite duration) are still rejected loudly. When clamping occurs the
+        clamped ``stim_onset_s`` / ``stim_duration_s`` are written back into ``sp`` so the generated
+        stim arrays honor the clamp, and the human-readable notices are returned (and appended to
+        ``self.stim_clamp_notices`` for post-run reporting).
+        """
         if not bool(sp.get('is_stim', False)):
-            return
+            return []
         onset, dur = self._resolve_stim_onset_duration_s(sp, segment_duration_s=segment_duration_s)
-        n = max(1, int(num_steps))
-        for step_i in range(n):
-            self._validate_stim_timing_bounds(
-                step_index=step_i + 1,
-                stim_onset_s=onset,
-                stim_duration_s=dur,
-                pre_hold_at_start_s=pre_hold_at_start_s,
-                segment_duration_s=segment_duration_s,
-                protocol_label=str(test_type),
-            )
+        if not np.isfinite(onset):
+            raise ValueError(f"{test_type}: stim_onset_s must be finite.")
+        if not np.isfinite(dur) or dur <= 0:
+            raise ValueError(f"{test_type}: stim_duration_s must be finite and > 0.")
+        onset_c, dur_c, notices = self._clamp_stim_window_to_segment(
+            onset,
+            dur,
+            pre_hold_at_start_s=pre_hold_at_start_s,
+            segment_duration_s=segment_duration_s,
+        )
+        if notices:
+            sp['stim_onset_s'] = onset_c
+            sp['stim_duration_s'] = dur_c
+            existing = list(getattr(self, 'stim_clamp_notices', []) or [])
+            for msg in notices:
+                full = f"{test_type}: {msg}"
+                if full not in existing:
+                    existing.append(full)
+            self.stim_clamp_notices = existing
+        return [f"{test_type}: {m}" for m in notices]
 
     def lateral_index_from_side_name(self, side):
         """Map ``'left'`` / ``'right'`` to specimen lateral index (from config)."""

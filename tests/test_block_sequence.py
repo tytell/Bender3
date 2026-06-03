@@ -171,50 +171,58 @@ def test_resolve_stim_onset_duration_migrates_pre_iso(b):
 
 
 def test_isometric_negative_onset_budget_is_ramp_duration(b):
-    """Isometric negative onset may reach back into the ramp, but not before it (budget = ramp)."""
+    """Isometric negative onset within the ramp passes unchanged; beyond it is auto-clamped."""
     ramp_s = 2.0
     hold_s = 5.0
-    # Onset -1.5 s starts 1.5 s into a 2 s ramp: within budget, must pass.
-    b._validate_stim_timing_for_steps(
-        {'is_stim': True, 'stim_onset_s': -1.5, 'stim_duration_s': 1.0},
+    # Onset -1.5 s starts 1.5 s into a 2 s ramp: within budget, no clamp.
+    sp_ok = {'is_stim': True, 'stim_onset_s': -1.5, 'stim_duration_s': 1.0}
+    notices = b._validate_stim_timing_for_steps(
+        sp_ok,
         test_type='isometric',
         num_steps=3,
         pre_hold_at_start_s=ramp_s,
         segment_duration_s=hold_s,
     )
-    # Onset -2.5 s would start before the ramp begins (budget exceeded): must raise.
-    with pytest.raises(ValueError, match='before the allowed pre-hold'):
-        b._validate_stim_timing_for_steps(
-            {'is_stim': True, 'stim_onset_s': -2.5, 'stim_duration_s': 1.0},
-            test_type='isometric',
-            num_steps=3,
-            pre_hold_at_start_s=ramp_s,
-            segment_duration_s=hold_s,
-        )
+    assert notices == []
+    assert sp_ok['stim_onset_s'] == pytest.approx(-1.5)
+    # Onset -2.5 s would start before the ramp begins (budget exceeded): auto-clamp to -ramp.
+    sp_clamp = {'is_stim': True, 'stim_onset_s': -2.5, 'stim_duration_s': 1.0}
+    notices = b._validate_stim_timing_for_steps(
+        sp_clamp,
+        test_type='isometric',
+        num_steps=3,
+        pre_hold_at_start_s=ramp_s,
+        segment_duration_s=hold_s,
+    )
+    assert notices  # clamping reported
+    assert sp_clamp['stim_onset_s'] == pytest.approx(-ramp_s)
 
 
 def test_isometric_segment_duration_is_hold_duration_s(b):
-    """The isometric active segment used for anti-bleed is hold_duration_s from the stim params."""
+    """The isometric active segment used for clamping is hold_duration_s from the stim params."""
     ramp_s = 2.0
-    # Stim window onset 0 + duration 4 s fits inside a 5 s hold: must pass.
+    # Stim window onset 0 + duration 4 s fits inside a 5 s hold: no clamp.
     sp_ok = {'is_stim': True, 'stim_onset_s': 0.0, 'stim_duration_s': 4.0, 'hold_duration_s': 5.0}
-    b._validate_stim_timing_for_steps(
+    notices = b._validate_stim_timing_for_steps(
         sp_ok,
         test_type='isometric',
         num_steps=2,
         pre_hold_at_start_s=ramp_s,
         segment_duration_s=float(sp_ok.get('hold_duration_s', 5.0)),
     )
-    # Same window with a shorter 3 s hold now bleeds past the segment end: must raise.
+    assert notices == []
+    assert sp_ok['stim_duration_s'] == pytest.approx(4.0)
+    # Same window with a shorter 3 s hold now bleeds past the segment end: auto-clamp duration.
     sp_bad = {'is_stim': True, 'stim_onset_s': 0.0, 'stim_duration_s': 4.0, 'hold_duration_s': 3.0}
-    with pytest.raises(ValueError, match='past the active segment'):
-        b._validate_stim_timing_for_steps(
-            sp_bad,
-            test_type='isometric',
-            num_steps=2,
-            pre_hold_at_start_s=ramp_s,
-            segment_duration_s=float(sp_bad.get('hold_duration_s', 5.0)),
-        )
+    notices = b._validate_stim_timing_for_steps(
+        sp_bad,
+        test_type='isometric',
+        num_steps=2,
+        pre_hold_at_start_s=ramp_s,
+        segment_duration_s=float(sp_bad.get('hold_duration_s', 3.0)),
+    )
+    assert any('active segment' in m for m in notices)
+    assert sp_bad['stim_duration_s'] == pytest.approx(3.0)
 
 
 def test_validate_stim_timing_bounds_rejects_pre_hold_bleed(b):

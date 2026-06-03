@@ -2029,44 +2029,52 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     return params
 
 
-def _validate_procedure_stim_timing(b: Bender, updates: dict, tt: str) -> Optional[str]:
-    """Return an error message when stim timing would bleed outside segment bounds."""
+def _validate_procedure_stim_timing(b: Bender, updates: dict, tt: str) -> Tuple[Optional[str], Optional[str]]:
+    """Check stim timing for ``tt`` and auto-clamp it into the active-segment bounds.
+
+    Returns ``(error, clamp_notice)``:
+
+    * ``error`` — a hard, blocking message for genuinely invalid input (non-finite onset, or a
+      non-positive / non-finite duration); ``None`` otherwise.
+    * ``clamp_notice`` — informational message when the stim onset/duration were auto-clamped so
+      the window fits the active segment. The run is **not** blocked; the clamped values are written
+      back into ``updates`` so the applied/run parameters honor the clamp. ``None`` when no clamp
+      was needed.
+    """
+    if tt == 'isometric':
+        sp = updates.get('isometric_stim_params')
+        if not isinstance(sp, dict) or not sp.get('is_stim'):
+            return None, None
+        pre_hold = float(sp.get('ramp_duration_s', 2.0))
+        seg = float(sp.get('hold_duration_s', 5.0))
+    elif tt == 'isovelocity':
+        sp = updates.get('isovelocity_stim_params')
+        if not isinstance(sp, dict) or not sp.get('is_stim'):
+            return None, None
+        pre_hold = float(
+            updates.get('isovelocity_pre_hold_s', getattr(b, 'isovelocity_pre_hold_s', 0.3)) or 0.3
+        )
+        seg = float(
+            updates.get('isovelocity_iso_duration_s', getattr(b, 'isovelocity_iso_duration_s', 0.2)) or 0.2
+        )
+    else:
+        return None, None
     try:
-        if tt == 'isometric':
-            sp = updates.get('isometric_stim_params')
-            if not isinstance(sp, dict) or not sp.get('is_stim'):
-                return None
-            num_steps = updates.get('isometric_num_steps', getattr(b, 'isometric_num_steps', 1))
-            hold_s = float(sp.get('hold_duration_s', 5.0))
-            ramp_s = float(sp.get('ramp_duration_s', 2.0))
-            b._validate_stim_timing_for_steps(
-                sp,
-                test_type='isometric',
-                num_steps=int(num_steps),
-                pre_hold_at_start_s=ramp_s,
-                segment_duration_s=hold_s,
-            )
-        elif tt == 'isovelocity':
-            sp = updates.get('isovelocity_stim_params')
-            if not isinstance(sp, dict) or not sp.get('is_stim'):
-                return None
-            num_steps = updates.get('isovelocity_num_steps', getattr(b, 'isovelocity_num_steps', 1))
-            pre_hold_s = float(
-                updates.get('isovelocity_pre_hold_s', getattr(b, 'isovelocity_pre_hold_s', 0.3)) or 0.3
-            )
-            iso_s = float(
-                updates.get('isovelocity_iso_duration_s', getattr(b, 'isovelocity_iso_duration_s', 0.2)) or 0.2
-            )
-            b._validate_stim_timing_for_steps(
-                sp,
-                test_type='isovelocity',
-                num_steps=int(num_steps),
-                pre_hold_at_start_s=pre_hold_s,
-                segment_duration_s=iso_s,
-            )
-    except ValueError as exc:
-        return str(exc)
-    return None
+        onset, dur = b._resolve_stim_onset_duration_s(sp, segment_duration_s=seg)
+    except (ValueError, TypeError) as exc:
+        return str(exc), None
+    if not np.isfinite(onset):
+        return f'{tt}: stim onset must be finite.', None
+    if not np.isfinite(dur) or dur <= 0:
+        return f'{tt}: stim duration must be finite and > 0.', None
+    onset_c, dur_c, notices = b._clamp_stim_window_to_segment(
+        onset, dur, pre_hold_at_start_s=pre_hold, segment_duration_s=seg
+    )
+    if notices:
+        sp['stim_onset_s'] = onset_c
+        sp['stim_duration_s'] = dur_c
+        return None, ' '.join(notices)
+    return None, None
 
 
 def _get_session_value(b: Bender, name: str, default=None):
@@ -7670,9 +7678,11 @@ def main():
                 # Persistent anti-bleed warning: re-evaluated every render so it stays visible
                 # while the stim-timing condition holds, instead of flashing for one rerun
                 # after Apply. Returns None when stim is disabled or timing is valid.
-                _stim_timing_warn = _validate_procedure_stim_timing(b, updates, tt)
-                if _stim_timing_warn:
-                    st.warning(_stim_timing_warn)
+                _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
+                if _stim_err:
+                    st.warning(_stim_err)
+                elif _stim_clamp:
+                    st.info(_stim_clamp)
 
                 st.divider()
                 if 'gui_protocol_show_save_template' not in st.session_state:
@@ -7733,10 +7743,12 @@ def main():
                 if _form_invalid:
                     pass  # widget validation already surfaced st.error
                 else:
-                    _stim_err = _validate_procedure_stim_timing(b, updates, tt)
+                    _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
                     if _stim_err:
                         st.error(_stim_err)
                     else:
+                        if _stim_clamp:
+                            st.info(_stim_clamp)
                         _apply_procedure_form_to_bender(b, updates, tt)
                         st.toast('Settings applied.')
             if sub_proc_save:
@@ -7782,10 +7794,12 @@ def main():
                 if _form_invalid:
                     pass
                 else:
-                    _stim_err = _validate_procedure_stim_timing(b, updates, tt)
+                    _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
                     if _stim_err:
                         st.error(_stim_err)
                     else:
+                        if _stim_clamp:
+                            st.info(_stim_clamp)
                         _sync_morphometric_flags_from_session(b)
                         _sync_genus_species_to_bender(b)
                         _apply_form_updates(b, updates, tt)
@@ -8107,6 +8121,8 @@ def main():
                         with st.spinner(_acq_label):
                             b.run_experiment(test_type=tt)
                         st.success('Acquisition finished.')
+                        for _msg in (getattr(b, 'stim_clamp_notices', None) or []):
+                            st.warning(_msg)
                         run_status.write('HDF5…')
                         with st.spinner('Writing data file (.h5)…'):
                             rep = export_primary_h5(
@@ -8135,6 +8151,8 @@ def main():
                     with st.spinner(_acq_label):
                         b.run_experiment(test_type=tt)
                     st.success('Acquisition finished.')
+                    for _msg in (getattr(b, 'stim_clamp_notices', None) or []):
+                        st.warning(_msg)
                     with st.spinner('Writing data file (.h5)…'):
                         rep = export_primary_h5(
                             b,
