@@ -2257,6 +2257,66 @@ class Bender:
             dur = seg - max(0.0, onset)
         return onset, dur
 
+    def _validate_stim_timing_bounds(
+        self,
+        *,
+        step_index,
+        stim_onset_s,
+        stim_duration_s,
+        pre_hold_at_start_s,
+        segment_duration_s,
+        protocol_label='step',
+    ):
+        """
+        Ensure stim window stays within pre-hold and active-segment bounds.
+
+        ``stim_onset_s`` and ``stim_duration_s`` are relative to active-segment start.
+        """
+        onset = float(stim_onset_s)
+        dur = float(stim_duration_s)
+        pre_hold = float(pre_hold_at_start_s)
+        seg = float(segment_duration_s)
+        if not np.isfinite(onset):
+            raise ValueError(f"{protocol_label} step {step_index}: stim_onset_s must be finite.")
+        if not np.isfinite(dur) or dur <= 0:
+            raise ValueError(f"{protocol_label} step {step_index}: stim_duration_s must be finite and > 0.")
+        if onset < -pre_hold:
+            overrun = float(-(onset + pre_hold))
+            raise ValueError(
+                f"{protocol_label} step {step_index}: stim onset {onset} s starts {overrun:.6g} s "
+                f"before the allowed pre-hold window (earliest onset: {-pre_hold} s)."
+            )
+        if onset + dur > seg + 1e-9:
+            overrun = float(onset + dur - seg)
+            raise ValueError(
+                f"{protocol_label} step {step_index}: stim ends {overrun:.6g} s past the active segment "
+                f"({seg} s); reduce onset and/or duration."
+            )
+
+    def _validate_stim_timing_for_steps(
+        self,
+        sp,
+        *,
+        test_type,
+        num_steps,
+        pre_hold_at_start_s,
+        segment_duration_s,
+    ):
+        """Run anti-bleed stim timing checks for each step when stimulation is enabled."""
+        if not bool(sp.get('is_stim', False)):
+            return
+        onset, dur = self._resolve_stim_onset_duration_s(sp, segment_duration_s=segment_duration_s)
+        n = max(1, int(num_steps))
+        for step_i in range(n):
+            self._validate_stim_timing_bounds(
+                step_index=step_i + 1,
+                stim_onset_s=onset,
+                stim_duration_s=dur,
+                pre_hold_at_start_s=pre_hold_at_start_s,
+                segment_duration_s=segment_duration_s,
+                protocol_label=str(test_type),
+            )
+
     def lateral_index_from_side_name(self, side):
         """Map ``'left'`` / ``'right'`` to specimen lateral index (from config)."""
         s = str(side).strip().lower()
@@ -2922,6 +2982,13 @@ class Bender:
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
             if k not in sp and getattr(self, k, None) is not None:
                 sp[k] = getattr(self, k)
+        self._validate_stim_timing_for_steps(
+            sp,
+            test_type='isometric',
+            num_steps=int(num_steps),
+            pre_hold_at_start_s=0.0,
+            segment_duration_s=float(sp.get('hold_duration_s', 5.0)),
+        )
         vals = np.linspace(float(initial), float(final), int(num_steps))
         seq_idx = np.arange(vals.size, dtype=int)
         if bool(randomize) and vals.size > 1:
@@ -3533,6 +3600,14 @@ class Bender:
         if stim_params:
             sp.update(stim_params)
         sp.update(kwargs)
+
+        self._validate_stim_timing_for_steps(
+            sp,
+            test_type='isovelocity',
+            num_steps=int(num_steps),
+            pre_hold_at_start_s=float(sp.get('pre_hold_s', pre_hold_s)),
+            segment_duration_s=float(sp.get('iso_duration_s', iso_duration_s)),
+        )
 
         dc = self._effective_dclamp_mm()
         xw = getattr(self, 'xsec_width', None)

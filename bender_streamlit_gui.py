@@ -2010,6 +2010,56 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     return params
 
 
+def _merge_stim_overrides(sp: dict, overrides_key: str, updates: dict) -> dict:
+    """Merge optional JSON stim overrides into assembled stim params for validation."""
+    merged = dict(sp)
+    ov = updates.get(overrides_key)
+    if isinstance(ov, dict):
+        merged.update(ov)
+    return merged
+
+
+def _validate_procedure_stim_timing(b: Bender, updates: dict, tt: str) -> Optional[str]:
+    """Return an error message when stim timing would bleed outside segment bounds."""
+    try:
+        if tt == 'isometric':
+            sp = updates.get('isometric_stim_params')
+            if not isinstance(sp, dict) or not sp.get('is_stim'):
+                return None
+            sp = _merge_stim_overrides(sp, 'isometric_stim_overrides', updates)
+            num_steps = updates.get('isometric_num_steps', getattr(b, 'isometric_num_steps', 1))
+            hold_s = float(sp.get('hold_duration_s', 5.0))
+            b._validate_stim_timing_for_steps(
+                sp,
+                test_type='isometric',
+                num_steps=int(num_steps),
+                pre_hold_at_start_s=0.0,
+                segment_duration_s=hold_s,
+            )
+        elif tt == 'isovelocity':
+            sp = updates.get('isovelocity_stim_params')
+            if not isinstance(sp, dict) or not sp.get('is_stim'):
+                return None
+            sp = _merge_stim_overrides(sp, 'isovelocity_stim_overrides', updates)
+            num_steps = updates.get('isovelocity_num_steps', getattr(b, 'isovelocity_num_steps', 1))
+            pre_hold_s = float(
+                updates.get('isovelocity_pre_hold_s', getattr(b, 'isovelocity_pre_hold_s', 0.3)) or 0.3
+            )
+            iso_s = float(
+                updates.get('isovelocity_iso_duration_s', getattr(b, 'isovelocity_iso_duration_s', 0.2)) or 0.2
+            )
+            b._validate_stim_timing_for_steps(
+                sp,
+                test_type='isovelocity',
+                num_steps=int(num_steps),
+                pre_hold_at_start_s=pre_hold_s,
+                segment_duration_s=iso_s,
+            )
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def _get_session_value(b: Bender, name: str, default=None):
     if hasattr(b, name):
         v = getattr(b, name)
@@ -7995,8 +8045,20 @@ def main():
                 )
 
             if sub_proc_apply:
-                _apply_procedure_form_to_bender(b, updates, tt)
-                st.toast('Settings applied.')
+                _form_invalid = (
+                    (tt == 'isometric' and updates.get('isometric_stim_params') is None)
+                    or (tt == 'isovelocity' and updates.get('isovelocity_stim_params') is None)
+                    or (tt in ('isometric', 'isovelocity') and 'block_sequence' not in updates)
+                )
+                if _form_invalid:
+                    pass  # widget validation already surfaced st.error
+                else:
+                    _stim_err = _validate_procedure_stim_timing(b, updates, tt)
+                    if _stim_err:
+                        st.error(_stim_err)
+                    else:
+                        _apply_procedure_form_to_bender(b, updates, tt)
+                        st.toast('Settings applied.')
             if sub_proc_save:
                 _name = str(st.session_state.get('gui_protocol_new_name') or '').strip()
                 _desc = str(st.session_state.get('gui_protocol_new_desc') or '').strip()
@@ -8032,18 +8094,30 @@ def main():
                 st.rerun()
 
             if sub_proc_preview:
-                _sync_biometric_flags_from_session(b)
-                _sync_genus_species_to_bender(b)
-                _apply_form_updates(b, updates, tt)
-                _mark_procedure_applied()
-                st.session_state['gui_last_preview'] = build_protocol_preview(
-                    b, requested_test_type=tt, max_plot_points=int(pv_pts)
+                _form_invalid = (
+                    (tt == 'isometric' and updates.get('isometric_stim_params') is None)
+                    or (tt == 'isovelocity' and updates.get('isovelocity_stim_params') is None)
+                    or (tt in ('isometric', 'isovelocity') and 'block_sequence' not in updates)
                 )
-                st.session_state['gui_last_preview_tt'] = tt
-                if st.session_state['gui_last_preview'].get('ok'):
-                    st.session_state['gui_protocol_confirmed'] = True
-                st.toast('Preview updated.')
-                st.rerun()
+                if _form_invalid:
+                    pass
+                else:
+                    _stim_err = _validate_procedure_stim_timing(b, updates, tt)
+                    if _stim_err:
+                        st.error(_stim_err)
+                    else:
+                        _sync_biometric_flags_from_session(b)
+                        _sync_genus_species_to_bender(b)
+                        _apply_form_updates(b, updates, tt)
+                        _mark_procedure_applied()
+                        st.session_state['gui_last_preview'] = build_protocol_preview(
+                            b, requested_test_type=tt, max_plot_points=int(pv_pts)
+                        )
+                        st.session_state['gui_last_preview_tt'] = tt
+                        if st.session_state['gui_last_preview'].get('ok'):
+                            st.session_state['gui_protocol_confirmed'] = True
+                        st.toast('Preview updated.')
+                        st.rerun()
 
             _touch_proc_apply_baseline_if_clean()
 

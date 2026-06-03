@@ -128,6 +128,41 @@ def test_resolve_stim_onset_duration_migrates_pre_iso(b):
     assert dur == pytest.approx(0.15)
 
 
+def test_validate_stim_timing_bounds_rejects_pre_hold_bleed(b):
+    with pytest.raises(ValueError, match='before the allowed pre-hold'):
+        b._validate_stim_timing_bounds(
+            step_index=1,
+            stim_onset_s=-0.5,
+            stim_duration_s=0.1,
+            pre_hold_at_start_s=0.3,
+            segment_duration_s=0.2,
+            protocol_label='isovelocity',
+        )
+
+
+def test_validate_stim_timing_bounds_rejects_segment_bleed(b):
+    with pytest.raises(ValueError, match='past the active segment'):
+        b._validate_stim_timing_bounds(
+            step_index=2,
+            stim_onset_s=0.1,
+            stim_duration_s=0.5,
+            pre_hold_at_start_s=0.3,
+            segment_duration_s=0.4,
+            protocol_label='isovelocity',
+        )
+
+
+def test_validate_stim_timing_bounds_accepts_valid_window(b):
+    b._validate_stim_timing_bounds(
+        step_index=1,
+        stim_onset_s=-0.2,
+        stim_duration_s=0.15,
+        pre_hold_at_start_s=0.3,
+        segment_duration_s=0.2,
+        protocol_label='isovelocity',
+    )
+
+
 def test_lateral_index_for_block_direction(b):
     assert b._lateral_index_for_block_direction('left') == b.specimen_side_index_left
     assert b._lateral_index_for_block_direction('right') == b.specimen_side_index_right
