@@ -60,7 +60,7 @@ def test_organize_cycles_for_dynamic_run_uses_existing_curves_without_mode():
 
 def test_organize_cycles_respects_muscle_depth_for_strain_metadata():
     b = _minimal_dynamic_bender()
-    b.muscle_depth_mm = 0.5
+    b.target_muscle_depth_mm = 0.5
     b.all_curves = [0.2]
     b.all_amps_mode = None
     b._organize_cycles_for_dynamic_run()

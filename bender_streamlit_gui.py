@@ -3733,14 +3733,14 @@ def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
     b.dbend = float(st.session_state['bio_dbend'])
     b.test_segment_position_mm = float(st.session_state['bio_dbend'])
     b.xsec_width = xw
-    b.muscle_depth_mm = md
+    b.target_muscle_depth_mm = md
     b.xsec_height = float(st.session_state['bio_xsec_height'])
     b.dvert = float(st.session_state['bio_dvert'])
     b.dhoriz = float(st.session_state['bio_dhoriz'])
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['dvert'] = float(st.session_state['bio_dvert'])
     meta['dhoriz'] = float(st.session_state['bio_dhoriz'])
-    meta['muscle_depth_mm'] = md
+    meta['target_muscle_depth_mm'] = md
     b.h5_protocol_metadata = meta
     _mark_bio_applied()
     return True
@@ -3792,7 +3792,7 @@ def _sync_biometric_flags_from_session(b: Bender):
     if 'bio_xsec' in st.session_state:
         b.xsec_width = float(st.session_state['bio_xsec'])
     if 'bio_muscle_depth' in st.session_state:
-        b.muscle_depth_mm = float(st.session_state['bio_muscle_depth'] or 0.0)
+        b.target_muscle_depth_mm = float(st.session_state['bio_muscle_depth'] or 0.0)
     if 'bio_temp_room' in st.session_state:
         b.temp_C_room = float(st.session_state['bio_temp_room'])
     if 'bio_temp_tank' in st.session_state:
@@ -7568,7 +7568,7 @@ def main():
                     if 'bio_muscle_depth' not in st.session_state:
                         st.session_state['bio_muscle_depth'] = 0.0
                     st.number_input(
-                        'Muscle depth `muscle_depth_mm` (mm)',
+                        'Muscle depth `target_muscle_depth_mm` (mm)',
                         min_value=0.0,
                         format='%.6g',
                         key='bio_muscle_depth',
@@ -8157,7 +8157,7 @@ def main():
                 {'group': 'biometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
                 {'group': 'biometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
                 {'group': 'biometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
-                {'group': 'biometric', 'name': 'muscle_depth_mm', 'value': getattr(b, 'muscle_depth_mm', None)},
+                {'group': 'biometric', 'name': 'target_muscle_depth_mm', 'value': getattr(b, 'target_muscle_depth_mm', None)},
                 {'group': 'biometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
                 {'group': 'biometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
                 {

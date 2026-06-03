@@ -56,7 +56,7 @@ def test_angle_vel_matches_identity_for_deg_per_s():
 def test_muscle_depth_zero_matches_surface_half_width():
     xw = 10.0
     eps = 0.05
-    k_surface = float(convert_to_curvature(eps, 'strain', xsec_width_mm=xw, muscle_depth_mm=0.0))
+    k_surface = float(convert_to_curvature(eps, 'strain', xsec_width_mm=xw, target_muscle_depth_mm=0.0))
     k_default = float(convert_to_curvature(eps, 'strain', xsec_width_mm=xw))
     assert k_surface == pytest.approx(k_default)
 
@@ -64,24 +64,24 @@ def test_muscle_depth_zero_matches_surface_half_width():
 def test_muscle_depth_increases_curvature_for_same_strain():
     eps = 0.05
     xw = 10.0
-    k0 = float(convert_to_curvature(eps, 'strain', xsec_width_mm=xw, muscle_depth_mm=0.0))
-    k3 = float(convert_to_curvature(eps, 'strain', xsec_width_mm=xw, muscle_depth_mm=3.0))
+    k0 = float(convert_to_curvature(eps, 'strain', xsec_width_mm=xw, target_muscle_depth_mm=0.0))
+    k3 = float(convert_to_curvature(eps, 'strain', xsec_width_mm=xw, target_muscle_depth_mm=3.0))
     assert k3 > k0
 
 
 @pytest.mark.parametrize('md', [-0.1, 5.0, 5.0001])
 def test_muscle_depth_rejected_at_or_beyond_half_width(md):
-    with pytest.raises(ValueError, match='muscle_depth_mm'):
+    with pytest.raises(ValueError, match='target_muscle_depth_mm'):
         _strain_lever_arm_m(10.0, md)
 
 
 def test_strain_lever_arm_round_trip_three_sites():
     """Forward convert_to_curvature; inverse via preview path and organize_cycles formula."""
     eps0, xw, md = 0.05, 10.0, 3.0
-    kappa = float(convert_to_curvature(eps0, 'strain', xsec_width_mm=xw, muscle_depth_mm=md))
+    kappa = float(convert_to_curvature(eps0, 'strain', xsec_width_mm=xw, target_muscle_depth_mm=md))
     lever_m = _strain_lever_arm_m(xw, md)
     strain_preview = float(np.asarray(kappa, dtype=float) * lever_m)
-    strain_org = float(curvature_to_strain_fraction(kappa, xsec_width_mm=xw, muscle_depth_mm=md))
+    strain_org = float(curvature_to_strain_fraction(kappa, xsec_width_mm=xw, target_muscle_depth_mm=md))
 
     b = Bender('jimenez_bender_config_A')
     b.organize_cycles(
@@ -96,7 +96,7 @@ def test_strain_lever_arm_round_trip_three_sites():
         [0.0],
         [0.0],
         0.0,
-        muscle_depth_mm=md,
+        target_muscle_depth_mm=md,
     )
     strain_from_organize = float(np.asarray(b.organized_strains, dtype=float).reshape(-1)[0])
 

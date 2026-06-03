@@ -81,35 +81,35 @@ def _scalar_or_pair(f0, f1):
     return a if abs(b - a) < 1e-12 else [a, b]
 
 
-def _strain_lever_arm_m(xsec_width_mm, muscle_depth_mm=0.0) -> float:
+def _strain_lever_arm_m(xsec_width_mm, target_muscle_depth_mm=0.0) -> float:
     """
     Effective lever arm (m) for engineering strain fraction: ε = κ * lever_arm.
 
-    ``lever_arm = (xsec_width_mm/2 - muscle_depth_mm) / 1000`` with ``muscle_depth_mm=0``
+    ``lever_arm = (xsec_width_mm/2 - target_muscle_depth_mm) / 1000`` with ``target_muscle_depth_mm=0``
     giving surface strain (legacy behavior).
     """
     xw = float(xsec_width_mm)
-    md = float(muscle_depth_mm or 0.0)
+    md = float(target_muscle_depth_mm or 0.0)
     if not np.isfinite(xw) or xw <= 0:
         raise ValueError(f"xsec_width_mm must be a finite value > 0 mm; got {xsec_width_mm!r}.")
     if not np.isfinite(md) or md < 0:
-        raise ValueError(f"muscle_depth_mm must be a finite value >= 0 mm; got {muscle_depth_mm!r}.")
+        raise ValueError(f"target_muscle_depth_mm must be a finite value >= 0 mm; got {target_muscle_depth_mm!r}.")
     half_w_mm = xw / 2.0
     if md >= half_w_mm:
         raise ValueError(
-            f"muscle_depth_mm ({md} mm) must be < xsec_width_mm/2 ({half_w_mm} mm) "
+            f"target_muscle_depth_mm ({md} mm) must be < xsec_width_mm/2 ({half_w_mm} mm) "
             f"so effective lever arm stays positive (xsec_width_mm={xw})."
         )
     return (half_w_mm - md) / 1000.0
 
 
-def curvature_to_strain_fraction(kappa, *, xsec_width_mm, muscle_depth_mm=0.0):
+def curvature_to_strain_fraction(kappa, *, xsec_width_mm, target_muscle_depth_mm=0.0):
     """Inverse of strain modes in :func:`convert_to_curvature`: ε = κ * lever_arm."""
-    lever_m = _strain_lever_arm_m(xsec_width_mm, muscle_depth_mm)
+    lever_m = _strain_lever_arm_m(xsec_width_mm, target_muscle_depth_mm)
     return np.asarray(kappa, dtype=float) * lever_m
 
 
-def convert_to_curvature(value, mode, *, dclamp_mm=None, xsec_width_mm=None, muscle_depth_mm=None):
+def convert_to_curvature(value, mode, *, dclamp_mm=None, xsec_width_mm=None, target_muscle_depth_mm=None):
     """
     Convert specimen inputs to curvature κ (1/m) or curvature rate dκ/dt (1/m/s).
 
@@ -120,10 +120,10 @@ def convert_to_curvature(value, mode, *, dclamp_mm=None, xsec_width_mm=None, mus
     'strain'
         ``value`` is **engineering strain as a fraction** (0.05 = 5 %). Same relation as
         ``organize_cycles``: strain = κ * lever_arm_m with
-        lever_arm_m = (xsec_width_mm/2 - muscle_depth_mm)/1000.
+        lever_arm_m = (xsec_width_mm/2 - target_muscle_depth_mm)/1000.
 
         **Interpretation (bending):** this scalar is κ times distance from the neutral axis to
-        the fiber layer (``muscle_depth_mm=0`` → **surface** half-width). Linear bending gives **equal magnitude** tensile strain on
+        the fiber layer (``target_muscle_depth_mm=0`` → **surface** half-width). Linear bending gives **equal magnitude** tensile strain on
         one surface and compressive (shortening) strain on the other; the sign of κ (and thus
         ε) follows the commanded bend direction. It is **not** automatically “ipsilateral
         muscle shortening”; map sign to left/right fibers using anatomy + mounting, or flip
@@ -151,7 +151,7 @@ def convert_to_curvature(value, mode, *, dclamp_mm=None, xsec_width_mm=None, mus
     if mode == 'curvature':
         return v
 
-    md = 0.0 if muscle_depth_mm is None else float(muscle_depth_mm)
+    md = 0.0 if target_muscle_depth_mm is None else float(target_muscle_depth_mm)
 
     if mode in ('strain', 'strain_rate'):
         if xsec_width_mm is None:
@@ -357,7 +357,7 @@ class Bender:
         # GUI-friendly aliases for geometry naming
         self.test_segment_length_mm = None  # alias for dclamp
         self.test_segment_position_mm = None  # alias for dbend (metadata only)
-        self.muscle_depth_mm = 0.0  # depth from outer surface to fiber layer (0 = surface strain)
+        self.target_muscle_depth_mm = 0.0  # depth from outer surface to fiber layer (0 = surface strain)
         # Optional inertial-calibration linkage; safe defaults keep legacy runs working.
         self.inertial_calibration_file = None
         self.use_inertial_calibration = False
@@ -1077,11 +1077,11 @@ class Bender:
             mode,
             dclamp_mm=dc,
             xsec_width_mm=getattr(self, 'xsec_width', None),
-            muscle_depth_mm=getattr(self, 'muscle_depth_mm', 0.0),
+            target_muscle_depth_mm=getattr(self, 'target_muscle_depth_mm', 0.0),
         )
 
     def get_all_amps(self, target_value, mode='curvature', rate=None, rate_mode=None,
-                     dclamp_mm=None, xsec_width_mm=None, muscle_depth_mm=None):
+                     dclamp_mm=None, xsec_width_mm=None, target_muscle_depth_mm=None):
         """
         Map target specimen inputs to curvature (1/m) and motor amplitudes (deg), matching
         ``organize_cycles`` geometry.
@@ -1099,7 +1099,7 @@ class Bender:
             ``rate_mode='strain_rate'``.
         rate_mode : str, required if ``rate`` is given
             One of ``curvature_rate``, ``strain_rate``, ``strain_pct_rate``, ``angle_vel``.
-        dclamp_mm, xsec_width_mm, muscle_depth_mm
+        dclamp_mm, xsec_width_mm, target_muscle_depth_mm
             Overrides; defaults from ``self``.
 
         Returns
@@ -1112,13 +1112,13 @@ class Bender:
         if dc is None:
             dc = getattr(self, 'test_segment_length_mm', None)
         xw = float(xsec_width_mm) if xsec_width_mm is not None else getattr(self, 'xsec_width', None)
-        md = float(muscle_depth_mm) if muscle_depth_mm is not None else float(
-            getattr(self, 'muscle_depth_mm', 0.0) or 0.0
+        md = float(target_muscle_depth_mm) if target_muscle_depth_mm is not None else float(
+            getattr(self, 'target_muscle_depth_mm', 0.0) or 0.0
         )
         if dc is None:
             raise ValueError("get_all_amps requires dclamp (argument or self.dclamp from metadata).")
         tv = np.atleast_1d(np.asarray(target_value, dtype=float)).reshape(-1)
-        kappa = convert_to_curvature(tv, mode, dclamp_mm=dc, xsec_width_mm=xw, muscle_depth_mm=md)
+        kappa = convert_to_curvature(tv, mode, dclamp_mm=dc, xsec_width_mm=xw, target_muscle_depth_mm=md)
         amps = np.rad2deg(kappa * (dc / 1000.0))
         out = {
             'curvature_1_per_m': kappa,
@@ -1136,7 +1136,7 @@ class Bender:
             rv = np.atleast_1d(np.asarray(rate, dtype=float)).reshape(-1)
             if rv.size == 1 and kappa.size > 1:
                 rv = np.full_like(kappa, rv.flat[0])
-            kdot = convert_to_curvature(rv, rm, dclamp_mm=dc, xsec_width_mm=xw, muscle_depth_mm=md)
+            kdot = convert_to_curvature(rv, rm, dclamp_mm=dc, xsec_width_mm=xw, target_muscle_depth_mm=md)
             out['curvature_rate_1_per_m_s'] = kdot
             out['angle_vel_deg_s'] = np.rad2deg(kdot * (dc / 1000.0))
         return out
@@ -1217,7 +1217,7 @@ class Bender:
         phases = np.asarray(p, dtype=float).reshape(-1).tolist()
         spr = float(getattr(self, 'stim_pulse_rate', 0.0) or 0.0)
 
-        md = float(getattr(self, 'muscle_depth_mm', 0.0) or 0.0)
+        md = float(getattr(self, 'target_muscle_depth_mm', 0.0) or 0.0)
         self.organize_cycles(
             list(all_curves),
             af,
@@ -1230,7 +1230,7 @@ class Bender:
             duties,
             phases,
             spr,
-            muscle_depth_mm=md,
+            target_muscle_depth_mm=md,
         )
 
     def _ensure_all_curves_for_run(self):
@@ -1260,7 +1260,7 @@ class Bender:
             "before run_experiment."
         )
 
-    def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate, muscle_depth_mm=0.0):
+    def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate, target_muscle_depth_mm=0.0):
         """Build per-cycle arrays. ``all_curves`` is κ (1/m); use :meth:`get_all_amps` to build it from strain/angle."""
         start = time.time()
         self.dclamp = float(dclamp)
@@ -1286,7 +1286,7 @@ class Bender:
 
         # --- 2. CALCULATE SECONDARY VARIABLES BEFORE RANDOMIZING ---
         # This ensures they are "locked" to the specific curve/freq combo
-        lever_m = _strain_lever_arm_m(xsec_width, muscle_depth_mm)
+        lever_m = _strain_lever_arm_m(xsec_width, target_muscle_depth_mm)
         all_strains_arr = lever_m * all_curves_arr
         all_strainrates_arr = 2 * np.pi * all_strains_arr * all_freqs_arr
         all_degs_arr = np.rad2deg(all_curves_arr * (dclamp/1000))
@@ -3045,12 +3045,12 @@ class Bender:
             vals = vals[seq_idx]
         dc = self._effective_dclamp_mm()
         xw = getattr(self, 'xsec_width', None)
-        md = float(getattr(self, 'muscle_depth_mm', 0.0) or 0.0)
+        md = float(getattr(self, 'target_muscle_depth_mm', 0.0) or 0.0)
         if dc is None:
             raise ValueError(
                 "isometric requires clamp spacing (mm): set `dclamp` or `test_segment_length_mm` on the Bender instance."
             )
-        kappa = convert_to_curvature(vals, mode, dclamp_mm=dc, xsec_width_mm=xw, muscle_depth_mm=md)
+        kappa = convert_to_curvature(vals, mode, dclamp_mm=dc, xsec_width_mm=xw, target_muscle_depth_mm=md)
         targets_deg_raw = np.rad2deg(kappa * (float(dc) / 1000.0))
         block_seq = self._normalize_block_sequence(
             sp.get('block_sequence', getattr(self, 'block_sequence', None))
@@ -3158,10 +3158,10 @@ class Bender:
                 fL, fR = float(ml_n), float(mr_n)
                 if np.isfinite(fL) and np.isfinite(fR):
                     kL = convert_to_curvature(
-                        np.asarray([fL]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md
+                        np.asarray([fL]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, target_muscle_depth_mm=md
                     )
                     kR = convert_to_curvature(
-                        np.asarray([fR]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md
+                        np.asarray([fR]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, target_muscle_depth_mm=md
                     )
                     mhl = float(
                         np.abs(np.rad2deg(float(np.asarray(kL, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
@@ -3659,7 +3659,7 @@ class Bender:
 
         dc = self._effective_dclamp_mm()
         xw = getattr(self, 'xsec_width', None)
-        md = float(getattr(self, 'muscle_depth_mm', 0.0) or 0.0)
+        md = float(getattr(self, 'target_muscle_depth_mm', 0.0) or 0.0)
         if dc is None:
             raise ValueError(
                 "isovelocity requires clamp spacing (mm): set `dclamp` or `test_segment_length_mm` on the Bender instance."
@@ -3669,7 +3669,7 @@ class Bender:
             starting_strain_mode,
             dclamp_mm=float(dc),
             xsec_width_mm=xw,
-            muscle_depth_mm=md,
+            target_muscle_depth_mm=md,
         )
         k0 = float(np.asarray(k0).reshape(-1)[0])
         theta0_raw = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
@@ -3690,7 +3690,7 @@ class Bender:
             velocity_mode,
             dclamp_mm=float(dc),
             xsec_width_mm=xw,
-            muscle_depth_mm=md,
+            target_muscle_depth_mm=md,
         )
         vels = np.rad2deg(np.asarray(kdot, dtype=float) * (float(dc) / 1000.0))
         seq_idx = np.arange(vels.size, dtype=int)
