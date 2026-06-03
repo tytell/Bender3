@@ -1633,6 +1633,155 @@ RECRUITMENT_OPTIONS = (
 BILATERAL_MIRROR_LABEL = 'Perform test on both sides (bilateral)'
 LATERAL_MODE_LABEL = 'Stim routing override (optional; experts only)'
 
+BLOCK_DIRECTION_OPTIONS = ('left', 'right')
+BLOCK_STIM_SIDES_OPTIONS = ('left', 'right', 'both')
+BLOCK_DIRECTION_LABELS = {'left': 'Bend LEFT', 'right': 'Bend RIGHT'}
+BLOCK_STIM_SIDES_LABELS = {
+    'left': 'Stim LEFT',
+    'right': 'Stim RIGHT',
+    'both': 'Stim BOTH',
+}
+
+
+def _seed_block_sequence_widget_state(b: Bender) -> None:
+    """Initialize block-sequence widget keys before first render."""
+    seq = getattr(b, 'block_sequence', None)
+    if 'gui_enable_block_sequence' not in st.session_state:
+        st.session_state['gui_enable_block_sequence'] = bool(seq)
+    if 'gui_block_seq_count' not in st.session_state:
+        n = len(seq) if isinstance(seq, list) and seq else 1
+        st.session_state['gui_block_seq_count'] = max(1, min(12, int(n)))
+    count = int(st.session_state.get('gui_block_seq_count', 1))
+    default_blocks = seq if isinstance(seq, list) and seq else [{'direction': 'left', 'stim_sides': 'left'}]
+    for i in range(max(count, len(default_blocks))):
+        block = default_blocks[i] if i < len(default_blocks) else {'direction': 'left', 'stim_sides': 'left'}
+        d_sk = _widget_key(f'block_{i}_direction')
+        s_sk = _widget_key(f'block_{i}_stim_sides')
+        if d_sk not in st.session_state:
+            d = str(block.get('direction', 'left')).lower()
+            st.session_state[d_sk] = d if d in BLOCK_DIRECTION_OPTIONS else 'left'
+        if s_sk not in st.session_state:
+            s = str(block.get('stim_sides', 'left')).lower()
+            st.session_state[s_sk] = s if s in BLOCK_STIM_SIDES_OPTIONS else 'left'
+    if _widget_key('left_stim_voltage') not in st.session_state:
+        st.session_state[_widget_key('left_stim_voltage')] = float(
+            getattr(b, 'left_stim_voltage', 5.0) or 5.0
+        )
+    if _widget_key('right_stim_voltage') not in st.session_state:
+        st.session_state[_widget_key('right_stim_voltage')] = float(
+            getattr(b, 'right_stim_voltage', 5.0) or 5.0
+        )
+    if _widget_key('block_reset_ramp_duration_s') not in st.session_state:
+        st.session_state[_widget_key('block_reset_ramp_duration_s')] = float(
+            getattr(b, 'block_reset_ramp_duration_s', 2.0) or 2.0
+        )
+
+
+def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
+    """
+    Render block-sequence UI; return updates dict for Apply, or None if validation fails.
+    When disabled, returns ``{'block_sequence': None}`` for legacy recruitment mode.
+    """
+    _seed_block_sequence_widget_state(b)
+    enabled = bool(
+        st.checkbox(
+            'Enable block sequence (reset to neutral between blocks)',
+            key='gui_enable_block_sequence',
+            help=(
+                'Run an ordered list of blocks. Before each block the motor returns to straight/center (0°), '
+                'then runs the velocity or posture steps with that block\'s bend direction and stim sides. '
+                'When enabled, **Recruitment** and **Perform test on both sides** are ignored.'
+            ),
+        )
+    )
+    if not enabled:
+        return {'block_sequence': None}
+
+    count = int(
+        st.number_input(
+            'Number of blocks',
+            min_value=1,
+            max_value=12,
+            step=1,
+            key='gui_block_seq_count',
+            help='Each block resets to neutral, then runs the full step protocol.',
+        )
+    )
+    blocks = []
+    for i in range(count):
+        c1, c2 = st.columns(2)
+        with c1:
+            direction = st.selectbox(
+                f'Block {i + 1} — bend direction',
+                list(BLOCK_DIRECTION_OPTIONS),
+                key=_widget_key(f'block_{i}_direction'),
+                format_func=lambda x, _l=BLOCK_DIRECTION_LABELS: _l.get(x, x),
+            )
+        with c2:
+            stim_sides = st.selectbox(
+                f'Block {i + 1} — stim sides',
+                list(BLOCK_STIM_SIDES_OPTIONS),
+                key=_widget_key(f'block_{i}_stim_sides'),
+                format_func=lambda x, _l=BLOCK_STIM_SIDES_LABELS: _l.get(x, x),
+            )
+        blocks.append({'direction': direction, 'stim_sides': stim_sides})
+
+    left_v = float(
+        st.number_input(
+            'Left stim voltage (V)',
+            key=_widget_key('left_stim_voltage'),
+            format='%.6g',
+            min_value=0.0,
+            help='Voltage on the LEFT stim channel when a block includes LEFT or BOTH.',
+        )
+    )
+    right_v = float(
+        st.number_input(
+            'Right stim voltage (V)',
+            key=_widget_key('right_stim_voltage'),
+            format='%.6g',
+            min_value=0.0,
+            help='Voltage on the RIGHT stim channel when a block includes RIGHT or BOTH.',
+        )
+    )
+    reset_ramp = float(
+        st.number_input(
+            'Neutral reset ramp duration (s)',
+            key=_widget_key('block_reset_ramp_duration_s'),
+            format='%.6g',
+            min_value=0.0,
+            help='Motor ramp time from the previous angle back to 0° before each block.',
+        )
+    )
+
+    sides_used = {b['stim_sides'] for b in blocks}
+    if ('left' in sides_used or 'both' in sides_used) and not (np.isfinite(left_v) and left_v > 0):
+        st.error('Left stim voltage must be finite and > 0 when any block uses LEFT or BOTH stim.')
+        return None
+    if ('right' in sides_used or 'both' in sides_used) and not (np.isfinite(right_v) and right_v > 0):
+        st.error('Right stim voltage must be finite and > 0 when any block uses RIGHT or BOTH stim.')
+        return None
+    if not (np.isfinite(reset_ramp) and reset_ramp >= 0):
+        st.error('Neutral reset ramp duration must be finite and ≥ 0 s.')
+        return None
+
+    try:
+        b._validate_block_sequence_voltages(blocks, left_v, right_v)
+        b._normalize_block_sequence(blocks)
+    except ValueError as exc:
+        st.error(str(exc))
+        return None
+
+    st.caption(
+        'Block sequence is active: **Recruitment**, **bilateral mirror**, and mirror target fields are ignored.'
+    )
+    return {
+        'block_sequence': blocks,
+        'left_stim_voltage': left_v,
+        'right_stim_voltage': right_v,
+        'block_reset_ramp_duration_s': reset_ramp,
+    }
+
 
 def _parse_float_list(s: str):
     s = (s or '').strip()
@@ -3397,7 +3546,7 @@ def _apply_specimen_identity_to_bender(b: Bender) -> None:
 
 
 def _apply_pair(b: Bender, name: str, value):
-    if value is None and name == 'random_seed':
+    if value is None and name in ('random_seed', 'block_sequence'):
         setattr(b, name, None)
         return
     if value is None:
@@ -7670,6 +7819,13 @@ def main():
                                     ),
                                 )
                             )
+                        elif key in (
+                            'block_sequence',
+                            'left_stim_voltage',
+                            'right_stim_voltage',
+                            'block_reset_ramp_duration_s',
+                        ):
+                            continue
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:
@@ -7693,6 +7849,11 @@ def main():
                             updates[key] = _render_field(
                                 b, key, kind, lbl, help_text=ISOMETRIC_FIELD_HELP.get(key)
                             )
+                    with st.container(border=True):
+                        st.markdown('**Block sequence**')
+                        _block_up = _render_block_sequence_fields(b)
+                        if _block_up is not None:
+                            updates.update(_block_up)
 
                 elif tt == 'isovelocity':
                     st.markdown('**Required**')
@@ -7773,6 +7934,13 @@ def main():
                             )
                         elif key == 'isovelocity_velocity_mode':
                             pass  # required-only; rendered in Required section
+                        elif key in (
+                            'block_sequence',
+                            'left_stim_voltage',
+                            'right_stim_voltage',
+                            'block_reset_ramp_duration_s',
+                        ):
+                            continue
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:
@@ -7796,6 +7964,11 @@ def main():
                             updates[key] = _render_field(
                                 b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
                             )
+                    with st.container(border=True):
+                        st.markdown('**Block sequence**')
+                        _block_up = _render_block_sequence_fields(b)
+                        if _block_up is not None:
+                            updates.update(_block_up)
 
                 elif tt == 'calibration':
                     st.markdown('**Required**')

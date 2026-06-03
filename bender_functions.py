@@ -696,6 +696,12 @@ class Bender:
         for k in ('bilateral_mirror_motor', 'bilateral_sequential_left_frac'):
             if k not in sp and getattr(self, k, None) is not None:
                 sp[k] = getattr(self, k)
+        bs = sp.get('block_sequence', getattr(self, 'block_sequence', None))
+        if bs is not None:
+            sp['block_sequence'] = bs
+        for k in ('left_stim_voltage', 'right_stim_voltage', 'block_reset_ramp_duration_s'):
+            if k not in sp and getattr(self, k, None) is not None:
+                sp[k] = getattr(self, k)
         return sp
 
     def run_experiment(self, test_type=None):
@@ -2147,6 +2153,84 @@ class Bender:
             return 'bilateral_sequential'
         return rec
 
+    def _normalize_block_direction(self, direction):
+        """Canonical block bend direction: ``left`` or ``right`` (specimen side)."""
+        if direction is None:
+            raise ValueError("block direction is required; use 'left' or 'right'.")
+        s = str(direction).strip().lower()
+        if s in ('left', 'right'):
+            return s
+        raise ValueError(f"block direction must be 'left' or 'right', not {direction!r}.")
+
+    def _normalize_stim_sides(self, stim_sides):
+        """Canonical per-block stim routing: ``left``, ``right``, or ``both``."""
+        if stim_sides is None:
+            return 'left'
+        s = str(stim_sides).strip().lower()
+        aliases = {
+            'left': 'left',
+            'right': 'right',
+            'both': 'both',
+            'bilateral': 'both',
+            'bilateral_simultaneous': 'both',
+        }
+        if s in aliases:
+            return aliases[s]
+        raise ValueError(f"stim_sides must be 'left', 'right', or 'both', not {stim_sides!r}.")
+
+    def _normalize_block_sequence(self, block_sequence):
+        """
+        Validate and normalize an ordered list of block dicts with ``direction`` and ``stim_sides``.
+        Returns ``None`` when ``block_sequence`` is absent/empty (legacy single-protocol mode).
+        """
+        if block_sequence is None:
+            return None
+        if isinstance(block_sequence, (list, tuple)) and len(block_sequence) == 0:
+            return None
+        if not isinstance(block_sequence, (list, tuple)):
+            raise ValueError("block_sequence must be a list of {direction, stim_sides} dicts.")
+        out = []
+        for i, raw in enumerate(block_sequence):
+            if not isinstance(raw, dict):
+                raise ValueError(f"block_sequence[{i}] must be a dict with direction and stim_sides.")
+            out.append({
+                'direction': self._normalize_block_direction(raw.get('direction')),
+                'stim_sides': self._normalize_stim_sides(raw.get('stim_sides', 'left')),
+            })
+        return out
+
+    def _lateral_index_for_block_direction(self, direction):
+        """Specimen lateral index for a block bend direction."""
+        d = self._normalize_block_direction(direction)
+        if d == 'left':
+            return int(self.specimen_side_index_left)
+        return int(self.specimen_side_index_right)
+
+    def _stim_sides_to_recruitment(self, stim_sides):
+        """Map block ``stim_sides`` to recruitment label for metadata only."""
+        s = self._normalize_stim_sides(stim_sides)
+        if s == 'left':
+            return 'left_unilateral'
+        if s == 'right':
+            return 'right_unilateral'
+        return 'bilateral_simultaneous'
+
+    def _validate_block_sequence_voltages(self, block_sequence, left_voltage, right_voltage):
+        """Require finite voltages > 0 for each stim side used in any block."""
+        sides_used = {b['stim_sides'] for b in block_sequence}
+        if 'left' in sides_used or 'both' in sides_used:
+            lv = float(left_voltage)
+            if not np.isfinite(lv) or lv <= 0:
+                raise ValueError(
+                    f"left_stim_voltage must be finite and > 0 when LEFT stim is used; got {left_voltage!r}."
+                )
+        if 'right' in sides_used or 'both' in sides_used:
+            rv = float(right_voltage)
+            if not np.isfinite(rv) or rv <= 0:
+                raise ValueError(
+                    f"right_stim_voltage must be finite and > 0 when RIGHT stim is used; got {right_voltage!r}."
+                )
+
     def lateral_index_from_side_name(self, side):
         """Map ``'left'`` / ``'right'`` to specimen lateral index (from config)."""
         s = str(side).strip().lower()
@@ -2307,6 +2391,33 @@ class Bender:
         if str(self.S2side).lower() == sn:
             s2[:] += np.asarray(pulse_vec, dtype=float).reshape(-1)
 
+    def _route_stim_sides_volts(
+        self,
+        t,
+        active_mask,
+        stim_pulse_rate_hz,
+        stim_sides,
+        left_voltage,
+        right_voltage,
+    ):
+        """
+        Route gated pulse carriers onto S1/S2 using per-block ``stim_sides`` and per-side voltages.
+        """
+        n = int(np.asarray(t).size)
+        s1 = np.zeros(n, dtype=float)
+        s2 = np.zeros(n, dtype=float)
+        sides = self._normalize_stim_sides(stim_sides)
+        active = np.asarray(active_mask, dtype=bool).reshape(-1)
+        if not np.any(active):
+            return s1, s2
+        if sides in ('left', 'both'):
+            p_l = self._pulse_carrier_volts(t, active, stim_pulse_rate_hz, left_voltage)
+            self._deposit_stim_on_side(p_l, 'left', s1, s2)
+        if sides in ('right', 'both'):
+            p_r = self._pulse_carrier_volts(t, active, stim_pulse_rate_hz, right_voltage)
+            self._deposit_stim_on_side(p_r, 'right', s1, s2)
+        return s1, s2
+
     def _route_recruitment_stim(self, pulse, recruitment, sequential_left_frac=0.5):
         """
         Route a single per-sample pulse train onto S1/S2 using recruitment mode.
@@ -2425,6 +2536,42 @@ class Bender:
         anglevel = np.gradient(angle, t, edge_order=1)
         return t, angle, anglevel
 
+    def _run_neutral_reset_segment(self, from_deg, ramp_duration_s, device_name):
+        """
+        Ramp commanded motor angle to 0° (straight/center), acquire one DAQ segment, no stimulation.
+        Returns ``0.0`` (commanded neutral angle).
+        """
+        from_deg = float(from_deg)
+        ramp_s = float(ramp_duration_s)
+        if not np.isfinite(ramp_s) or ramp_s < 0:
+            raise ValueError(f"block_reset_ramp_duration_s must be finite and >= 0; got {ramp_duration_s!r}.")
+        dev = device_name if device_name is not None else getattr(self, 'device_name', None)
+        if dev is None:
+            raise ValueError("_run_neutral_reset_segment requires device_name or self.device_name.")
+        if abs(from_deg) < 1e-12 and ramp_s <= 0:
+            return 0.0
+        daq_hz = float(self.daq_ai_sample_rate_hz)
+        t, angle, anglevel = self._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
+        s1 = np.zeros_like(t)
+        s2 = np.zeros_like(t)
+        self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
+        self.record_stim_signal(s1, s2)
+        self.make_motor_stepper_pulses(
+            daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
+            motor_gear_ratio=self.motor_gear_ratio,
+            motor_full_steps_per_rev=self.motor_full_steps_per_rev,
+        )
+        self.aidata = self.run(device_name=dev)
+        return 0.0
+
+    def _tag_block_trial_metadata(self, entry, *, block_index, block_direction, block_stim_sides,
+                                  left_stim_voltage, right_stim_voltage):
+        entry['block_index'] = int(block_index)
+        entry['block_direction'] = str(block_direction)
+        entry['block_stim_sides'] = str(block_stim_sides)
+        entry['left_stim_voltage'] = float(left_stim_voltage)
+        entry['right_stim_voltage'] = float(right_stim_voltage)
+
     def _run_force_length_steps(
         self,
         targets_deg,
@@ -2443,12 +2590,20 @@ class Bender:
         bilateral_sequential_left_frac=0.5,
         mirror_hold_deg_left=None,
         mirror_hold_deg_right=None,
+        ramp_from_deg=None,
+        stim_sides=None,
+        left_stim_voltage=None,
+        right_stim_voltage=None,
+        block_direction=None,
+        block_index=None,
     ):
         """Execute ramp–hold–stim–acquire for each target angle in ``targets_deg`` (degrees)."""
         targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
         num_steps = int(targets_deg.size)
         if num_steps < 1:
             raise ValueError("targets_deg must contain at least one sample.")
+        if stim_sides is not None and bool(bilateral_mirror_motor):
+            raise ValueError("bilateral_mirror_motor cannot be used with per-block stim_sides.")
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
             raise ValueError("_run_force_length_steps requires device_name or self.device_name.")
@@ -2457,10 +2612,20 @@ class Bender:
         )
         daq_hz = float(self.daq_ai_sample_rate_hz)
         results = []
-        rec = self._normalize_recruitment(
-            recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
-        )
-        bm = bool(bilateral_mirror_motor)
+        use_block_stim = stim_sides is not None
+        if use_block_stim:
+            lv = float(left_stim_voltage if left_stim_voltage is not None else stim_voltage)
+            rv = float(right_stim_voltage if right_stim_voltage is not None else stim_voltage)
+            sides_norm = self._normalize_stim_sides(stim_sides)
+            rec = self._stim_sides_to_recruitment(sides_norm)
+        else:
+            lv = float(stim_voltage)
+            rv = float(stim_voltage)
+            sides_norm = None
+            rec = self._normalize_recruitment(
+                recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
+            )
+        bm = bool(bilateral_mirror_motor) and not use_block_stim
         rec = self._recruitment_with_bilateral_mirror_motor(rec, bm)
         mirror = bm and rec == 'bilateral_sequential'
         seq_frac = float(
@@ -2479,7 +2644,12 @@ class Bender:
             if i > 0 and gap_s > 0:
                 time.sleep(gap_s)
             target = float(targets_deg[i])
-            prev = float(targets_deg[i - 1]) if i > 0 else float(targets_deg[0])
+            if i > 0:
+                prev = float(targets_deg[i - 1])
+            elif ramp_from_deg is not None:
+                prev = float(ramp_from_deg)
+            else:
+                prev = float(targets_deg[0])
             if mirror:
                 kw = {}
                 ml = self._mirror_hold_deg_at_step(mirror_hold_deg_left, i, num_steps)
@@ -2520,8 +2690,13 @@ class Bender:
                 t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
                 active = (t >= t_stim0) & (t < t_stim1)
                 if is_stim and np.any(active):
-                    pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
-                    s1, s2 = self._route_recruitment_stim(pulse, rec, sequential_left_frac=seq_frac)
+                    if use_block_stim:
+                        s1, s2 = self._route_stim_sides_volts(
+                            t, active, spr, sides_norm, lv, rv
+                        )
+                    else:
+                        pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
+                        s1, s2 = self._route_recruitment_stim(pulse, rec, sequential_left_frac=seq_frac)
                 else:
                     s1 = np.zeros_like(t)
                     s2 = np.zeros_like(t)
@@ -2559,6 +2734,15 @@ class Bender:
                 'forcetorque': None,
                 'mean_xforce_stim': None,
             }
+            if use_block_stim:
+                self._tag_block_trial_metadata(
+                    entry,
+                    block_index=block_index if block_index is not None else 0,
+                    block_direction=block_direction or sides_norm,
+                    block_stim_sides=sides_norm,
+                    left_stim_voltage=lv,
+                    right_stim_voltage=rv,
+                )
             sg_names = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
             try:
                 idx = [self.input_channel_names.index(n) for n in sg_names if n in self.input_channel_names]
@@ -2718,11 +2902,98 @@ class Bender:
                 "isometric requires clamp spacing (mm): set `dclamp` or `test_segment_length_mm` on the Bender instance."
             )
         kappa = convert_to_curvature(vals, mode, dclamp_mm=dc, xsec_width_mm=xw, muscle_depth_mm=md)
-        targets_deg = np.rad2deg(kappa * (float(dc) / 1000.0))
+        targets_deg_raw = np.rad2deg(kappa * (float(dc) / 1000.0))
+        block_seq = self._normalize_block_sequence(
+            sp.get('block_sequence', getattr(self, 'block_sequence', None))
+        )
         rec = self._normalize_recruitment(
             sp.get('recruitment', sp.get('lateral_mode', getattr(self, 'recruitment', 'bilateral_simultaneous')))
         )
         mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
+        if block_seq:
+            if mirror_bm:
+                raise ValueError(
+                    "bilateral_mirror_motor cannot be used with block_sequence; set direction per block instead."
+                )
+            left_v = float(sp.get('left_stim_voltage', getattr(self, 'left_stim_voltage', 5.0)))
+            right_v = float(sp.get('right_stim_voltage', getattr(self, 'right_stim_voltage', 5.0)))
+            reset_ramp = float(
+                sp.get(
+                    'block_reset_ramp_duration_s',
+                    getattr(self, 'block_reset_ramp_duration_s', sp.get('ramp_duration_s', 2.0)),
+                )
+            )
+            if not np.isfinite(reset_ramp) or reset_ramp < 0:
+                raise ValueError(
+                    f"block_reset_ramp_duration_s must be finite and >= 0; got {reset_ramp!r}."
+                )
+            self._validate_block_sequence_voltages(block_seq, left_v, right_v)
+            dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
+            all_out = []
+            last_deg = 0.0
+            global_step = 0
+            for bi, block in enumerate(block_seq):
+                last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
+                dir_idx = self._lateral_index_for_block_direction(block['direction'])
+                ms = self.motor_command_sign_for_bend_toward_index(dir_idx)
+                targets_block = np.abs(targets_deg_raw) * ms
+                block_out = self._run_force_length_steps(
+                    targets_block,
+                    ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
+                    hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
+                    settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
+                    stim_duration_s=sp.get('stim_duration_s', None),
+                    inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
+                    is_stim=bool(sp.get('is_stim', False)),
+                    stim_pulse_rate=sp.get('stim_pulse_rate', None),
+                    stim_voltage=float(sp.get('stim_voltage', 5.0)),
+                    device_name=dev,
+                    ramp_from_deg=0.0,
+                    stim_sides=block['stim_sides'],
+                    left_stim_voltage=left_v,
+                    right_stim_voltage=right_v,
+                    block_direction=block['direction'],
+                    block_index=bi,
+                    bilateral_mirror_motor=False,
+                )
+                for j, e in enumerate(block_out):
+                    e['target_value_native'] = float(vals[j])
+                    e['curvature_1_per_m'] = float(kappa[j])
+                    e['sequence_index'] = int(seq_idx[j])
+                    e['step_index'] = global_step
+                    e['trial_index'] = global_step
+                    e['cycle_index'] = global_step
+                    global_step += 1
+                last_deg = float(block_out[-1]['angle_cmd'][-1])
+                all_out.extend(block_out)
+            uidx = None
+            seq_frac = float(
+                sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5))
+            )
+            ml_n = mr_n = mhl = mhr = None
+            meta = {
+                'recruitment': rec,
+                'bilateral_mirror_motor': False,
+                'bilateral_sequential_left_frac': seq_frac,
+                'block_sequence': block_seq,
+                'left_stim_voltage': left_v,
+                'right_stim_voltage': right_v,
+                'block_reset_ramp_duration_s': reset_ramp,
+                'specimen_side_index_left': int(self.specimen_side_index_left),
+                'specimen_side_index_right': int(self.specimen_side_index_right),
+                'specimen_lateral_index_on_positive_motor_side': int(
+                    getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
+                ),
+                'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
+                'unilateral_posture_lateral_index': uidx,
+                'n_trials': int(len(all_out)),
+            }
+            self.h5_protocol_metadata.update(meta)
+            self.force_length_results = all_out
+            self.test_type = 'isometric'
+            self.trial_records = list(all_out)
+            return all_out
+        targets_deg = targets_deg_raw.copy()
         rec = self._recruitment_with_bilateral_mirror_motor(rec, mirror_bm)
         uidx = self.recruitment_unilateral_lateral_index(rec)
         if uidx is not None:
@@ -2856,6 +3127,9 @@ class Bender:
         recruitment,
         sequential_left_frac,
         mirror_stim_side,
+        stim_sides=None,
+        left_stim_voltage=None,
+        right_stim_voltage=None,
     ):
         """
         Build one isovelocity timeline + stim commands.
@@ -2881,16 +3155,22 @@ class Bender:
         active_iso = (t >= t_stim0) & (t < t_stim1)
         active = active_pre | active_iso
         if is_stim and np.any(active):
-            pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
-            if mirror_stim_side == 'left':
+            if stim_sides is not None:
+                lv = float(left_stim_voltage if left_stim_voltage is not None else stim_voltage)
+                rv = float(right_stim_voltage if right_stim_voltage is not None else stim_voltage)
+                s1, s2 = self._route_stim_sides_volts(t, active, spr, stim_sides, lv, rv)
+            elif mirror_stim_side == 'left':
                 s1 = np.zeros_like(t)
                 s2 = np.zeros_like(t)
+                pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
                 self._deposit_stim_on_side(pulse, 'left', s1, s2)
             elif mirror_stim_side == 'right':
                 s1 = np.zeros_like(t)
                 s2 = np.zeros_like(t)
+                pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
                 self._deposit_stim_on_side(pulse, 'right', s1, s2)
             else:
+                pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
                 s1, s2 = self._route_recruitment_stim(pulse, recruitment, sequential_left_frac=sequential_left_frac)
         else:
             s1 = np.zeros_like(t)
@@ -2927,12 +3207,21 @@ class Bender:
         recruitment=None,
         bilateral_mirror_motor=False,
         bilateral_sequential_left_frac=0.5,
+        block_direction=None,
+        stim_sides=None,
+        left_stim_voltage=None,
+        right_stim_voltage=None,
+        block_index=None,
     ):
         """Acquire one DAQ segment per commanded constant angular velocity (deg/s)."""
         vels = np.atleast_1d(np.asarray(velocities_deg_per_s, dtype=float)).reshape(-1)
         n = int(vels.size)
         if n < 1:
             raise ValueError("velocities_deg_per_s must contain at least one value.")
+        if stim_sides is not None and bool(bilateral_mirror_motor):
+            raise ValueError("bilateral_mirror_motor cannot be used with per-block stim_sides.")
+        use_block_stim = stim_sides is not None
+        use_block_direction = block_direction is not None
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
             raise ValueError("_run_isovelocity_steps requires device_name or self.device_name.")
@@ -2941,12 +3230,26 @@ class Bender:
         )
         daq_hz = float(self.daq_ai_sample_rate_hz)
         results = []
-        rec = self._normalize_recruitment(
-            recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
-        )
-        bm = bool(bilateral_mirror_motor)
+        if use_block_stim:
+            lv = float(left_stim_voltage if left_stim_voltage is not None else stim_voltage)
+            rv = float(right_stim_voltage if right_stim_voltage is not None else stim_voltage)
+            sides_norm = self._normalize_stim_sides(stim_sides)
+            rec = self._stim_sides_to_recruitment(sides_norm)
+        else:
+            lv = float(stim_voltage)
+            rv = float(stim_voltage)
+            sides_norm = None
+            rec = self._normalize_recruitment(
+                recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
+            )
+        bm = bool(bilateral_mirror_motor) and not use_block_stim and not use_block_direction
         rec = self._recruitment_with_bilateral_mirror_motor(rec, bm)
         mirror = bm and rec == 'bilateral_sequential'
+        if use_block_direction:
+            dir_idx = self._lateral_index_for_block_direction(block_direction)
+            block_dir_sign = self.motor_command_sign_for_bend_toward_index(dir_idx)
+        else:
+            block_dir_sign = None
         seq_frac = float(
             bilateral_sequential_left_frac
             if bilateral_sequential_left_frac is not None
@@ -2955,6 +3258,25 @@ class Bender:
         self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
         self.set_stim_channels(*self.stim_channels)
         th0_fixed = float(theta_start_deg)
+        iso_kw = dict(
+            pre_hold_s=pre_hold_s,
+            iso_duration_s=iso_duration_s,
+            settle_before_stim_s=settle_before_stim_s,
+            pre_iso_stim_duration_s=pre_iso_stim_duration_s,
+            stim_duration_s=stim_duration_s,
+            is_stim=is_stim,
+            spr=spr,
+            stim_voltage=stim_voltage,
+            daq_hz=daq_hz,
+            recruitment=rec,
+            sequential_left_frac=seq_frac,
+        )
+        if use_block_stim:
+            iso_kw.update(
+                stim_sides=sides_norm,
+                left_stim_voltage=lv,
+                right_stim_voltage=rv,
+            )
 
         for i in range(n):
             v_mag = abs(float(vels[i]))
@@ -2964,24 +3286,14 @@ class Bender:
                 v2 = v_mag * self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_right)
                 d1 = self._isovelocity_one_block(
                     th0, v1,
-                    pre_hold_s=pre_hold_s, iso_duration_s=iso_duration_s,
-                    settle_before_stim_s=settle_before_stim_s,
-                    pre_iso_stim_duration_s=pre_iso_stim_duration_s,
-                    stim_duration_s=stim_duration_s, is_stim=is_stim,
-                    spr=spr, stim_voltage=stim_voltage, daq_hz=daq_hz,
-                    recruitment=rec, sequential_left_frac=seq_frac,
                     mirror_stim_side='left',
+                    **iso_kw,
                 )
                 th_mid = float(d1['angle'][-1])
                 d2 = self._isovelocity_one_block(
                     th_mid, v2,
-                    pre_hold_s=pre_hold_s, iso_duration_s=iso_duration_s,
-                    settle_before_stim_s=settle_before_stim_s,
-                    pre_iso_stim_duration_s=pre_iso_stim_duration_s,
-                    stim_duration_s=stim_duration_s, is_stim=is_stim,
-                    spr=spr, stim_voltage=stim_voltage, daq_hz=daq_hz,
-                    recruitment=rec, sequential_left_frac=seq_frac,
                     mirror_stim_side='right',
+                    **iso_kw,
                 )
                 off = float(d1['t'][-1])
                 t = np.concatenate([d1['t'], d2['t'][1:] + off])
@@ -2998,19 +3310,17 @@ class Bender:
                 v_report = float(vels[i])
                 iso_t1_end = d2['iso_t1'] + off
             else:
-                v_sign = float(vels[i])
-                uidx = self.recruitment_unilateral_lateral_index(rec)
-                if uidx is not None:
-                    v_sign = v_mag * self.motor_command_sign_for_bend_toward_index(uidx)
+                if block_dir_sign is not None:
+                    v_sign = v_mag * block_dir_sign
+                else:
+                    v_sign = float(vels[i])
+                    uidx = self.recruitment_unilateral_lateral_index(rec)
+                    if uidx is not None:
+                        v_sign = v_mag * self.motor_command_sign_for_bend_toward_index(uidx)
                 d0 = self._isovelocity_one_block(
                     th0, v_sign,
-                    pre_hold_s=pre_hold_s, iso_duration_s=iso_duration_s,
-                    settle_before_stim_s=settle_before_stim_s,
-                    pre_iso_stim_duration_s=pre_iso_stim_duration_s,
-                    stim_duration_s=stim_duration_s, is_stim=is_stim,
-                    spr=spr, stim_voltage=stim_voltage, daq_hz=daq_hz,
-                    recruitment=rec, sequential_left_frac=seq_frac,
                     mirror_stim_side=None,
+                    **iso_kw,
                 )
                 t = d0['t']
                 angle = d0['angle']
@@ -3062,6 +3372,15 @@ class Bender:
                 'forcetorque': None,
                 'mean_xforce_stim': None,
             }
+            if use_block_stim:
+                self._tag_block_trial_metadata(
+                    entry,
+                    block_index=block_index if block_index is not None else 0,
+                    block_direction=block_direction or sides_norm,
+                    block_stim_sides=sides_norm,
+                    left_stim_voltage=lv,
+                    right_stim_voltage=rv,
+                )
             if mirror:
                 entry['velocity_seg1_deg_s'] = float(
                     v_mag * self.motor_command_sign_for_bend_toward_index(self.specimen_side_index_left)
@@ -3187,15 +3506,14 @@ class Bender:
             muscle_depth_mm=md,
         )
         k0 = float(np.asarray(k0).reshape(-1)[0])
-        theta0 = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
+        theta0_raw = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
+        block_seq = self._normalize_block_sequence(
+            sp.get('block_sequence', getattr(self, 'block_sequence', None))
+        )
         rec_iso = self._normalize_recruitment(
             sp.get('recruitment', sp.get('lateral_mode', getattr(self, 'recruitment', 'bilateral_simultaneous')))
         )
         mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(self, 'bilateral_mirror_motor', False)))
-        rec_iso = self._recruitment_with_bilateral_mirror_motor(rec_iso, mirror_bm)
-        uidx0 = self.recruitment_unilateral_lateral_index(rec_iso)
-        if uidx0 is not None:
-            theta0 = theta0 * self.motor_command_sign_for_bend_toward_index(uidx0)
 
         velocity_mode = str(
             getattr(self, 'isovelocity_velocity_mode', None) or kwargs.get('isovelocity_velocity_mode') or 'angle_vel'
@@ -3215,6 +3533,90 @@ class Bender:
             rng.shuffle(seq_idx)
             vels = vels[seq_idx]
         seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5)))
+
+        if block_seq:
+            if mirror_bm:
+                raise ValueError(
+                    "bilateral_mirror_motor cannot be used with block_sequence; set direction per block instead."
+                )
+            left_v = float(sp.get('left_stim_voltage', getattr(self, 'left_stim_voltage', 5.0)))
+            right_v = float(sp.get('right_stim_voltage', getattr(self, 'right_stim_voltage', 5.0)))
+            reset_ramp = float(
+                sp.get('block_reset_ramp_duration_s', getattr(self, 'block_reset_ramp_duration_s', 2.0))
+            )
+            if not np.isfinite(reset_ramp) or reset_ramp < 0:
+                raise ValueError(
+                    f"block_reset_ramp_duration_s must be finite and >= 0; got {reset_ramp!r}."
+                )
+            self._validate_block_sequence_voltages(block_seq, left_v, right_v)
+            dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
+            all_out = []
+            last_deg = 0.0
+            global_step = 0
+            vels_mag = np.abs(vels)
+            for bi, block in enumerate(block_seq):
+                last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
+                dir_idx = self._lateral_index_for_block_direction(block['direction'])
+                ms = self.motor_command_sign_for_bend_toward_index(dir_idx)
+                theta0_block = abs(theta0_raw) * ms
+                block_out = self._run_isovelocity_steps(
+                    theta0_block,
+                    vels_mag,
+                    pre_hold_s=float(sp['pre_hold_s']),
+                    iso_duration_s=float(sp['iso_duration_s']),
+                    settle_before_stim_s=float(sp['settle_before_stim_s']),
+                    pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
+                    stim_duration_s=sp.get('stim_duration_s', None),
+                    is_stim=bool(sp.get('is_stim', False)),
+                    stim_pulse_rate=sp.get('stim_pulse_rate', None),
+                    stim_voltage=float(sp.get('stim_voltage', 5.0)),
+                    device_name=dev,
+                    block_direction=block['direction'],
+                    stim_sides=block['stim_sides'],
+                    left_stim_voltage=left_v,
+                    right_stim_voltage=right_v,
+                    block_index=bi,
+                    bilateral_mirror_motor=False,
+                )
+                for j, e in enumerate(block_out):
+                    e['starting_strain'] = float(starting_strain)
+                    e['starting_strain_mode'] = starting_strain_mode
+                    e['curvature_1_per_m'] = k0
+                    e['sequence_index'] = int(seq_idx[j])
+                    e['step_index'] = global_step
+                    e['trial_index'] = global_step
+                    e['cycle_index'] = global_step
+                    global_step += 1
+                last_deg = float(block_out[-1]['angle_cmd'][-1])
+                all_out.extend(block_out)
+            uidx_meta = None
+            self.h5_protocol_metadata.update({
+                'recruitment': rec_iso,
+                'bilateral_mirror_motor': False,
+                'bilateral_sequential_left_frac': seq_frac,
+                'block_sequence': block_seq,
+                'left_stim_voltage': left_v,
+                'right_stim_voltage': right_v,
+                'block_reset_ramp_duration_s': reset_ramp,
+                'specimen_side_index_left': int(self.specimen_side_index_left),
+                'specimen_side_index_right': int(self.specimen_side_index_right),
+                'specimen_lateral_index_on_positive_motor_side': int(
+                    getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
+                ),
+                'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
+                'unilateral_posture_lateral_index': uidx_meta,
+                'n_trials': int(len(all_out)),
+            })
+            self.isovelocity_results = all_out
+            self.test_type = 'isovelocity'
+            self.trial_records = list(all_out)
+            return all_out
+
+        theta0 = theta0_raw
+        rec_iso = self._recruitment_with_bilateral_mirror_motor(rec_iso, mirror_bm)
+        uidx0 = self.recruitment_unilateral_lateral_index(rec_iso)
+        if uidx0 is not None:
+            theta0 = theta0 * self.motor_command_sign_for_bend_toward_index(uidx0)
         out = self._run_isovelocity_steps(
             theta0,
             vels,
@@ -4043,6 +4445,8 @@ class Bender:
                 'bilateral_mirror_motor',
                 'isometric_mirror_target_left', 'isometric_mirror_target_right',
                 'recruitment', 'lateral_mode', 'bilateral_sequential_left_frac',
+                'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
+                'block_reset_ramp_duration_s',
             ],
             'isovelocity_required': [
                 'isovelocity_min_vel', 'isovelocity_max_vel',
@@ -4056,6 +4460,8 @@ class Bender:
                 'isovelocity_stim_overrides',
                 'bilateral_mirror_motor',
                 'recruitment', 'lateral_mode', 'bilateral_sequential_left_frac',
+                'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
+                'block_reset_ramp_duration_s',
             ],
             'calibration_required': ['calibration_base_test_type'],
             'calibration_optional': ['inertial_calibration_file'],

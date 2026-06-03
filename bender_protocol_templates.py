@@ -302,6 +302,27 @@ def inject_procedure_value_into_session_state(
             session_state[sk] = str(int(value)) if isinstance(value, (int, float)) else str(value)
         return
 
+        return
+
+    if key == 'block_sequence':
+        session_state['gui_enable_block_sequence'] = isinstance(value, list) and len(value) > 0
+        if isinstance(value, list) and value:
+            session_state['gui_block_seq_count'] = max(1, min(12, len(value)))
+            for i, block in enumerate(value):
+                if isinstance(block, dict):
+                    session_state[widget_key(f'block_{i}_direction')] = str(
+                        block.get('direction', 'left')
+                    ).lower()
+                    session_state[widget_key(f'block_{i}_stim_sides')] = str(
+                        block.get('stim_sides', 'left')
+                    ).lower()
+        return
+
+    if key in ('left_stim_voltage', 'right_stim_voltage', 'block_reset_ramp_duration_s'):
+        if value is not None:
+            session_state[widget_key(key)] = float(value)
+        return
+
     if isinstance(value, bool):
         session_state[sk] = value
         return

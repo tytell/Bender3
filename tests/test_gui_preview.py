@@ -44,6 +44,25 @@ class _PreviewBender:
     def _normalize_recruitment(self, r):
         return str(r)
 
+    def _normalize_block_sequence(self, block_sequence):
+        if not block_sequence:
+            return None
+        return block_sequence
+
+    def _lateral_index_for_block_direction(self, direction):
+        return 0 if str(direction).lower() == 'left' else 1
+
+    def _route_stim_sides_volts(self, t, active, spr, stim_sides, left_v, right_v):
+        p = self._pulse_carrier_volts(t, active, spr, left_v)
+        s1 = np.zeros_like(np.asarray(t, dtype=float))
+        s2 = np.zeros_like(s1)
+        sides = str(stim_sides).lower()
+        if sides in ('left', 'both'):
+            s1 = np.where(active, float(left_v), 0.0)
+        if sides in ('right', 'both'):
+            s2 = np.where(active, float(right_v), 0.0)
+        return s1, s2
+
     def _recruitment_with_bilateral_mirror_motor(self, r, _bm):
         return r
 

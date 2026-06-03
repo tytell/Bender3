@@ -139,6 +139,11 @@ def _stim_for_ramp_hold(
     t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
     active = (t >= t_stim0) & (t < t_stim1)
     if is_stim and np.any(active):
+        stim_sides = sp.get('stim_sides')
+        if stim_sides is not None:
+            lv = float(sp.get('left_stim_voltage', stim_voltage))
+            rv = float(sp.get('right_stim_voltage', stim_voltage))
+            return b._route_stim_sides_volts(t, active, spr, stim_sides, lv, rv)
         pulse = b._pulse_carrier_volts(t, active, spr, stim_voltage)
         return b._route_recruitment_stim(pulse, rec, sequential_left_frac=seq_frac)
     return np.zeros_like(t), np.zeros_like(t)
@@ -298,10 +303,28 @@ def _preview_concat_isovelocity_timeline(
     )
     bm = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False)))
     rec = b._recruitment_with_bilateral_mirror_motor(rec, bm)
-    mirror = bm and rec == 'bilateral_sequential'
+    block_direction = sp.get('block_direction')
+    use_block_direction = block_direction is not None
+    mirror = bm and rec == 'bilateral_sequential' and not use_block_direction
+    if use_block_direction:
+        dir_idx = b._lateral_index_for_block_direction(block_direction)
+        block_dir_sign = b.motor_command_sign_for_bend_toward_index(dir_idx)
+    else:
+        block_dir_sign = None
     seq_frac = float(
         sp.get('bilateral_sequential_left_frac', getattr(b, 'bilateral_sequential_left_frac', 0.5))
     )
+    stim_sides = sp.get('stim_sides')
+    left_v = float(sp.get('left_stim_voltage', stim_voltage))
+    right_v = float(sp.get('right_stim_voltage', stim_voltage))
+    iso_extra = {}
+    if stim_sides is not None:
+        iso_extra = {
+            'stim_sides': stim_sides,
+            'left_stim_voltage': left_v,
+            'right_stim_voltage': right_v,
+        }
+
     th0_fixed = float(theta0_fixed)
     t_chunks: List[np.ndarray] = []
     a_chunks: List[np.ndarray] = []
@@ -329,6 +352,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='left',
+                **iso_extra,
             )
             th_mid = float(d1['angle'][-1])
             d2 = b._isovelocity_one_block(
@@ -346,6 +370,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='right',
+                **iso_extra,
             )
             off = float(d1['t'][-1])
             t_seg = np.concatenate([d1['t'], d2['t'][1:] + off])
@@ -354,10 +379,13 @@ def _preview_concat_isovelocity_timeline(
             s1_seg = np.concatenate([d1['s1'], d2['s1'][1:]])
             s2_seg = np.concatenate([d1['s2'], d2['s2'][1:]])
         else:
-            v_sign = float(vels[i])
-            uidx = b.recruitment_unilateral_lateral_index(rec)
-            if uidx is not None:
-                v_sign = v_mag * b.motor_command_sign_for_bend_toward_index(uidx)
+            if block_dir_sign is not None:
+                v_sign = v_mag * block_dir_sign
+            else:
+                v_sign = float(vels[i])
+                uidx = b.recruitment_unilateral_lateral_index(rec)
+                if uidx is not None:
+                    v_sign = v_mag * b.motor_command_sign_for_bend_toward_index(uidx)
             d0 = b._isovelocity_one_block(
                 th0_fixed,
                 v_sign,
@@ -373,6 +401,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side=None,
+                **iso_extra,
             )
             t_seg, a_seg, w_seg = d0['t'], d0['angle'], d0['anglevel']
             s1_seg, s2_seg = d0['s1'], d0['s2']
@@ -382,6 +411,49 @@ def _preview_concat_isovelocity_timeline(
         s1_chunks.append(np.asarray(s1_seg, dtype=float))
         s2_chunks.append(np.asarray(s2_seg, dtype=float))
         toff = float(t_chunks[-1][-1])
+    t = np.concatenate(t_chunks)
+    angle = np.concatenate(a_chunks)
+    anglevel = np.concatenate(w_chunks)
+    s1 = np.concatenate(s1_chunks)
+    s2 = np.concatenate(s2_chunks)
+    return t, angle, anglevel, s1, s2
+
+
+def _preview_append_neutral_reset(
+    b: Any,
+    from_deg: float,
+    ramp_s: float,
+    daq_hz: float,
+    t_chunks: List[np.ndarray],
+    a_chunks: List[np.ndarray],
+    w_chunks: List[np.ndarray],
+    s1_chunks: List[np.ndarray],
+    s2_chunks: List[np.ndarray],
+    toff: float,
+) -> Tuple[float, float]:
+    """Append a neutral (0°) ramp segment to preview chunk lists."""
+    from_deg = float(from_deg)
+    ramp_s = float(ramp_s)
+    if abs(from_deg) < 1e-12 and ramp_s <= 0:
+        return toff, 0.0
+    tloc, aloc, wloc = b._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
+    z = np.zeros_like(tloc)
+    t_chunks.append(np.asarray(tloc, dtype=float) + toff)
+    a_chunks.append(np.asarray(aloc, dtype=float))
+    w_chunks.append(np.asarray(wloc, dtype=float))
+    s1_chunks.append(z)
+    s2_chunks.append(z)
+    new_toff = float(t_chunks[-1][-1])
+    return new_toff, 0.0
+
+
+def _preview_concat_timeline_chunks(
+    t_chunks: List[np.ndarray],
+    a_chunks: List[np.ndarray],
+    w_chunks: List[np.ndarray],
+    s1_chunks: List[np.ndarray],
+    s2_chunks: List[np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     t = np.concatenate(t_chunks)
     angle = np.concatenate(a_chunks)
     anglevel = np.concatenate(w_chunks)
@@ -411,7 +483,7 @@ def _isometric_stim_params_from_b(b: Any) -> dict:
 
 
 def _preview_concat_isometric_timeline(
-    b: Any, targets_deg: np.ndarray, sp: dict, *, mode: str = 'strain'
+    b: Any, targets_deg: np.ndarray, sp: dict, *, mode: str = 'strain', ramp_from_deg: Optional[float] = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Match :meth:`Bender._run_force_length_steps` ramp/hold segments (and optional mirror path)."""
     targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
@@ -477,7 +549,12 @@ def _preview_concat_isometric_timeline(
             toff = float(t_chunks[-1][-1])
 
         target = float(targets_deg[i])
-        prev = float(targets_deg[i - 1]) if i > 0 else float(targets_deg[0])
+        if i > 0:
+            prev = float(targets_deg[i - 1])
+        elif ramp_from_deg is not None:
+            prev = float(ramp_from_deg)
+        else:
+            prev = float(targets_deg[0])
         if mirror:
             kw = {}
             if mhl is not None:
@@ -545,19 +622,12 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
             r['error'] = 'Could not import convert_to_curvature for isometric preview.'
             return r
         kappa = convert_to_curvature(vals, mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md)
-        targets_deg = np.rad2deg(kappa * (float(dc) / 1000.0))
+        targets_deg_raw = np.rad2deg(kappa * (float(dc) / 1000.0))
         sp = _isometric_stim_params_from_b(b)
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
             if k not in sp and getattr(b, k, None) is not None:
                 sp[k] = getattr(b, k)
-        rec = b._normalize_recruitment(
-            sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
-        )
-        mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False)))
-        rec = b._recruitment_with_bilateral_mirror_motor(rec, mirror_bm)
-        uidx = b.recruitment_unilateral_lateral_index(rec)
-        if uidx is not None:
-            targets_deg = targets_deg * b.motor_command_sign_for_bend_toward_index(uidx)
+        block_seq = b._normalize_block_sequence(getattr(b, 'block_sequence', None))
 
         for i, v in enumerate(vals):
             r['table'].append(
@@ -565,13 +635,75 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
                     'step_index': i,
                     'sequence_index': int(seq_idx[i]),
                     'target_value': float(v),
-                    'target_deg': float(targets_deg[i]),
+                    'target_deg': float(targets_deg_raw[i]),
                     'curvature_1_per_m': float(kappa[i]),
                     'input_mode': _strain_mode_caption(mode),
                 }
             )
+
         try:
-            t, angle, anglevel, s1, s2 = _preview_concat_isometric_timeline(b, targets_deg, sp, mode=str(mode))
+            if block_seq:
+                reset_ramp = float(
+                    getattr(b, 'block_reset_ramp_duration_s', sp.get('ramp_duration_s', 2.0)) or 2.0
+                )
+                left_v = float(getattr(b, 'left_stim_voltage', 5.0) or 5.0)
+                right_v = float(getattr(b, 'right_stim_voltage', 5.0) or 5.0)
+                daq_hz = float(getattr(b, 'daq_ai_sample_rate_hz', 0.0) or 0.0)
+                if not np.isfinite(daq_hz) or daq_hz <= 0:
+                    daq_hz = 1000.0
+                t_chunks: List[np.ndarray] = []
+                a_chunks: List[np.ndarray] = []
+                w_chunks: List[np.ndarray] = []
+                s1_chunks: List[np.ndarray] = []
+                s2_chunks: List[np.ndarray] = []
+                toff = 0.0
+                last_deg = 0.0
+                for bi, block in enumerate(block_seq):
+                    toff, last_deg = _preview_append_neutral_reset(
+                        b, last_deg, reset_ramp, daq_hz,
+                        t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks, toff,
+                    )
+                    dir_idx = b._lateral_index_for_block_direction(block['direction'])
+                    ms = b.motor_command_sign_for_bend_toward_index(dir_idx)
+                    targets_block = np.abs(targets_deg_raw) * ms
+                    sp_block = dict(sp)
+                    sp_block['stim_sides'] = block['stim_sides']
+                    sp_block['left_stim_voltage'] = left_v
+                    sp_block['right_stim_voltage'] = right_v
+                    t_b, a_b, w_b, s1_b, s2_b = _preview_concat_isometric_timeline(
+                        b, targets_block, sp_block, mode=str(mode), ramp_from_deg=0.0,
+                    )
+                    t_chunks.append(np.asarray(t_b, dtype=float) + toff)
+                    a_chunks.append(np.asarray(a_b, dtype=float))
+                    w_chunks.append(np.asarray(w_b, dtype=float))
+                    s1_chunks.append(np.asarray(s1_b, dtype=float))
+                    s2_chunks.append(np.asarray(s2_b, dtype=float))
+                    toff = float(t_chunks[-1][-1])
+                    last_deg = float(a_b[-1])
+                    r['table'].append(
+                        {
+                            'block_index': bi,
+                            'block_direction': block['direction'],
+                            'block_stim_sides': block['stim_sides'],
+                        }
+                    )
+                t, angle, anglevel, s1, s2 = _preview_concat_timeline_chunks(
+                    t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks,
+                )
+                rec = 'block_sequence'
+            else:
+                rec = b._normalize_recruitment(
+                    sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
+                )
+                mirror_bm = bool(sp.get('bilateral_mirror_motor', getattr(b, 'bilateral_mirror_motor', False)))
+                rec = b._recruitment_with_bilateral_mirror_motor(rec, mirror_bm)
+                uidx = b.recruitment_unilateral_lateral_index(rec)
+                targets_deg = targets_deg_raw.copy()
+                if uidx is not None:
+                    targets_deg = targets_deg * b.motor_command_sign_for_bend_toward_index(uidx)
+                t, angle, anglevel, s1, s2 = _preview_concat_isometric_timeline(
+                    b, targets_deg, sp, mode=str(mode),
+                )
         except Exception as e:
             r['error'] = f'Isometric timeline preview failed: {type(e).__name__}: {e}'
             return r
@@ -580,7 +712,14 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         r['anglevel'] = anglevel
         r['stim_s1'] = s1
         r['stim_s2'] = s2
-        r['table'].extend(_stim_table_rows(b, sp, recruitment=str(rec)))
+        if block_seq:
+            r['table'].extend([
+                {'metric': 'block_sequence', 'value': len(block_seq)},
+                {'metric': 'left_stim_voltage', 'value': float(getattr(b, 'left_stim_voltage', 5.0))},
+                {'metric': 'right_stim_voltage', 'value': float(getattr(b, 'right_stim_voltage', 5.0))},
+            ])
+        else:
+            r['table'].extend(_stim_table_rows(b, sp, recruitment=str(rec)))
         r['preview_isometric'] = True
         return r
 
@@ -619,17 +758,12 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         return r
     k0 = convert_to_curvature(float(ss), mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md)
     k0 = float(np.asarray(k0).reshape(-1)[0])
-    theta0 = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
+    theta0_raw = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
     velocity_mode = str(getattr(b, 'isovelocity_velocity_mode', None) or 'angle_vel').lower()
     kdot = convert_to_curvature(vels, velocity_mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md)
     vels_deg = np.rad2deg(np.asarray(kdot, dtype=float) * (float(dc) / 1000.0))
     sp = _isovelocity_stim_params_from_b(b)
-    rec_iso = b._normalize_recruitment(
-        sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
-    )
-    uidx0 = b.recruitment_unilateral_lateral_index(rec_iso)
-    if uidx0 is not None:
-        theta0 = theta0 * b.motor_command_sign_for_bend_toward_index(uidx0)
+    block_seq = b._normalize_block_sequence(getattr(b, 'block_sequence', None))
 
     r['table'].append(
         {'row': 'starting strain', 'value': float(ss), 'unit': _strain_mode_caption(mode)}
@@ -651,7 +785,64 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
             }
         )
     try:
-        t, angle, anglevel, s1, s2 = _preview_concat_isovelocity_timeline(b, theta0, vels_deg, sp)
+        if block_seq:
+            reset_ramp = float(getattr(b, 'block_reset_ramp_duration_s', 2.0) or 2.0)
+            left_v = float(getattr(b, 'left_stim_voltage', 5.0) or 5.0)
+            right_v = float(getattr(b, 'right_stim_voltage', 5.0) or 5.0)
+            daq_hz = float(getattr(b, 'daq_ai_sample_rate_hz', 0.0) or 0.0)
+            if not np.isfinite(daq_hz) or daq_hz <= 0:
+                daq_hz = 1000.0
+            t_chunks: List[np.ndarray] = []
+            a_chunks: List[np.ndarray] = []
+            w_chunks: List[np.ndarray] = []
+            s1_chunks: List[np.ndarray] = []
+            s2_chunks: List[np.ndarray] = []
+            toff = 0.0
+            last_deg = 0.0
+            vels_mag = np.abs(vels_deg)
+            for bi, block in enumerate(block_seq):
+                toff, last_deg = _preview_append_neutral_reset(
+                    b, last_deg, reset_ramp, daq_hz,
+                    t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks, toff,
+                )
+                dir_idx = b._lateral_index_for_block_direction(block['direction'])
+                ms = b.motor_command_sign_for_bend_toward_index(dir_idx)
+                theta0_block = abs(theta0_raw) * ms
+                sp_block = dict(sp)
+                sp_block['block_direction'] = block['direction']
+                sp_block['stim_sides'] = block['stim_sides']
+                sp_block['left_stim_voltage'] = left_v
+                sp_block['right_stim_voltage'] = right_v
+                t_b, a_b, w_b, s1_b, s2_b = _preview_concat_isovelocity_timeline(
+                    b, theta0_block, vels_mag, sp_block,
+                )
+                t_chunks.append(np.asarray(t_b, dtype=float) + toff)
+                a_chunks.append(np.asarray(a_b, dtype=float))
+                w_chunks.append(np.asarray(w_b, dtype=float))
+                s1_chunks.append(np.asarray(s1_b, dtype=float))
+                s2_chunks.append(np.asarray(s2_b, dtype=float))
+                toff = float(t_chunks[-1][-1])
+                last_deg = float(a_b[-1])
+                r['table'].append(
+                    {
+                        'block_index': bi,
+                        'block_direction': block['direction'],
+                        'block_stim_sides': block['stim_sides'],
+                    }
+                )
+            t, angle, anglevel, s1, s2 = _preview_concat_timeline_chunks(
+                t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks,
+            )
+            rec_iso = 'block_sequence'
+        else:
+            rec_iso = b._normalize_recruitment(
+                sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
+            )
+            theta0 = theta0_raw
+            uidx0 = b.recruitment_unilateral_lateral_index(rec_iso)
+            if uidx0 is not None:
+                theta0 = theta0 * b.motor_command_sign_for_bend_toward_index(uidx0)
+            t, angle, anglevel, s1, s2 = _preview_concat_isovelocity_timeline(b, theta0, vels_deg, sp)
     except Exception as e:
         r['error'] = f'Isovelocity timeline preview failed: {type(e).__name__}: {e}'
         return r
@@ -660,7 +851,14 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
     r['anglevel'] = anglevel
     r['stim_s1'] = s1
     r['stim_s2'] = s2
-    r['table'].extend(_stim_table_rows(b, sp, recruitment=str(rec_iso)))
+    if block_seq:
+        r['table'].extend([
+            {'metric': 'block_sequence', 'value': len(block_seq)},
+            {'metric': 'left_stim_voltage', 'value': float(getattr(b, 'left_stim_voltage', 5.0))},
+            {'metric': 'right_stim_voltage', 'value': float(getattr(b, 'right_stim_voltage', 5.0))},
+        ])
+    else:
+        r['table'].extend(_stim_table_rows(b, sp, recruitment=str(rec_iso)))
     r['preview_isovelocity'] = True
     return r
 
