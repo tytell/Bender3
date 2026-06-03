@@ -431,7 +431,10 @@ def _preview_append_neutral_reset(
     """Append a neutral (0°) ramp segment to preview chunk lists."""
     from_deg = float(from_deg)
     ramp_s = float(ramp_s)
-    if abs(from_deg) < 1e-12 and ramp_s <= 0:
+    # A neutral reset is degenerate (produces a single-sample, zero-length timeline) when
+    # there is no displacement to ramp (already at 0°) OR no ramp time. Skip either case;
+    # _timeline_ramp_hold collapses the ramp whenever |a1 - a0| < 1e-12 or ramp_s <= 0.
+    if abs(from_deg) < 1e-12 or ramp_s <= 0:
         return toff, 0.0
     tloc, aloc, wloc = b._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
     z = np.zeros_like(tloc)

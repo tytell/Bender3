@@ -2634,7 +2634,10 @@ class Bender:
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
             raise ValueError("_run_neutral_reset_segment requires device_name or self.device_name.")
-        if abs(from_deg) < 1e-12 and ramp_s <= 0:
+        # A neutral reset is degenerate (single-sample, zero-length timeline) when there is no
+        # displacement to ramp (already at 0°) OR no ramp time. Skip either case; acquiring a
+        # zero-length segment is meaningless and _timeline_ramp_hold would raise.
+        if abs(from_deg) < 1e-12 or ramp_s <= 0:
             return 0.0
         daq_hz = float(self.daq_ai_sample_rate_hz)
         t, angle, anglevel = self._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)

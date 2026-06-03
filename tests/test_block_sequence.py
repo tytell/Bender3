@@ -102,11 +102,33 @@ def test_preview_append_neutral_reset_skips_noop():
     assert t_chunks == []
 
 
+def test_preview_append_neutral_reset_skips_zero_displacement_with_ramp():
+    """Already-neutral reset with a positive ramp is still degenerate (0°→0°); must skip."""
+    from bender_gui_preview import _preview_append_neutral_reset
+
+    b = _BlockHelperBender()
+    t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks = [], [], [], [], []
+    toff, last_deg = _preview_append_neutral_reset(
+        b, 0.0, 2.0, 1000.0, t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks, 0.0,
+    )
+    assert toff == 0.0
+    assert last_deg == 0.0
+    assert t_chunks == []
+
+
 def test_run_neutral_reset_segment_skips_noop(b):
     """At neutral with zero ramp, backend must not run DAQ for a reset segment."""
     b.daq_ai_sample_rate_hz = 1000.0
     b.daq_ao_do_sample_rate_hz = 1000.0
     result = b._run_neutral_reset_segment(0.0, 0.0, 'mock_device')
+    assert result == 0.0
+
+
+def test_run_neutral_reset_segment_skips_zero_displacement_with_ramp(b):
+    """Already-neutral reset with a positive ramp is degenerate; backend must skip DAQ."""
+    b.daq_ai_sample_rate_hz = 1000.0
+    b.daq_ao_do_sample_rate_hz = 1000.0
+    result = b._run_neutral_reset_segment(0.0, 2.0, 'mock_device')
     assert result == 0.0
 
 
