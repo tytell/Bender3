@@ -8228,7 +8228,14 @@ def main():
             ]
             for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
                 settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
-            st.dataframe(pd.DataFrame(settings_rows), use_container_width=True, hide_index=True)
+            _settings_df = pd.DataFrame(settings_rows)
+            # Keep the value column a single dtype (string): mixing str/float/None triggers a
+            # pyarrow "mixed-type column" warning when Streamlit serializes the DataFrame.
+            if 'value' in _settings_df.columns:
+                _settings_df['value'] = _settings_df['value'].apply(
+                    lambda x: '' if x is None else str(x)
+                )
+            st.dataframe(_settings_df, use_container_width=True, hide_index=True)
 
         if st.session_state.get('gui_last_preview') is not None:
             prev = st.session_state['gui_last_preview']

@@ -13,6 +13,67 @@ import h5py
 import numpy as np
 
 
+def _is_non_data_object(value: Any) -> bool:
+    """True for values that are not experiment data and must never be serialized into the file.
+
+    Catches callables, file handles, and instances of non-builtin classes (e.g. the
+    ``MasterLogger``). These were previously dumped into the file via ``str(value)``,
+    storing opaque reprs instead of failing loudly / skipping cleanly.
+    """
+    if callable(value):
+        return True
+    if hasattr(value, 'read') and callable(getattr(value, 'read', None)):
+        return True
+    if isinstance(value, (str, bytes, bool, int, float, complex, list, tuple, dict, set)):
+        return False
+    if isinstance(value, (np.generic, np.ndarray)):
+        return False
+    return (getattr(type(value), '__module__', '') or '') not in ('builtins',)
+
+
+def _store_h5_metadata_value(group: Any, key: str, value: Any, *, max_attr_array_size: int = 512) -> None:
+    """Store one metadata value, fail-loud: never stringify arrays or opaque objects.
+
+    * ``None`` and non-data objects (loggers, callables, file handles) are skipped, leaving a
+      short ``<omitted ...>`` note attribute rather than ``str(obj)``.
+    * Scalars (incl. strings) become attributes.
+    * Arrays become datasets; arrays larger than ``max_attr_array_size`` are omitted with a
+      shape note so the group never duplicates large buffers or overflows the 64 KB attr limit.
+    """
+    k = str(key)
+    if value is None:
+        return
+    if _is_non_data_object(value):
+        group.attrs[k] = f'<omitted_non_data_object type={type(value).__name__}>'
+        return
+    if isinstance(value, (str, bytes)):
+        group.attrs[k] = value
+        return
+    try:
+        arr = np.asarray(value)
+    except Exception:
+        group.attrs[k] = f'<omitted_unserializable type={type(value).__name__}>'
+        return
+    if arr.ndim == 0:
+        try:
+            group.attrs[k] = arr.item()
+        except Exception:
+            group.attrs[k] = str(value)[:512]
+        return
+    if arr.dtype == object:
+        group.attrs[k] = f'<omitted_object_array shape={arr.shape}>'
+        return
+    if arr.size <= max_attr_array_size:
+        try:
+            group.create_dataset(k, data=arr)
+        except Exception:
+            # Small non-numeric arrays (e.g. unicode lists) that h5py can't store directly:
+            # a compact string attribute is acceptable and readable for short metadata.
+            group.attrs[k] = str(value)[:512]
+    else:
+        group.attrs[k] = f'<omitted_large_array shape={arr.shape}>'
+
+
 def _read_existing_post_trial_notes(h5_path: str) -> str:
     """Return root ``post-trial notes`` attribute from an existing file, if any."""
     if not h5_path or not os.path.isfile(h5_path):
@@ -325,35 +386,21 @@ def export_primary_h5(
         h5p = dict(getattr(bender, 'h5_protocol_metadata', {}) or {})
         g_proto = g_meta.create_group('protocol_metadata')
         for k, v in h5p.items():
-            try:
-                arr = np.asarray(v)
-                if arr.ndim > 0 and arr.size > 1:
-                    g_proto.create_dataset(str(k), data=arr)
-                elif arr.ndim == 0:
-                    g_proto.attrs[str(k)] = arr.item()
-                else:
-                    g_proto.attrs[str(k)] = str(v)
-            except Exception:
-                g_proto.attrs[str(k)] = str(v)
+            # Protocol arrays (e.g. frequency/amplitude lists) stay full datasets regardless of
+            # length; opaque objects are skipped rather than stringified.
+            _store_h5_metadata_value(g_proto, k, v, max_attr_array_size=2**31)
 
         g_settings = g_meta.create_group('bender_settings')
         skip_keys = {
             'aidata', 'forcetorque', 'angle', 'anglevel', 'tnorm', 't', 'angledata',
             'S1stimcmd', 'S2stimcmd', 'trial_records',
+            # Not data: the MasterLogger object must not be serialized into the file.
+            'master_logger',
         }
         for k, v in bender.__dict__.items():
             if k.startswith('_') or k in skip_keys or v is None:
                 continue
-            try:
-                arr = np.asarray(v)
-                if arr.ndim == 0:
-                    g_settings.attrs[str(k)] = arr.item()
-                elif arr.size <= 512:
-                    g_settings.create_dataset(str(k), data=arr)
-                else:
-                    g_settings.attrs[str(k)] = f'<omitted_large_array shape={arr.shape}>'
-            except Exception:
-                g_settings.attrs[str(k)] = str(v)
+            _store_h5_metadata_value(g_settings, k, v)
 
     msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})'
     return {
