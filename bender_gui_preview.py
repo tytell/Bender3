@@ -52,15 +52,21 @@ def _downsample(t, y, max_points: int):
 
 
 def _motor_angle_to_kappa_strain(
-    angle_deg: np.ndarray, *, dclamp_mm: float, xsec_width_mm: Optional[float]
+    angle_deg: np.ndarray,
+    *,
+    dclamp_mm: float,
+    xsec_width_mm: Optional[float],
+    muscle_depth_mm: float = 0.0,
 ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-    """Inverse of motor command: κ (1/m) and surface engineering strain ε from angle (deg)."""
+    """Inverse of motor command: κ (1/m) and engineering strain ε from angle (deg)."""
+    from bender_functions import _strain_lever_arm_m
+
     ang = np.asarray(angle_deg, dtype=float).reshape(-1)
     kappa = np.deg2rad(ang) * 1000.0 / float(dclamp_mm)
     if xsec_width_mm is None or not math.isfinite(float(xsec_width_mm)) or float(xsec_width_mm) <= 0:
         return kappa, None
-    half_m = (float(xsec_width_mm) / 2.0) / 1000.0
-    return kappa, kappa * half_m
+    lever_m = _strain_lever_arm_m(xsec_width_mm, muscle_depth_mm)
+    return kappa, kappa * lever_m
 
 
 def _attach_native_unit_series(out: PreviewResult, b: Any, t: np.ndarray, angle: np.ndarray) -> None:
@@ -68,9 +74,12 @@ def _attach_native_unit_series(out: PreviewResult, b: Any, t: np.ndarray, angle:
     if dc is None:
         dc = getattr(b, 'dclamp', None)
     xw = getattr(b, 'xsec_width', None)
+    md = float(getattr(b, 'muscle_depth_mm', 0.0) or 0.0)
     if dc is None:
         return
-    kappa, strain = _motor_angle_to_kappa_strain(angle, dclamp_mm=float(dc), xsec_width_mm=xw)
+    kappa, strain = _motor_angle_to_kappa_strain(
+        angle, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md
+    )
     out['curvature'] = kappa
     if strain is not None:
         out['strain'] = strain
@@ -421,6 +430,7 @@ def _preview_concat_isometric_timeline(
     mirror = bm and rec == 'bilateral_sequential'
     dc = getattr(b, '_effective_dclamp_mm', lambda: None)()
     xw = getattr(b, 'xsec_width', None)
+    md = float(getattr(b, 'muscle_depth_mm', 0.0) or 0.0)
     mhl = mhr = None
     if mirror and dc is not None:
         ml_n = sp.get('isometric_mirror_target_left', getattr(b, 'isometric_mirror_target_left', None))
@@ -431,8 +441,12 @@ def _preview_concat_isometric_timeline(
 
                 fL, fR = float(ml_n), float(mr_n)
                 if np.isfinite(fL) and np.isfinite(fR):
-                    kL = convert_to_curvature(np.asarray([fL]), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
-                    kR = convert_to_curvature(np.asarray([fR]), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+                    kL = convert_to_curvature(
+                        np.asarray([fL]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md
+                    )
+                    kR = convert_to_curvature(
+                        np.asarray([fR]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md
+                    )
                     mhl = float(
                         np.abs(np.rad2deg(float(np.asarray(kL, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
                     )
@@ -524,12 +538,13 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
             )
             return r
         xw = getattr(b, 'xsec_width', None)
+        md = float(getattr(b, 'muscle_depth_mm', 0.0) or 0.0)
         try:
             from bender_functions import convert_to_curvature
         except ImportError:
             r['error'] = 'Could not import convert_to_curvature for isometric preview.'
             return r
-        kappa = convert_to_curvature(vals, mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+        kappa = convert_to_curvature(vals, mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md)
         targets_deg = np.rad2deg(kappa * (float(dc) / 1000.0))
         sp = _isometric_stim_params_from_b(b)
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
@@ -596,16 +611,17 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         )
         return r
     xw = getattr(b, 'xsec_width', None)
+    md = float(getattr(b, 'muscle_depth_mm', 0.0) or 0.0)
     try:
         from bender_functions import convert_to_curvature
     except ImportError:
         r['error'] = 'Could not import convert_to_curvature for isovelocity preview.'
         return r
-    k0 = convert_to_curvature(float(ss), mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+    k0 = convert_to_curvature(float(ss), mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md)
     k0 = float(np.asarray(k0).reshape(-1)[0])
     theta0 = float(np.rad2deg(k0 * (float(dc) / 1000.0)))
     velocity_mode = str(getattr(b, 'isovelocity_velocity_mode', None) or 'angle_vel').lower()
-    kdot = convert_to_curvature(vels, velocity_mode, dclamp_mm=float(dc), xsec_width_mm=xw)
+    kdot = convert_to_curvature(vels, velocity_mode, dclamp_mm=float(dc), xsec_width_mm=xw, muscle_depth_mm=md)
     vels_deg = np.rad2deg(np.asarray(kdot, dtype=float) * (float(dc) / 1000.0))
     sp = _isovelocity_stim_params_from_b(b)
     rec_iso = b._normalize_recruitment(

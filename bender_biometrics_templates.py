@@ -33,6 +33,7 @@ BIOMETRICS_SESSION_KEYS = (
     'bio_dclamp',
     'bio_dbend',
     'bio_xsec',
+    'bio_muscle_depth',
     'bio_temp_room',
     'bio_temp_tank',
     'bio_prep_condition',

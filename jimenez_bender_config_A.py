@@ -103,6 +103,7 @@ units = {
     # Specimen & Setup
     'body_thickness': 'meters',
     'xsec_width': 'mm',
+    'muscle_depth_mm': 'mm',
     'desired_curves': '1/m',
     'desired_strain_pct': 'percent',
     

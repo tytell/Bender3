@@ -58,6 +58,17 @@ def test_organize_cycles_for_dynamic_run_uses_existing_curves_without_mode():
     assert np.isclose(float(np.max(np.asarray(b.amp_by_cycle))), np.rad2deg(0.1 * (10.0 / 1000.0)))
 
 
+def test_organize_cycles_respects_muscle_depth_for_strain_metadata():
+    b = _minimal_dynamic_bender()
+    b.muscle_depth_mm = 0.5
+    b.all_curves = [0.2]
+    b.all_amps_mode = None
+    b._organize_cycles_for_dynamic_run()
+    lever = (2.0 / 2.0 - 0.5) / 1000.0
+    expected = lever * 0.2
+    assert float(np.asarray(b.organized_strains, dtype=float).reshape(-1)[0]) == pytest.approx(expected)
+
+
 def test_organize_cycles_for_dynamic_run_requires_dclamp():
     b = _minimal_dynamic_bender()
     b.dclamp = None

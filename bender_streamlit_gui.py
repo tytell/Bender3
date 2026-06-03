@@ -89,7 +89,7 @@ from bender_config_builder import (  # noqa: E402
     render_generated_config,
     sanitize_config_module_stem,
 )
-from bender_functions import Bender  # noqa: E402
+from bender_functions import Bender, _strain_lever_arm_m  # noqa: E402
 from bender_gui_preview import build_protocol_preview  # noqa: E402
 from bender_simulation import (  # noqa: E402
     cantilever_stiffness_N_per_m_for_geometry,
@@ -2494,6 +2494,7 @@ _BIO_APPLY_SESSION_KEYS = (
     'bio_dhoriz',
     'bio_dclamp',
     'bio_xsec',
+    'bio_muscle_depth',
     'bio_dbend',
     'bio_temp_room',
     'bio_temp_tank',
@@ -2941,6 +2942,7 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
     _BIO_CLAMP_GEOMETRY_MM = (
         ('Clamp spacing (dclamp)', 'bio_dclamp'),
         ('Cross-section width', 'bio_xsec'),
+        ('Muscle depth from surface', 'bio_muscle_depth'),
         ('Cross-section height', 'bio_xsec_height'),
     )
     _BIO_PROFILE_OUTLINE_MM = (('Profile outline length', 'bio_prof_L'),)
@@ -2950,8 +2952,21 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
             continue
         if v <= 0:
             out.append((_CHK_SEC_BIO, f'{label}: invalid ({v:g} mm).'))
-        elif v < 1.0:
+        elif v < 1.0 and key != 'bio_muscle_depth':
             out.append((_CHK_SEC_BIO, f'{label}: {v:g} mm (check units).'))
+
+    xw_chk = _session_float('bio_xsec')
+    md_chk = _session_float('bio_muscle_depth')
+    if md_chk is not None and xw_chk is not None and xw_chk > 0:
+        if md_chk < 0:
+            out.append((_CHK_SEC_BIO, f'Muscle depth: invalid ({md_chk:g} mm).'))
+        elif md_chk >= xw_chk / 2.0:
+            out.append(
+                (
+                    _CHK_SEC_BIO,
+                    f'Muscle depth ({md_chk:g} mm) must be < half width ({xw_chk / 2.0:g} mm).',
+                )
+            )
 
     v_dbend = _session_float('bio_dbend')
     if v_dbend is not None:
@@ -3507,21 +3522,31 @@ def _apply_experimental_conditions_to_bender(b: Bender) -> None:
     _mark_bio_applied()
 
 
-def _apply_clamp_geometry_to_bender(b: Bender) -> None:
+def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
     """Clamp spacing, bend position, cross-section, and vertical/horizontal offsets → ``b``."""
+    xw = float(st.session_state['bio_xsec'])
+    md = float(st.session_state.get('bio_muscle_depth', 0.0) or 0.0)
+    try:
+        _strain_lever_arm_m(xw, md)
+    except ValueError as exc:
+        st.error(str(exc))
+        return False
     b.dclamp = float(st.session_state['bio_dclamp'])
     b.test_segment_length_mm = float(st.session_state['bio_dclamp'])
     b.dbend = float(st.session_state['bio_dbend'])
     b.test_segment_position_mm = float(st.session_state['bio_dbend'])
-    b.xsec_width = float(st.session_state['bio_xsec'])
+    b.xsec_width = xw
+    b.muscle_depth_mm = md
     b.xsec_height = float(st.session_state['bio_xsec_height'])
     b.dvert = float(st.session_state['bio_dvert'])
     b.dhoriz = float(st.session_state['bio_dhoriz'])
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['dvert'] = float(st.session_state['bio_dvert'])
     meta['dhoriz'] = float(st.session_state['bio_dhoriz'])
+    meta['muscle_depth_mm'] = md
     b.h5_protocol_metadata = meta
     _mark_bio_applied()
+    return True
 
 
 def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
@@ -3549,7 +3574,8 @@ def _apply_all_biometrics_to_bender(b: Bender) -> None:
     _sync_biometric_flags_from_session(b)
     _apply_intrinsic_biometrics_to_bender(b)
     _apply_experimental_conditions_to_bender(b)
-    _apply_clamp_geometry_to_bender(b)
+    if not _apply_clamp_geometry_to_bender(b):
+        return
     _apply_mounted_profile_inertial_to_bender(b)
     st.session_state['gui_measurements_confirmed'] = True
 
@@ -3568,6 +3594,8 @@ def _sync_biometric_flags_from_session(b: Bender):
         b.test_segment_position_mm = v
     if 'bio_xsec' in st.session_state:
         b.xsec_width = float(st.session_state['bio_xsec'])
+    if 'bio_muscle_depth' in st.session_state:
+        b.muscle_depth_mm = float(st.session_state['bio_muscle_depth'] or 0.0)
     if 'bio_temp_room' in st.session_state:
         b.temp_C_room = float(st.session_state['bio_temp_room'])
     if 'bio_temp_tank' in st.session_state:
@@ -7340,6 +7368,18 @@ def main():
                     if 'bio_xsec' not in st.session_state:
                         st.session_state['bio_xsec'] = 0.0
                     st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
+                    if 'bio_muscle_depth' not in st.session_state:
+                        st.session_state['bio_muscle_depth'] = 0.0
+                    st.number_input(
+                        'Muscle depth `muscle_depth_mm` (mm)',
+                        min_value=0.0,
+                        format='%.6g',
+                        key='bio_muscle_depth',
+                        help=(
+                            'Distance from the outer surface to the muscle/fiber layer used for strain↔curvature '
+                            '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
+                        ),
+                    )
                     if 'bio_xsec_height' not in st.session_state:
                         st.session_state['bio_xsec_height'] = 0.0
                     st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
@@ -7957,6 +7997,7 @@ def main():
                 {'group': 'biometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
                 {'group': 'biometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
                 {'group': 'biometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
+                {'group': 'biometric', 'name': 'muscle_depth_mm', 'value': getattr(b, 'muscle_depth_mm', None)},
                 {'group': 'biometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
                 {'group': 'biometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
                 {
