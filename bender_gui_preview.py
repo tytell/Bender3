@@ -192,6 +192,8 @@ def build_protocol_preview(
         'stim_s1': None,
         'stim_s2': None,
         'stim_total': None,
+        'stim_s1_plot': None,
+        'stim_s2_plot': None,
         'strain': None,
         'curvature': None,
         't_plot': None,
@@ -248,6 +250,11 @@ def build_protocol_preview(
                 stot = s1a[:n_st] + s2a[:n_st]
                 out['stim_total'] = stot
                 _, out['stim_plot'] = _downsample(t, stot, max_plot_points)
+                # S1 and S2 are routed to independent AO channels at the hardware
+                # (vstack -> two ao_voltage_chan), so the preview must show them as
+                # independent traces rather than the misleading summed signal.
+                _, out['stim_s1_plot'] = _downsample(t, s1a[:n_st], max_plot_points)
+                _, out['stim_s2_plot'] = _downsample(t, s2a[:n_st], max_plot_points)
         return out
     except Exception as e:
         out['error'] = f'{type(e).__name__}: {e}'

@@ -7967,13 +7967,27 @@ def main():
                                 _nu_layout['yaxis'] = dict(title='ε')
                             fig_nu.update_layout(**_nu_layout)
                             st.plotly_chart(fig_nu, use_container_width=True)
-                        stim_plot = prev.get('stim_plot')
-                        if stim_plot is not None and len(stim_plot) > 0:
+                        stim_s1_plot = prev.get('stim_s1_plot')
+                        stim_s2_plot = prev.get('stim_s2_plot')
+                        _has_stim_channels = (
+                            (stim_s1_plot is not None and len(stim_s1_plot) > 0)
+                            or (stim_s2_plot is not None and len(stim_s2_plot) > 0)
+                        )
+                        if _has_stim_channels:
                             st.markdown('**Stimulation preview** (commanded AO voltage)')
-                            fig_st = go.Figure()
-                            fig_st.add_trace(
-                                go.Scatter(x=tp, y=stim_plot, mode='lines', name='Total stim (S1+S2) (V)')
+                            st.caption(
+                                'S1 and S2 are independent AO channels (not summed). '
+                                'Each trace is the commanded voltage for that channel.'
                             )
+                            fig_st = go.Figure()
+                            if stim_s1_plot is not None and len(stim_s1_plot) > 0:
+                                fig_st.add_trace(
+                                    go.Scatter(x=tp, y=stim_s1_plot, mode='lines', name='S1 (left) stim (V)')
+                                )
+                            if stim_s2_plot is not None and len(stim_s2_plot) > 0:
+                                fig_st.add_trace(
+                                    go.Scatter(x=tp, y=stim_s2_plot, mode='lines', name='S2 (right) stim (V)')
+                                )
                             fig_st.update_layout(
                                 height=320,
                                 margin=dict(l=48, r=48, t=40, b=40),
