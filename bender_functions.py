@@ -385,6 +385,11 @@ class Bender:
         self.strain_shortening_positive_display_sign = 1.0
         # Pause (s) after each isometric step finishes before the next ramp/stim (0 = back-to-back).
         self.isometric_inter_step_interval_s = 0.0
+        # Block sequence (default: one block, bend LEFT / stim LEFT).
+        self.block_sequence = [{'direction': 'left', 'stim_sides': 'left'}]
+        self.left_stim_voltage = 5.0
+        self.right_stim_voltage = 5.0
+        self.block_reset_ramp_duration_s = 2.0
 
         # Standard 2D shapes for NI-DAQmx (Channels, Samples)
         self.stimcmdhi = np.zeros((2, 2))
@@ -4437,31 +4442,28 @@ class Bender:
                 'frustum_density_g_per_mm3', 'frustum_tip_scale',
                 'frustum_clamp_offset_mm', 'frustum_num_samples',
             ],
-            'isometric_required': ['isometric_initial', 'isometric_final', 'isometric_num_steps'],
+            'isometric_required': [
+                'isometric_initial', 'isometric_final', 'isometric_num_steps',
+                'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
+                'block_reset_ramp_duration_s',
+            ],
             'isometric_optional': [
                 'isometric_mode', 'isometric_randomize', 'isometric_random_seed',
                 'isometric_inter_step_interval_s',
                 'isometric_stim_params', 'isometric_stim_overrides',
-                'bilateral_mirror_motor',
-                'isometric_mirror_target_left', 'isometric_mirror_target_right',
-                'recruitment', 'lateral_mode', 'bilateral_sequential_left_frac',
-                'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
-                'block_reset_ramp_duration_s',
             ],
             'isovelocity_required': [
                 'isovelocity_min_vel', 'isovelocity_max_vel',
                 'isovelocity_starting_strain', 'isovelocity_starting_strain_mode',
                 'isovelocity_velocity_mode', 'isovelocity_num_steps',
+                'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
+                'block_reset_ramp_duration_s',
             ],
             'isovelocity_optional': [
                 'isovelocity_randomize',
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
                 'isovelocity_pre_hold_s', 'isovelocity_stim_params',
                 'isovelocity_stim_overrides',
-                'bilateral_mirror_motor',
-                'recruitment', 'lateral_mode', 'bilateral_sequential_left_frac',
-                'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
-                'block_reset_ramp_duration_s',
             ],
             'calibration_required': ['calibration_base_test_type'],
             'calibration_optional': ['inertial_calibration_file'],

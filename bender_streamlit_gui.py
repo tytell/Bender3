@@ -1642,17 +1642,24 @@ BLOCK_STIM_SIDES_LABELS = {
     'both': 'Stim BOTH',
 }
 
+_BLOCK_SEQUENCE_PROCEDURE_KEYS = frozenset({
+    'block_sequence',
+    'left_stim_voltage',
+    'right_stim_voltage',
+    'block_reset_ramp_duration_s',
+})
+
 
 def _seed_block_sequence_widget_state(b: Bender) -> None:
     """Initialize block-sequence widget keys before first render."""
     seq = getattr(b, 'block_sequence', None)
-    if 'gui_enable_block_sequence' not in st.session_state:
-        st.session_state['gui_enable_block_sequence'] = bool(seq)
+    if not isinstance(seq, list) or not seq:
+        seq = [{'direction': 'left', 'stim_sides': 'left'}]
     if 'gui_block_seq_count' not in st.session_state:
-        n = len(seq) if isinstance(seq, list) and seq else 1
+        n = len(seq)
         st.session_state['gui_block_seq_count'] = max(1, min(12, int(n)))
     count = int(st.session_state.get('gui_block_seq_count', 1))
-    default_blocks = seq if isinstance(seq, list) and seq else [{'direction': 'left', 'stim_sides': 'left'}]
+    default_blocks = seq
     for i in range(max(count, len(default_blocks))):
         block = default_blocks[i] if i < len(default_blocks) else {'direction': 'left', 'stim_sides': 'left'}
         d_sk = _widget_key(f'block_{i}_direction')
@@ -1680,22 +1687,9 @@ def _seed_block_sequence_widget_state(b: Bender) -> None:
 def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
     """
     Render block-sequence UI; return updates dict for Apply, or None if validation fails.
-    When disabled, returns ``{'block_sequence': None}`` for legacy recruitment mode.
+    Block sequence is always active (default: one block, bend LEFT / stim LEFT).
     """
     _seed_block_sequence_widget_state(b)
-    enabled = bool(
-        st.checkbox(
-            'Enable block sequence (reset to neutral between blocks)',
-            key='gui_enable_block_sequence',
-            help=(
-                'Run an ordered list of blocks. Before each block the motor returns to straight/center (0°), '
-                'then runs the velocity or posture steps with that block\'s bend direction and stim sides. '
-                'When enabled, **Recruitment** and **Perform test on both sides** are ignored.'
-            ),
-        )
-    )
-    if not enabled:
-        return {'block_sequence': None}
 
     count = int(
         st.number_input(
@@ -1772,9 +1766,6 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
         st.error(str(exc))
         return None
 
-    st.caption(
-        'Block sequence is active: **Recruitment**, **bilateral mirror**, and mirror target fields are ignored.'
-    )
     return {
         'block_sequence': blocks,
         'left_stim_voltage': left_v,
@@ -1826,7 +1817,6 @@ def _seed_isovelocity_stim_widget_state(b: Bender) -> None:
     defaults = {
         'isovelocity_stim_enable': bool(sp.get('is_stim', False)),
         'isovelocity_stim_pulse_rate': spr_default,
-        'isovelocity_stim_voltage': float(sp.get('stim_voltage', 5.0)),
         'isovelocity_settle_before_stim_s': float(sp.get('settle_before_stim_s', 0.02)),
         'isovelocity_pre_iso_stim_duration_s': float(sp.get('pre_iso_stim_duration_s', 0.0)),
     }
@@ -1857,11 +1847,9 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
     pre_iso = float(st.session_state[pre_iso_sk])
 
     pulse_rate = float(st.session_state[_widget_key('isovelocity_stim_pulse_rate')])
-    voltage = float(st.session_state[_widget_key('isovelocity_stim_voltage')])
 
     if enable:
         pr_sk = _widget_key('isovelocity_stim_pulse_rate')
-        vol_sk = _widget_key('isovelocity_stim_voltage')
         pulse_rate = float(
             st.number_input(
                 'Stim pulse rate (Hz)',
@@ -1869,15 +1857,6 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
                 format='%.6g',
                 min_value=0.0,
                 help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
-            )
-        )
-        voltage = float(
-            st.number_input(
-                'Stim voltage (V)',
-                key=vol_sk,
-                format='%.6g',
-                min_value=0.0,
-                help='Stimulus amplitude (V) during the active window.',
             )
         )
         settle = float(
@@ -1904,12 +1883,6 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
                 ['Enter a value > 0 Hz', 'Or uncheck Enable stimulation'],
             )
             return None
-        if not (np.isfinite(voltage) and voltage > 0):
-            _st_error_actions(
-                'Stim voltage invalid.',
-                ['Enter a value > 0 V', 'Or uncheck Enable stimulation'],
-            )
-            return None
     if not (np.isfinite(settle) and settle >= 0):
         _st_error_actions('Settle before stim invalid.', ['Use a value ≥ 0 s'])
         return None
@@ -1925,7 +1898,6 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
     }
     if enable:
         params['stim_pulse_rate'] = pulse_rate
-        params['stim_voltage'] = voltage
     return params
 
 
@@ -1939,7 +1911,6 @@ def _seed_isometric_stim_widget_state(b: Bender) -> None:
     defaults = {
         'isometric_stim_enable': bool(sp.get('is_stim', False)),
         'isometric_stim_pulse_rate': spr_default,
-        'isometric_stim_voltage': float(sp.get('stim_voltage', 5.0)),
         'isometric_settle_before_stim_s': float(sp.get('settle_before_stim_s', 0.5)),
     }
     for name, val in defaults.items():
@@ -1962,11 +1933,9 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     settle_sk = _widget_key('isometric_settle_before_stim_s')
     settle = float(st.session_state[settle_sk])
     pulse_rate = float(st.session_state[_widget_key('isometric_stim_pulse_rate')])
-    voltage = float(st.session_state[_widget_key('isometric_stim_voltage')])
 
     if enable:
         pr_sk = _widget_key('isometric_stim_pulse_rate')
-        vol_sk = _widget_key('isometric_stim_voltage')
         pulse_rate = float(
             st.number_input(
                 'Stim pulse rate (Hz)',
@@ -1974,15 +1943,6 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
                 format='%.6g',
                 min_value=0.0,
                 help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
-            )
-        )
-        voltage = float(
-            st.number_input(
-                'Stim voltage (V)',
-                key=vol_sk,
-                format='%.6g',
-                min_value=0.0,
-                help='Stimulus amplitude (V) during the hold window.',
             )
         )
         settle = float(
@@ -2000,12 +1960,6 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
                 ['Enter a value > 0 Hz', 'Or uncheck Enable stimulation'],
             )
             return None
-        if not (np.isfinite(voltage) and voltage > 0):
-            _st_error_actions(
-                'Stim voltage invalid.',
-                ['Enter a value > 0 V', 'Or uncheck Enable stimulation'],
-            )
-            return None
     if not (np.isfinite(settle) and settle >= 0):
         _st_error_actions('Settle before stim invalid.', ['Use a value ≥ 0 s'])
         return None
@@ -2017,7 +1971,6 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     }
     if enable:
         params['stim_pulse_rate'] = pulse_rate
-        params['stim_voltage'] = voltage
     return params
 
 
@@ -7725,6 +7678,8 @@ def main():
                     )
                     st.markdown('**Required**')
                     for key in schema['isometric_required']:
+                        if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
+                            continue
                         label = key.replace('_', ' ')
                         updates[key] = _render_field(
                             b,
@@ -7748,46 +7703,6 @@ def main():
                                 'json_dict',
                                 'Stim routing overrides (advanced)',
                                 help_text=ISOMETRIC_STIM_OVERRIDES_HELP,
-                            )
-                        elif key in ('bilateral_mirror_motor',):
-                            updates[key] = _render_field(
-                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOMETRIC_FIELD_HELP.get(key)
-                            )
-                        elif key == 'isometric_mirror_target_left':
-                            updates[key] = _render_field(
-                                b,
-                                key,
-                                'optional_float',
-                                'Bilateral LEFT-hold target (same units as isometric mode)',
-                                help_text=ISOMETRIC_FIELD_HELP.get(key),
-                            )
-                        elif key == 'isometric_mirror_target_right':
-                            updates[key] = _render_field(
-                                b,
-                                key,
-                                'optional_float',
-                                'Bilateral RIGHT-hold target (same units as isometric mode)',
-                                help_text=ISOMETRIC_FIELD_HELP.get(key),
-                            )
-                        elif key == 'recruitment':
-                            skr = _widget_key('recruitment')
-                            cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
-                            if skr not in st.session_state:
-                                st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
-                            updates[key] = st.selectbox(
-                                'Recruitment',
-                                list(RECRUITMENT_OPTIONS),
-                                key=skr,
-                                help=RECRUITMENT_FIELD_HELP,
-                            )
-                        elif key == 'lateral_mode':
-                            skl = _widget_key('lateral_mode')
-                            if skl not in st.session_state:
-                                st.session_state[skl] = str(_get_session_value(b, key) or '')
-                            updates[key] = st.text_input(LATERAL_MODE_LABEL, key=skl, help=ISOMETRIC_FIELD_HELP.get('lateral_mode'))
-                        elif key == 'bilateral_sequential_left_frac':
-                            updates[key] = _render_field(
-                                b, key, 'float', 'Left-side fraction (0-1)', help_text=ISOMETRIC_FIELD_HELP.get(key)
                             )
                         elif key == 'isometric_mode':
                             modes = list(ALL_AMPS_MODE_OPTIONS)
@@ -7819,13 +7734,6 @@ def main():
                                     ),
                                 )
                             )
-                        elif key in (
-                            'block_sequence',
-                            'left_stim_voltage',
-                            'right_stim_voltage',
-                            'block_reset_ramp_duration_s',
-                        ):
-                            continue
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:
@@ -7858,6 +7766,8 @@ def main():
                 elif tt == 'isovelocity':
                     st.markdown('**Required**')
                     for key in schema['isovelocity_required']:
+                        if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
+                            continue
                         if key == 'isovelocity_starting_strain_mode':
                             modes = list(ALL_AMPS_MODE_OPTIONS)
                             skm = _widget_key('isovelocity_starting_strain_mode')
@@ -7906,41 +7816,8 @@ def main():
                                 'Stim routing overrides (advanced)',
                                 help_text=ISOVELOCITY_STIM_OVERRIDES_HELP,
                             )
-                        elif key in ('bilateral_mirror_motor',):
-                            updates[key] = _render_field(
-                                b, key, 'bool', BILATERAL_MIRROR_LABEL, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                            )
-                        elif key == 'recruitment':
-                            skr = _widget_key('recruitment')
-                            cur_r = _get_session_value(b, 'recruitment', 'bilateral_simultaneous')
-                            if skr not in st.session_state:
-                                st.session_state[skr] = cur_r if cur_r in RECRUITMENT_OPTIONS else RECRUITMENT_OPTIONS[0]
-                            updates[key] = st.selectbox(
-                                'Recruitment',
-                                list(RECRUITMENT_OPTIONS),
-                                key=skr,
-                                help=RECRUITMENT_FIELD_HELP,
-                            )
-                        elif key == 'lateral_mode':
-                            skl = _widget_key('lateral_mode')
-                            if skl not in st.session_state:
-                                st.session_state[skl] = str(_get_session_value(b, key) or '')
-                            updates[key] = st.text_input(
-                                LATERAL_MODE_LABEL, key=skl, help=ISOVELOCITY_FIELD_HELP.get('lateral_mode')
-                            )
-                        elif key == 'bilateral_sequential_left_frac':
-                            updates[key] = _render_field(
-                                b, key, 'float', 'Left-side fraction (0-1)', help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                            )
                         elif key == 'isovelocity_velocity_mode':
                             pass  # required-only; rendered in Required section
-                        elif key in (
-                            'block_sequence',
-                            'left_stim_voltage',
-                            'right_stim_voltage',
-                            'block_reset_ramp_duration_s',
-                        ):
-                            continue
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:

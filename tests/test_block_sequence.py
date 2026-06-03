@@ -88,6 +88,25 @@ def test_route_stim_sides_volts_both_different_voltages(b):
     assert np.max(np.abs(s2)) == pytest.approx(7.0)
 
 
-def test_lateral_index_for_block_direction(b):
+def test_preview_append_neutral_reset_skips_noop():
+    """At neutral with zero ramp, preview must not append a spurious reset segment."""
+    from bender_gui_preview import _preview_append_neutral_reset
+
+    b = _BlockHelperBender()
+    t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks = [], [], [], [], []
+    toff, last_deg = _preview_append_neutral_reset(
+        b, 0.0, 0.0, 1000.0, t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks, 0.0,
+    )
+    assert toff == 0.0
+    assert last_deg == 0.0
+    assert t_chunks == []
+
+
+def test_run_neutral_reset_segment_skips_noop(b):
+    """At neutral with zero ramp, backend must not run DAQ for a reset segment."""
+    b.daq_ai_sample_rate_hz = 1000.0
+    b.daq_ao_do_sample_rate_hz = 1000.0
+    result = b._run_neutral_reset_segment(0.0, 0.0, 'mock_device')
+    assert result == 0.0
     assert b._lateral_index_for_block_direction('left') == b.specimen_side_index_left
     assert b._lateral_index_for_block_direction('right') == b.specimen_side_index_right

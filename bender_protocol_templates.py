@@ -77,14 +77,12 @@ STIM_PARAMS_WIDGET_FIELD_MAP = {
     'isovelocity_stim_params': {
         'is_stim': 'isovelocity_stim_enable',
         'stim_pulse_rate': 'isovelocity_stim_pulse_rate',
-        'stim_voltage': 'isovelocity_stim_voltage',
         'settle_before_stim_s': 'isovelocity_settle_before_stim_s',
         'pre_iso_stim_duration_s': 'isovelocity_pre_iso_stim_duration_s',
     },
     'isometric_stim_params': {
         'is_stim': 'isometric_stim_enable',
         'stim_pulse_rate': 'isometric_stim_pulse_rate',
-        'stim_voltage': 'isometric_stim_voltage',
         'settle_before_stim_s': 'isometric_settle_before_stim_s',
     },
 }
@@ -236,12 +234,10 @@ def inject_procedure_value_into_session_state(
         defaults = {
             'isovelocity_stim_enable': False,
             'isovelocity_stim_pulse_rate': 75.0,
-            'isovelocity_stim_voltage': 5.0,
             'isovelocity_settle_before_stim_s': 0.02,
             'isovelocity_pre_iso_stim_duration_s': 0.0,
             'isometric_stim_enable': False,
             'isometric_stim_pulse_rate': 75.0,
-            'isometric_stim_voltage': 5.0,
             'isometric_settle_before_stim_s': 0.5,
         }
         for param_key, widget_name in field_map.items():
@@ -305,7 +301,6 @@ def inject_procedure_value_into_session_state(
         return
 
     if key == 'block_sequence':
-        session_state['gui_enable_block_sequence'] = isinstance(value, list) and len(value) > 0
         if isinstance(value, list) and value:
             session_state['gui_block_seq_count'] = max(1, min(12, len(value)))
             for i, block in enumerate(value):
@@ -316,6 +311,10 @@ def inject_procedure_value_into_session_state(
                     session_state[widget_key(f'block_{i}_stim_sides')] = str(
                         block.get('stim_sides', 'left')
                     ).lower()
+        else:
+            session_state['gui_block_seq_count'] = 1
+            session_state[widget_key('block_0_direction')] = 'left'
+            session_state[widget_key('block_0_stim_sides')] = 'left'
         return
 
     if key in ('left_stim_voltage', 'right_stim_voltage', 'block_reset_ramp_duration_s'):
