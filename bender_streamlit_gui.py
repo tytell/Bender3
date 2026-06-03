@@ -3193,7 +3193,7 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
     _geom_pos_str = str(st.session_state.get('morpho_geom_pos') or '').strip()
     if _geom_x_str or _geom_y_str or _geom_pos_str:
         if not (_geom_x_str and _geom_y_str and _geom_pos_str):
-            out.append((_CHK_SEC_MORPHO, 'Specimen geometry needs all three lists (heights x, depths y, position vs AoR).'))
+            out.append((_CHK_SEC_MORPHO, 'Specimen geometry needs all three lists (heights x, widths y, position vs AoR).'))
         else:
             try:
                 _gx = _parse_comma_floats(_geom_x_str)
@@ -3207,7 +3207,7 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
                 elif len(_gx) < 2:
                     out.append((_CHK_SEC_MORPHO, 'Specimen geometry needs >= 2 stations.'))
                 else:
-                    for _lbl, _vals in (('height x', _gx), ('depth y', _gy)):
+                    for _lbl, _vals in (('height x', _gx), ('width y', _gy)):
                         for _val in _vals:
                             if _val <= 0:
                                 out.append((_CHK_SEC_MORPHO, f'Specimen geometry {_lbl}: invalid ({_val:g} mm).'))
@@ -3740,7 +3740,7 @@ def _parse_comma_floats(s: str) -> list[float]:
 
 
 def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
-    """User-defined specimen geometry (x heights, y depths, AoR-relative positions) → ``b``.
+    """User-defined specimen geometry (x heights, y widths, AoR-relative positions) → ``b``.
 
     Builds the center-axis specimen MOI model. The model is optional: if all three lists
     are blank, nothing is computed. Parse / equal-length / numeric guards surface loudly
@@ -3757,7 +3757,7 @@ def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
         return  # no specimen geometry model requested
     if not (x_str and y_str and pos_str):
         st.session_state['gui_morpho_geom_feedback'] = (
-            'Specimen geometry needs all three lists (heights x, depths y, position vs AoR).'
+            'Specimen geometry needs all three lists (heights x, widths y, position vs AoR).'
         )
         _mark_morpho_applied()
         return
@@ -3827,7 +3827,7 @@ def _sync_morphometric_flags_from_session(b: Bender):
 
 
 def _morpho_geometry_strings_from_bender(b: Bender) -> tuple[str, str, str]:
-    """Comma-separated heights/depths/positions strings from stored specimen geometry; '' if none."""
+    """Comma-separated heights/widths/positions strings from stored specimen geometry; '' if none."""
 
     def _fmt(seq) -> str:
         if not isinstance(seq, (list, tuple)) or len(seq) == 0:
@@ -7302,7 +7302,7 @@ def main():
                 st.caption(
                     'Define the specimen as cross-section stations along its length. Enter three '
                     '**equal-length**, comma-separated lists (one value per station). Cross-sections '
-                    'are ellipses with semi-axes height/2 and depth/2 (mirrors the existing '
+                    'are ellipses with semi-axes height/2 and width/2 (mirrors the existing '
                     'convention). I_spec is computed about the **center transverse axis** (AoR = 0). '
                     '⚠️ I_spec is **NOT rod-scale validated** — leave inertial correction OFF unless '
                     'validated on the rig.'
@@ -7317,10 +7317,10 @@ def main():
                     )
                 with g2:
                     st.text_input(
-                        'Depths y (mm, comma-separated)',
+                        'Widths y (mm, comma-separated)',
                         key='morpho_geom_y',
                         placeholder='e.g. 3, 2, 1',
-                        help='Cross-section depth per station (full dimension, each > 0).',
+                        help='Cross-section width per station (full dimension, each > 0).',
                     )
                 with g3:
                     st.text_input(
