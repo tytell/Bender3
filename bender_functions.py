@@ -2637,11 +2637,17 @@ class Bender:
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
             raise ValueError("_run_neutral_reset_segment requires device_name or self.device_name.")
-        # A neutral reset is degenerate (single-sample, zero-length timeline) when there is no
-        # displacement to ramp (already at 0°) OR no ramp time. Skip either case; acquiring a
-        # zero-length segment is meaningless and _timeline_ramp_hold would raise.
-        if abs(from_deg) < 1e-12 or ramp_s <= 0:
+        # Already at neutral: no reset needed regardless of ramp (ramping 0°->0° is a no-op that
+        # would collapse _timeline_ramp_hold to a single sample). Skip it.
+        if abs(from_deg) < 1e-12:
             return 0.0
+        # A real reset (motor not at 0°) cannot happen in zero time: require a positive ramp so the
+        # motor is slewed back to neutral under control. Refuse to silently skip a needed reset.
+        if ramp_s <= 0:
+            raise ValueError(
+                f"block_reset_ramp_duration_s must be > 0 s to return the motor to neutral from "
+                f"{from_deg:.6g}° before the next block; got {ramp_duration_s!r}."
+            )
         daq_hz = float(self.daq_ai_sample_rate_hz)
         t, angle, anglevel = self._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
         s1 = np.zeros_like(t)
@@ -2988,11 +2994,14 @@ class Bender:
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
             if k not in sp and getattr(self, k, None) is not None:
                 sp[k] = getattr(self, k)
+        # Negative stim onset for isometric is measured back into the pre-hold ramp: the ramp is
+        # the only time before the hold (active segment) starts, so it bounds how negative onset
+        # can go (stim may begin partway through the ramp, never before t=0).
         self._validate_stim_timing_for_steps(
             sp,
             test_type='isometric',
             num_steps=int(num_steps),
-            pre_hold_at_start_s=0.0,
+            pre_hold_at_start_s=float(sp.get('ramp_duration_s', 2.0)),
             segment_duration_s=float(sp.get('hold_duration_s', 5.0)),
         )
         vals = np.linspace(float(initial), float(final), int(num_steps))

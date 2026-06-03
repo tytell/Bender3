@@ -431,11 +431,16 @@ def _preview_append_neutral_reset(
     """Append a neutral (0°) ramp segment to preview chunk lists."""
     from_deg = float(from_deg)
     ramp_s = float(ramp_s)
-    # A neutral reset is degenerate (produces a single-sample, zero-length timeline) when
-    # there is no displacement to ramp (already at 0°) OR no ramp time. Skip either case;
-    # _timeline_ramp_hold collapses the ramp whenever |a1 - a0| < 1e-12 or ramp_s <= 0.
-    if abs(from_deg) < 1e-12 or ramp_s <= 0:
+    # Already at neutral: no reset needed (ramping 0°->0° is a no-op that would collapse
+    # _timeline_ramp_hold to a single sample). Skip regardless of ramp.
+    if abs(from_deg) < 1e-12:
         return toff, 0.0
+    # A real reset cannot happen in zero time; mirror the backend guard so preview and run agree.
+    if ramp_s <= 0:
+        raise ValueError(
+            f"block_reset_ramp_duration_s must be > 0 s to return the motor to neutral from "
+            f"{from_deg:.6g}° before the next block."
+        )
     tloc, aloc, wloc = b._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
     z = np.zeros_like(tloc)
     t_chunks.append(np.asarray(tloc, dtype=float) + toff)
@@ -644,8 +649,9 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
 
         try:
             if block_seq:
+                _reset_ramp_attr = getattr(b, 'block_reset_ramp_duration_s', None)
                 reset_ramp = float(
-                    getattr(b, 'block_reset_ramp_duration_s', sp.get('ramp_duration_s', 2.0)) or 2.0
+                    _reset_ramp_attr if _reset_ramp_attr is not None else sp.get('ramp_duration_s', 2.0)
                 )
                 left_v = float(getattr(b, 'left_stim_voltage', 5.0) or 5.0)
                 right_v = float(getattr(b, 'right_stim_voltage', 5.0) or 5.0)
@@ -787,7 +793,8 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         )
     try:
         if block_seq:
-            reset_ramp = float(getattr(b, 'block_reset_ramp_duration_s', 2.0) or 2.0)
+            _reset_ramp_attr = getattr(b, 'block_reset_ramp_duration_s', None)
+            reset_ramp = float(_reset_ramp_attr if _reset_ramp_attr is not None else 2.0)
             left_v = float(getattr(b, 'left_stim_voltage', 5.0) or 5.0)
             right_v = float(getattr(b, 'right_stim_voltage', 5.0) or 5.0)
             daq_hz = float(getattr(b, 'daq_ai_sample_rate_hz', 0.0) or 0.0)

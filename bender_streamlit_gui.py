@@ -1967,8 +1967,9 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
                 key=onset_sk,
                 format='%.6g',
                 help=(
-                    'Signed seconds from hold start (after ramp). Negative values are not used for isometric '
-                    '(no pre-hold); use 0 or positive.'
+                    'Signed seconds from hold start (active segment). Negative = stim begins during the '
+                    'pre-hold ramp; it cannot start before the ramp begins (limited by ramp duration). '
+                    '0 = at hold start; positive = later in the hold.'
                 ),
             )
         )
@@ -2013,11 +2014,12 @@ def _validate_procedure_stim_timing(b: Bender, updates: dict, tt: str) -> Option
                 return None
             num_steps = updates.get('isometric_num_steps', getattr(b, 'isometric_num_steps', 1))
             hold_s = float(sp.get('hold_duration_s', 5.0))
+            ramp_s = float(sp.get('ramp_duration_s', 2.0))
             b._validate_stim_timing_for_steps(
                 sp,
                 test_type='isometric',
                 num_steps=int(num_steps),
-                pre_hold_at_start_s=0.0,
+                pre_hold_at_start_s=ramp_s,
                 segment_duration_s=hold_s,
             )
         elif tt == 'isovelocity':

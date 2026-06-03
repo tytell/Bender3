@@ -132,6 +132,26 @@ def test_run_neutral_reset_segment_skips_zero_displacement_with_ramp(b):
     assert result == 0.0
 
 
+def test_run_neutral_reset_segment_requires_positive_ramp_for_real_reset(b):
+    """A needed reset (motor off neutral) cannot take zero time; must raise, not silently skip."""
+    b.daq_ai_sample_rate_hz = 1000.0
+    b.daq_ao_do_sample_rate_hz = 1000.0
+    with pytest.raises(ValueError, match='must be > 0 s'):
+        b._run_neutral_reset_segment(12.5, 0.0, 'mock_device')
+
+
+def test_preview_append_neutral_reset_requires_positive_ramp_for_real_reset():
+    """Preview mirrors the backend: a real reset with non-positive ramp raises."""
+    from bender_gui_preview import _preview_append_neutral_reset
+
+    b = _BlockHelperBender()
+    t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks = [], [], [], [], []
+    with pytest.raises(ValueError, match='must be > 0 s'):
+        _preview_append_neutral_reset(
+            b, 12.5, 0.0, 1000.0, t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks, 0.0,
+        )
+
+
 def test_resolve_stim_onset_duration_migrates_legacy_settle(b):
     onset, dur = b._resolve_stim_onset_duration_s(
         {'settle_before_stim_s': 0.5, 'stim_duration_s': 2.0},
@@ -148,6 +168,29 @@ def test_resolve_stim_onset_duration_migrates_pre_iso(b):
     )
     assert onset == pytest.approx(-0.1)
     assert dur == pytest.approx(0.15)
+
+
+def test_isometric_negative_onset_budget_is_ramp_duration(b):
+    """Isometric negative onset may reach back into the ramp, but not before it (budget = ramp)."""
+    ramp_s = 2.0
+    hold_s = 5.0
+    # Onset -1.5 s starts 1.5 s into a 2 s ramp: within budget, must pass.
+    b._validate_stim_timing_for_steps(
+        {'is_stim': True, 'stim_onset_s': -1.5, 'stim_duration_s': 1.0},
+        test_type='isometric',
+        num_steps=3,
+        pre_hold_at_start_s=ramp_s,
+        segment_duration_s=hold_s,
+    )
+    # Onset -2.5 s would start before the ramp begins (budget exceeded): must raise.
+    with pytest.raises(ValueError, match='before the allowed pre-hold'):
+        b._validate_stim_timing_for_steps(
+            {'is_stim': True, 'stim_onset_s': -2.5, 'stim_duration_s': 1.0},
+            test_type='isometric',
+            num_steps=3,
+            pre_hold_at_start_s=ramp_s,
+            segment_duration_s=hold_s,
+        )
 
 
 def test_validate_stim_timing_bounds_rejects_pre_hold_bleed(b):
