@@ -128,11 +128,19 @@ injection helpers.
 ---
 
 ## Streamlit layout and navigation
-- Routing uses `st.session_state['gui_app_route']`: `landing`, 
-  `scratch`, `templates`, `stepwise`, `sim_compare`, `h5_explorer`.
-- Landing: sidebar hidden; hero + workflow cards; Settings expander.
-- Workflows: scratch, templates, stepwise (steps 1–5).
-- User-facing triad: Hardware configuration, Biometrics, Protocol.
+- Routing uses `st.session_state['gui_app_route']`: `landing`, `scratch`
+  (the single **Run experiment** engine), `sim_compare`, `h5_explorer`.
+  The `templates` and `stepwise` routes still exist in code as deferred training
+  modes (ux_spec §2.2) but are no longer exposed as separate home entries.
+- Landing: a single **Run experiment** entry (routes to `scratch`), plus
+  **Simulate Bending Mechanics** and **Visualize Data**. Settings live in the sidebar.
+- Run experiment is one scrolling page with four VERTICAL sections, each with a
+  single Apply, ordered by change frequency: (1) Config / Filepath,
+  (2) Specimen, (3) Clamp geometry & inertial correction, (4) Experimental protocol.
+  The Config+Path gate keeps the experiment pane hidden until both are applied.
+- No status sidebar: readiness is shown inline by each section (dirty reminders +
+  applied/selected status). KILL DAQ sits next to the Run button (it resets the NI
+  device but cannot interrupt a synchronous in-progress run — see safety notes).
 - Session state keys: `gui_*` or `gui_cfg_*` / `gui_h5_*`.
 
 ---
