@@ -222,15 +222,31 @@ def export_primary_h5(
             'primary_torque_corrected': np.asarray(getattr(bender, 'primary_torque_corrected', np.array([]))),
         }]
 
+    # Store the file's own name, not the absolute path: portable across machines and avoids
+    # leaking the rig's directory layout into the data file.
+    filename_only = os.path.basename(final_path)
+    # Experiment start time as ISO-8601. ``bender.timestamp`` is the compact run stamp
+    # (``%Y%m%d-%H%M%S``); convert it (falling back to now()) without overwriting it.
+    ts_raw = str(getattr(bender, 'timestamp', '') or '').strip()
+    try:
+        start_dt = datetime.strptime(ts_raw, '%Y%m%d-%H%M%S')
+    except (ValueError, TypeError):
+        start_dt = datetime.now()
+    start_time_iso = start_dt.isoformat()
+
     with h5py.File(final_path, 'w') as f:
         f.attrs['schema_version'] = h5_schema_version
         f.attrs['test_type'] = test_type
         f.attrs['post-trial notes'] = notes
+        f.attrs['filename'] = filename_only
+        f.attrs['start_time_iso'] = start_time_iso
 
         g_meta = f.create_group('01_Metadata')
         g_meta.attrs['test_type'] = test_type
         g_meta.attrs['schema_version'] = h5_schema_version
         g_meta.attrs['post-trial notes'] = notes
+        g_meta.attrs['filename'] = filename_only
+        g_meta.attrs['start_time_iso'] = start_time_iso
 
         g_cal_link = g_meta.create_group('calibration_link')
         g_cal_link.attrs['use_inertial_calibration'] = bool(use_cal)
@@ -269,6 +285,15 @@ def export_primary_h5(
             n = int(t_arr.size)
             if n <= 0:
                 n = int(max(s1_arr.size, s2_arr.size, cyc_arr.size, 0))
+            # Align cycle_index_by_sample to the trial's sample count so the written dataset and
+            # the stim-state logic agree with the time base (pad unknown samples with -1, the
+            # "not a numbered cycle" tag; truncate any overrun).
+            if n > 0 and cyc_arr.size > 0 and cyc_arr.size != n:
+                cyc_aligned = np.full(n, -1, dtype=int)
+                m = min(n, cyc_arr.size)
+                cyc_aligned[:m] = np.asarray(cyc_arr[:m]).astype(int, copy=False)
+                cyc_arr = cyc_aligned
+                rec['cycle_index_by_sample'] = cyc_aligned
             if n > 0:
                 s1 = np.zeros(n, dtype=float)
                 s2 = np.zeros(n, dtype=float)
@@ -396,6 +421,9 @@ def export_primary_h5(
             'S1stimcmd', 'S2stimcmd', 'trial_records',
             # Not data: the MasterLogger object must not be serialized into the file.
             'master_logger',
+            # Absolute output path is machine-specific; the portable filename is stored on
+            # the root and 01_Metadata as ``filename`` instead.
+            'outputfile',
         }
         for k, v in bender.__dict__.items():
             if k.startswith('_') or k in skip_keys or v is None:
