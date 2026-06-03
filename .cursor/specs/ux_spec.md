@@ -5,7 +5,7 @@
 - Authority level: Tier 2 (binding for all UI tasks).
 - Scope: `bender_streamlit_gui.py` and any file rendering UI.
 - Read by: Cursor on every session via `.cursor/specs/`.
-- Last reviewed: 2026-05-28.
+- Last reviewed: 2026-06-03.
 
 This document states the intended user experience as a contract. When fixing
 bugs or adding features, conform to this spec. If a request conflicts with
@@ -40,17 +40,26 @@ An offline **Simulate Bending Mechanics** tool may remain accessible from
 home for hardware-free exploration.
 
 ### 2.1 Run Experiment (single scrolling page)
-Sections render sequentially in this fixed order:
+The page is organized as **four vertical sections**, each with exactly **one
+Apply**. Sections stack vertically (never side-by-side); columns are allowed
+only for fields *within* a single section. Sections are ordered by how often
+their values change between runs (most stable first):
 
-1. Hardware Configuration
-2. Data File Path
-3. Specimen Identity
-4. Morphometrics & Conditions
-5. Clamp Geometry
-6. Mounted Body Profile (inertial model)
-7. Protocol / Run
-8. Experiment Preview
+1. **Config / Filepath** — hardware configuration + data file path. A single
+   Apply ("Apply setup") commits both. This section carries the **run gate**:
+   the experiment sections below stay hidden until Config + Path are applied.
+   The gate is a safety feature and must be preserved.
+2. **Specimen** — identity (genus/species, specimen ID, prep/segment label),
+   universal morphometrics (lengths, mass), session temperature (editable),
+   and prep condition. One Apply commits only this section's fields. There is
+   a single "prep condition" field — no duplicate.
+3. **Clamp geometry + inertial correction** — clamp spacing/offsets,
+   cross-section, mounted body profile, density, and the inertial-correction
+   flag. One Apply commits only this section's fields (the former separate
+   clamp-geometry and profile/inertial Applies are merged into one).
+4. **Experimental protocol** — protocol/run fields, preview, run, save.
 
+- Each Apply commits **only** its own section's fields.
 - No stepwise tabs. All sections always rendered, so all fields always live
   in session_state.
 - Review of recorded data does **not** live here. All post-hoc review,
@@ -79,7 +88,8 @@ document it for the grant.
 This is the central interaction contract.
 
 - The user fills fields freely. Typing has **no downstream consequence**.
-- Each major section has an explicit **Apply** button.
+- Each of the four sections (2.1) has **exactly one** explicit **Apply**
+  button, and that Apply commits only that section's fields.
 - Values are committed to `st.session_state` and validated **only** when Apply
   is clicked.
 - Status icons (green check / yellow caution) update **only** after Apply.
