@@ -65,15 +65,29 @@ MOTION_PROCEDURE_KEYS: Dict[str, List[str]] = {
     ],
 }
 
-# Keys edited as JSON text areas in the GUI
+# Keys edited as JSON text areas in the GUI (stim routing overrides only; stim params use widgets)
 JSON_DICT_KEYS = frozenset(
     {
-        'isometric_stim_params',
         'isometric_stim_overrides',
-        'isovelocity_stim_params',
         'isovelocity_stim_overrides',
     }
 )
+
+STIM_PARAMS_WIDGET_FIELD_MAP = {
+    'isovelocity_stim_params': {
+        'is_stim': 'isovelocity_stim_enable',
+        'stim_pulse_rate': 'isovelocity_stim_pulse_rate',
+        'stim_voltage': 'isovelocity_stim_voltage',
+        'settle_before_stim_s': 'isovelocity_settle_before_stim_s',
+        'pre_iso_stim_duration_s': 'isovelocity_pre_iso_stim_duration_s',
+    },
+    'isometric_stim_params': {
+        'is_stim': 'isometric_stim_enable',
+        'stim_pulse_rate': 'isometric_stim_pulse_rate',
+        'stim_voltage': 'isometric_stim_voltage',
+        'settle_before_stim_s': 'isometric_settle_before_stim_s',
+    },
+}
 
 LIST_FLOAT_KEYS = frozenset(
     {
@@ -215,6 +229,30 @@ def inject_procedure_value_into_session_state(
 ) -> None:
     """Set one ``fld_<key>`` (and helpers) from a JSON-loaded value."""
     sk = widget_key(key)
+
+    if key in STIM_PARAMS_WIDGET_FIELD_MAP:
+        field_map = STIM_PARAMS_WIDGET_FIELD_MAP[key]
+        sp = dict(value) if isinstance(value, dict) else {}
+        defaults = {
+            'isovelocity_stim_enable': False,
+            'isovelocity_stim_pulse_rate': 75.0,
+            'isovelocity_stim_voltage': 5.0,
+            'isovelocity_settle_before_stim_s': 0.02,
+            'isovelocity_pre_iso_stim_duration_s': 0.0,
+            'isometric_stim_enable': False,
+            'isometric_stim_pulse_rate': 75.0,
+            'isometric_stim_voltage': 5.0,
+            'isometric_settle_before_stim_s': 0.5,
+        }
+        for param_key, widget_name in field_map.items():
+            wsk = widget_key(widget_name)
+            if param_key == 'is_stim':
+                session_state[wsk] = bool(sp.get('is_stim', defaults.get(widget_name, False)))
+            elif param_key in sp and sp[param_key] is not None:
+                session_state[wsk] = float(sp[param_key])
+            elif wsk not in session_state:
+                session_state[wsk] = defaults.get(widget_name, 0.0)
+        return
 
     if key in JSON_DICT_KEYS:
         if value is None or value == {}:

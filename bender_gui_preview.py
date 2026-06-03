@@ -282,7 +282,7 @@ def _preview_concat_isovelocity_timeline(
     settle_before_stim_s = float(sp.get('settle_before_stim_s', 0.02))
     pre_iso_stim_duration_s = float(sp.get('pre_iso_stim_duration_s', 0.0))
     stim_duration_s = sp.get('stim_duration_s', None)
-    is_stim = bool(sp.get('is_stim', True))
+    is_stim = bool(sp.get('is_stim', False))
     stim_voltage = float(sp.get('stim_voltage', 5.0))
     rec = b._normalize_recruitment(
         sp.get('recruitment', sp.get('lateral_mode', getattr(b, 'recruitment', 'bilateral_simultaneous')))
