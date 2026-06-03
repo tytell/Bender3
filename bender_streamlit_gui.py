@@ -1849,47 +1849,50 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
         st.checkbox(
             'Enable stimulation',
             key=enable_sk,
-            help=MOTION_FIELD_HELP.get('is_stim'),
+            help=(
+                'Gates only whether stimulation fires during the run. The stim settings below stay '
+                'visible and editable either way, so values are preserved while toggling and you can '
+                'pre-condition (run with stim off, then enable) or tune.'
+            ),
         )
     )
     onset_sk = _widget_key('isovelocity_stim_onset_s')
     duration_sk = _widget_key('isovelocity_stim_duration_s')
-    onset = float(st.session_state[onset_sk])
-    duration = float(st.session_state[duration_sk])
+    pr_sk = _widget_key('isovelocity_stim_pulse_rate')
 
-    pulse_rate = float(st.session_state[_widget_key('isovelocity_stim_pulse_rate')])
+    pulse_rate = float(
+        st.number_input(
+            'Stim pulse rate (Hz)',
+            key=pr_sk,
+            format='%.6g',
+            min_value=0.0,
+            help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
+        )
+    )
+    onset = float(
+        st.number_input(
+            'Stim onset (s, relative to active-segment start)',
+            key=onset_sk,
+            format='%.6g',
+            help=(
+                'Signed seconds from constant-velocity segment start. Negative = pre-activation during '
+                'pre-hold; 0 = at segment start; positive = after.'
+            ),
+        )
+    )
+    duration = float(
+        st.number_input(
+            'Stim duration (s)',
+            key=duration_sk,
+            format='%.6g',
+            min_value=0.0,
+            help='How long stimulation runs from onset.',
+        )
+    )
 
+    # Validation guards apply only when stim will fire; disabled stim never blocks Apply so
+    # values are preserved for pre-conditioning and tuning.
     if enable:
-        pr_sk = _widget_key('isovelocity_stim_pulse_rate')
-        pulse_rate = float(
-            st.number_input(
-                'Stim pulse rate (Hz)',
-                key=pr_sk,
-                format='%.6g',
-                min_value=0.0,
-                help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
-            )
-        )
-        onset = float(
-            st.number_input(
-                'Stim onset (s, relative to active-segment start)',
-                key=onset_sk,
-                format='%.6g',
-                help=(
-                    'Signed seconds from constant-velocity segment start. Negative = pre-activation during '
-                    'pre-hold; 0 = at segment start; positive = after.'
-                ),
-            )
-        )
-        duration = float(
-            st.number_input(
-                'Stim duration (s)',
-                key=duration_sk,
-                format='%.6g',
-                min_value=0.0,
-                help='How long stimulation runs from onset.',
-            )
-        )
         if not (np.isfinite(pulse_rate) and pulse_rate > 0):
             _st_error_actions(
                 'Stim pulse rate invalid.',
@@ -1899,17 +1902,16 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
         if not (np.isfinite(duration) and duration > 0):
             _st_error_actions('Stim duration invalid.', ['Enter a value > 0 s'])
             return None
-    if not np.isfinite(onset):
-        _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
-        return None
+        if not np.isfinite(onset):
+            _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
+            return None
 
     params: dict = {
         'is_stim': enable,
-        'stim_onset_s': onset,
-        'stim_duration_s': duration if enable else None,
+        'stim_onset_s': onset if np.isfinite(onset) else 0.0,
+        'stim_duration_s': duration,
+        'stim_pulse_rate': pulse_rate,
     }
-    if enable:
-        params['stim_pulse_rate'] = pulse_rate
     return params
 
 
@@ -1942,14 +1944,16 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
         st.checkbox(
             'Enable stimulation',
             key=enable_sk,
-            help=MOTION_FIELD_HELP.get('is_stim'),
+            help=(
+                'Gates only whether stimulation fires during the run. The stim settings below stay '
+                'visible and editable either way, so values are preserved while toggling and you can '
+                'pre-condition (run with stim off, then enable) or tune.'
+            ),
         )
     )
     onset_sk = _widget_key('isometric_stim_onset_s')
     duration_sk = _widget_key('isometric_stim_duration_s')
-    onset = float(st.session_state[onset_sk])
-    duration = float(st.session_state[duration_sk])
-    pulse_rate = float(st.session_state[_widget_key('isometric_stim_pulse_rate')])
+    pr_sk = _widget_key('isometric_stim_pulse_rate')
 
     hold_sk = _widget_key('isometric_hold_duration_s')
     hold_duration = float(
@@ -1965,38 +1969,40 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
         )
     )
 
+    pulse_rate = float(
+        st.number_input(
+            'Stim pulse rate (Hz)',
+            key=pr_sk,
+            format='%.6g',
+            min_value=0.0,
+            help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
+        )
+    )
+    onset = float(
+        st.number_input(
+            'Stim onset (s, relative to active-segment start)',
+            key=onset_sk,
+            format='%.6g',
+            help=(
+                'Signed seconds from hold start (active segment). Negative = stim begins during the '
+                'pre-hold ramp; it cannot start before the ramp begins (limited by ramp duration). '
+                '0 = at hold start; positive = later in the hold.'
+            ),
+        )
+    )
+    duration = float(
+        st.number_input(
+            'Stim duration (s)',
+            key=duration_sk,
+            format='%.6g',
+            min_value=0.0,
+            help='How long stimulation runs from onset.',
+        )
+    )
+
+    # Validation guards apply only when stim will fire; disabled stim never blocks Apply so
+    # values are preserved for pre-conditioning and tuning.
     if enable:
-        pr_sk = _widget_key('isometric_stim_pulse_rate')
-        pulse_rate = float(
-            st.number_input(
-                'Stim pulse rate (Hz)',
-                key=pr_sk,
-                format='%.6g',
-                min_value=0.0,
-                help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
-            )
-        )
-        onset = float(
-            st.number_input(
-                'Stim onset (s, relative to active-segment start)',
-                key=onset_sk,
-                format='%.6g',
-                help=(
-                    'Signed seconds from hold start (active segment). Negative = stim begins during the '
-                    'pre-hold ramp; it cannot start before the ramp begins (limited by ramp duration). '
-                    '0 = at hold start; positive = later in the hold.'
-                ),
-            )
-        )
-        duration = float(
-            st.number_input(
-                'Stim duration (s)',
-                key=duration_sk,
-                format='%.6g',
-                min_value=0.0,
-                help='How long stimulation runs from onset.',
-            )
-        )
         if not (np.isfinite(pulse_rate) and pulse_rate > 0):
             _st_error_actions(
                 'Stim pulse rate invalid.',
@@ -2006,21 +2012,20 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
         if not (np.isfinite(duration) and duration > 0):
             _st_error_actions('Stim duration invalid.', ['Enter a value > 0 s'])
             return None
-    if not np.isfinite(onset):
-        _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
-        return None
+        if not np.isfinite(onset):
+            _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
+            return None
     if not (np.isfinite(hold_duration) and hold_duration > 0):
         _st_error_actions('Hold duration invalid.', ['Enter a value > 0 s'])
         return None
 
     params: dict = {
         'is_stim': enable,
-        'stim_onset_s': onset,
-        'stim_duration_s': duration if enable else None,
+        'stim_onset_s': onset if np.isfinite(onset) else 0.0,
+        'stim_duration_s': duration,
         'hold_duration_s': hold_duration,
+        'stim_pulse_rate': pulse_rate,
     }
-    if enable:
-        params['stim_pulse_rate'] = pulse_rate
     return params
 
 
