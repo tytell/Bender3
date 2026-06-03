@@ -110,13 +110,13 @@ def _stim_for_ramp_hold(
     spr_raw = sp.get('stim_pulse_rate', None)
     spr = float(spr_raw) if spr_raw is not None else float(getattr(b, 'stim_pulse_rate', 75.0) or 75.0)
     stim_voltage = float(sp.get('stim_voltage', 5.0))
-    settle = float(sp.get('settle_before_stim_s', 0.5))
-    stim_duration_s = sp.get('stim_duration_s', None)
     is_stim = bool(sp.get('is_stim', False))
     seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(b, 'bilateral_sequential_left_frac', 0.5)))
     t = np.asarray(t, dtype=float).reshape(-1)
     if mirror and hold_windows is not None:
         h1, h2 = hold_windows
+        settle = float(sp.get('settle_before_stim_s', 0.5))
+        stim_duration_s = sp.get('stim_duration_s', None)
         active_l = (t >= h1[0] + settle) & (t < h1[1])
         active_r = (t >= h2[0] + settle) & (t < h2[1])
         if stim_duration_s is not None:
@@ -131,11 +131,10 @@ def _stim_for_ramp_hold(
             b._deposit_stim_on_side(p_r, 'right', s1, s2)
             return s1, s2
         return np.zeros_like(t), np.zeros_like(t)
-    t_stim0 = float(ramp_s) + settle
-    if stim_duration_s is None:
-        t_stim1 = float(ramp_s) + float(hold_s)
-    else:
-        t_stim1 = t_stim0 + float(stim_duration_s)
+    onset, dur = b._resolve_stim_onset_duration_s(sp, segment_duration_s=float(hold_s))
+    t_active = float(ramp_s)
+    t_stim0 = t_active + onset
+    t_stim1 = t_stim0 + dur
     t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
     active = (t >= t_stim0) & (t < t_stim1)
     if is_stim and np.any(active):
@@ -260,6 +259,7 @@ def _isovelocity_stim_params_from_b(b: Any) -> dict:
     sp = {
         'iso_duration_s': float(getattr(b, 'isovelocity_iso_duration_s', 0.2) or 0.2),
         'pre_hold_s': float(getattr(b, 'isovelocity_pre_hold_s', 0.3) or 0.3),
+        'stim_onset_s': None,
         'settle_before_stim_s': 0.02,
         'pre_iso_stim_duration_s': 0.0,
         'stim_duration_s': None,
@@ -293,9 +293,6 @@ def _preview_concat_isovelocity_timeline(
         daq_hz = 1000.0
     pre_hold_s = float(sp['pre_hold_s'])
     iso_duration_s = float(sp['iso_duration_s'])
-    settle_before_stim_s = float(sp.get('settle_before_stim_s', 0.02))
-    pre_iso_stim_duration_s = float(sp.get('pre_iso_stim_duration_s', 0.0))
-    stim_duration_s = sp.get('stim_duration_s', None)
     is_stim = bool(sp.get('is_stim', False))
     stim_voltage = float(sp.get('stim_voltage', 5.0))
     rec = b._normalize_recruitment(
@@ -324,6 +321,12 @@ def _preview_concat_isovelocity_timeline(
             'left_stim_voltage': left_v,
             'right_stim_voltage': right_v,
         }
+    iso_timing_kw = {
+        'stim_onset_s': sp.get('stim_onset_s'),
+        'stim_duration_s': sp.get('stim_duration_s'),
+        'settle_before_stim_s': sp.get('settle_before_stim_s'),
+        'pre_iso_stim_duration_s': sp.get('pre_iso_stim_duration_s'),
+    }
 
     th0_fixed = float(theta0_fixed)
     t_chunks: List[np.ndarray] = []
@@ -342,9 +345,6 @@ def _preview_concat_isovelocity_timeline(
                 v1,
                 pre_hold_s=pre_hold_s,
                 iso_duration_s=iso_duration_s,
-                settle_before_stim_s=settle_before_stim_s,
-                pre_iso_stim_duration_s=pre_iso_stim_duration_s,
-                stim_duration_s=stim_duration_s,
                 is_stim=is_stim,
                 spr=spr,
                 stim_voltage=stim_voltage,
@@ -352,6 +352,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='left',
+                **iso_timing_kw,
                 **iso_extra,
             )
             th_mid = float(d1['angle'][-1])
@@ -360,9 +361,6 @@ def _preview_concat_isovelocity_timeline(
                 v2,
                 pre_hold_s=pre_hold_s,
                 iso_duration_s=iso_duration_s,
-                settle_before_stim_s=settle_before_stim_s,
-                pre_iso_stim_duration_s=pre_iso_stim_duration_s,
-                stim_duration_s=stim_duration_s,
                 is_stim=is_stim,
                 spr=spr,
                 stim_voltage=stim_voltage,
@@ -370,6 +368,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='right',
+                **iso_timing_kw,
                 **iso_extra,
             )
             off = float(d1['t'][-1])
@@ -391,9 +390,6 @@ def _preview_concat_isovelocity_timeline(
                 v_sign,
                 pre_hold_s=pre_hold_s,
                 iso_duration_s=iso_duration_s,
-                settle_before_stim_s=settle_before_stim_s,
-                pre_iso_stim_duration_s=pre_iso_stim_duration_s,
-                stim_duration_s=stim_duration_s,
                 is_stim=is_stim,
                 spr=spr,
                 stim_voltage=stim_voltage,
@@ -401,6 +397,7 @@ def _preview_concat_isovelocity_timeline(
                 recruitment=rec,
                 sequential_left_frac=seq_frac,
                 mirror_stim_side=None,
+                **iso_timing_kw,
                 **iso_extra,
             )
             t_seg, a_seg, w_seg = d0['t'], d0['angle'], d0['anglevel']
@@ -466,6 +463,7 @@ def _isometric_stim_params_from_b(b: Any) -> dict:
     sp = {
         'ramp_duration_s': 2.0,
         'hold_duration_s': 5.0,
+        'stim_onset_s': None,
         'settle_before_stim_s': 0.5,
         'stim_duration_s': None,
         'inter_step_interval_s': None,

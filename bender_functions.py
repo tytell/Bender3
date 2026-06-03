@@ -2236,6 +2236,27 @@ class Bender:
                     f"right_stim_voltage must be finite and > 0 when RIGHT stim is used; got {right_voltage!r}."
                 )
 
+    def _resolve_stim_onset_duration_s(self, sp, *, segment_duration_s):
+        """
+        Return ``(stim_onset_s, stim_duration_s)`` relative to active-segment start.
+
+        Migrates legacy ``settle_before_stim_s`` / ``pre_iso_stim_duration_s`` when
+        ``stim_onset_s`` is absent. Legacy ``stim_duration_s=None`` means through segment end.
+        """
+        sp = dict(sp or {})
+        if sp.get('stim_onset_s') is not None:
+            onset = float(sp['stim_onset_s'])
+        elif float(sp.get('pre_iso_stim_duration_s', 0) or 0) > 0:
+            onset = -float(sp['pre_iso_stim_duration_s'])
+        else:
+            onset = float(sp.get('settle_before_stim_s', 0) or 0)
+        seg = float(segment_duration_s)
+        if sp.get('stim_duration_s') is not None:
+            dur = float(sp['stim_duration_s'])
+        else:
+            dur = seg - max(0.0, onset)
+        return onset, dur
+
     def lateral_index_from_side_name(self, side):
         """Map ``'left'`` / ``'right'`` to specimen lateral index (from config)."""
         s = str(side).strip().lower()
@@ -2583,6 +2604,7 @@ class Bender:
         *,
         ramp_duration_s=2.0,
         hold_duration_s=5.0,
+        stim_onset_s=None,
         settle_before_stim_s=0.5,
         stim_duration_s=None,
         inter_step_interval_s=0.0,
@@ -2687,11 +2709,17 @@ class Bender:
                 t, angle, anglevel = self._timeline_ramp_hold(
                     prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz
                 )
-                t_stim0 = float(ramp_duration_s) + float(settle_before_stim_s)
-                if stim_duration_s is None:
-                    t_stim1 = float(ramp_duration_s) + float(hold_duration_s)
-                else:
-                    t_stim1 = t_stim0 + float(stim_duration_s)
+                onset, dur = self._resolve_stim_onset_duration_s(
+                    {
+                        'stim_onset_s': stim_onset_s,
+                        'stim_duration_s': stim_duration_s,
+                        'settle_before_stim_s': settle_before_stim_s,
+                    },
+                    segment_duration_s=float(hold_duration_s),
+                )
+                t_active = float(ramp_duration_s)
+                t_stim0 = t_active + onset
+                t_stim1 = t_stim0 + dur
                 t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
                 active = (t >= t_stim0) & (t < t_stim1)
                 if is_stim and np.any(active):
@@ -2877,6 +2905,7 @@ class Bender:
         sp = {
             'ramp_duration_s': 2.0,
             'hold_duration_s': 5.0,
+            'stim_onset_s': None,
             'settle_before_stim_s': 0.5,
             'stim_duration_s': None,
             'inter_step_interval_s': None,
@@ -2946,8 +2975,9 @@ class Bender:
                     targets_block,
                     ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
                     hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
+                    stim_onset_s=sp.get('stim_onset_s'),
                     settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
-                    stim_duration_s=sp.get('stim_duration_s', None),
+                    stim_duration_s=sp.get('stim_duration_s'),
                     inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
                     is_stim=bool(sp.get('is_stim', False)),
                     stim_pulse_rate=sp.get('stim_pulse_rate', None),
@@ -3031,8 +3061,9 @@ class Bender:
             targets_deg,
             ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
             hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
+            stim_onset_s=sp.get('stim_onset_s'),
             settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
-            stim_duration_s=sp.get('stim_duration_s', None),
+            stim_duration_s=sp.get('stim_duration_s'),
             inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
             is_stim=bool(sp.get('is_stim', False)),
             stim_pulse_rate=sp.get('stim_pulse_rate', None),
@@ -3122,9 +3153,8 @@ class Bender:
         *,
         pre_hold_s,
         iso_duration_s,
-        settle_before_stim_s,
-        pre_iso_stim_duration_s,
-        stim_duration_s,
+        stim_onset_s=None,
+        stim_duration_s=None,
         is_stim,
         spr,
         stim_voltage,
@@ -3135,30 +3165,35 @@ class Bender:
         stim_sides=None,
         left_stim_voltage=None,
         right_stim_voltage=None,
+        settle_before_stim_s=None,
+        pre_iso_stim_duration_s=None,
     ):
         """
         Build one isovelocity timeline + stim commands.
 
         ``mirror_stim_side``: None -> use ``recruitment`` routing; ``'left'`` / ``'right'`` -> that side only
         (for bilateral sequential + bilateral_mirror_motor two-segment runs).
+
+        ``stim_onset_s`` is signed seconds relative to constant-velocity segment start (``t_iso0``).
+        Legacy ``settle_before_stim_s`` / ``pre_iso_stim_duration_s`` kwargs are migrated when onset omitted.
         """
+        stim_onset_s, stim_duration_s = self._resolve_stim_onset_duration_s(
+            {
+                'stim_onset_s': stim_onset_s,
+                'stim_duration_s': stim_duration_s,
+                'settle_before_stim_s': settle_before_stim_s,
+                'pre_iso_stim_duration_s': pre_iso_stim_duration_s,
+            },
+            segment_duration_s=iso_duration_s,
+        )
         t, angle, anglevel, t_iso0 = self._timeline_prehold_isovelocity(
             float(theta_start_deg), float(vel_deg_per_s), float(pre_hold_s), float(iso_duration_s), daq_hz
         )
-        pre_iso_stim_s = float(pre_iso_stim_duration_s)
-        if pre_iso_stim_s < 0:
-            raise ValueError("pre_iso_stim_duration_s must be non-negative.")
-        t_pre0 = max(0.0, t_iso0 - pre_iso_stim_s)
-        t_pre1 = t_iso0
-        t_stim0 = t_iso0 + float(settle_before_stim_s)
-        if stim_duration_s is None:
-            t_stim1 = t_iso0 + float(iso_duration_s)
-        else:
-            t_stim1 = t_stim0 + float(stim_duration_s)
+        t_stim0 = t_iso0 + float(stim_onset_s)
+        t_stim1 = t_stim0 + float(stim_duration_s)
+        t_seg_end = t_iso0 + float(iso_duration_s)
         t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
-        active_pre = (t >= t_pre0) & (t < t_pre1) if pre_iso_stim_s > 0 else np.zeros_like(t, dtype=bool)
-        active_iso = (t >= t_stim0) & (t < t_stim1)
-        active = active_pre | active_iso
+        active = (t >= t_stim0) & (t < t_stim1) if is_stim else np.zeros_like(t, dtype=bool)
         if is_stim and np.any(active):
             if stim_sides is not None:
                 lv = float(left_stim_voltage if left_stim_voltage is not None else stim_voltage)
@@ -3185,11 +3220,11 @@ class Bender:
             'angle': angle,
             'anglevel': anglevel,
             't_iso0': t_iso0,
-            't_pre0': t_pre0,
-            't_pre1': t_pre1,
             't_stim0': t_stim0,
             't_stim1': t_stim1,
-            'iso_t1': t_iso0 + float(iso_duration_s),
+            'stim_onset_s': float(stim_onset_s),
+            'stim_duration_s': float(stim_duration_s),
+            'iso_t1': t_seg_end,
             's1': s1,
             's2': s2,
             'active': active,
@@ -3202,6 +3237,7 @@ class Bender:
         *,
         pre_hold_s=0.3,
         iso_duration_s=0.2,
+        stim_onset_s=None,
         settle_before_stim_s=0.02,
         pre_iso_stim_duration_s=0.0,
         stim_duration_s=None,
@@ -3266,9 +3302,10 @@ class Bender:
         iso_kw = dict(
             pre_hold_s=pre_hold_s,
             iso_duration_s=iso_duration_s,
+            stim_onset_s=stim_onset_s,
+            stim_duration_s=stim_duration_s,
             settle_before_stim_s=settle_before_stim_s,
             pre_iso_stim_duration_s=pre_iso_stim_duration_s,
-            stim_duration_s=stim_duration_s,
             is_stim=is_stim,
             spr=spr,
             stim_voltage=stim_voltage,
@@ -3484,6 +3521,7 @@ class Bender:
         sp = {
             'iso_duration_s': iso_duration_s,
             'pre_hold_s': pre_hold_s,
+            'stim_onset_s': None,
             'settle_before_stim_s': 0.02,
             'pre_iso_stim_duration_s': 0.0,
             'stim_duration_s': None,
@@ -3569,9 +3607,10 @@ class Bender:
                     vels_mag,
                     pre_hold_s=float(sp['pre_hold_s']),
                     iso_duration_s=float(sp['iso_duration_s']),
+                    stim_onset_s=sp.get('stim_onset_s'),
                     settle_before_stim_s=float(sp['settle_before_stim_s']),
                     pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
-                    stim_duration_s=sp.get('stim_duration_s', None),
+                    stim_duration_s=sp.get('stim_duration_s'),
                     is_stim=bool(sp.get('is_stim', False)),
                     stim_pulse_rate=sp.get('stim_pulse_rate', None),
                     stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -3627,9 +3666,10 @@ class Bender:
             vels,
             pre_hold_s=float(sp['pre_hold_s']),
             iso_duration_s=float(sp['iso_duration_s']),
+            stim_onset_s=sp.get('stim_onset_s'),
             settle_before_stim_s=float(sp['settle_before_stim_s']),
             pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
-            stim_duration_s=sp.get('stim_duration_s', None),
+            stim_duration_s=sp.get('stim_duration_s'),
             is_stim=bool(sp.get('is_stim', False)),
             stim_pulse_rate=sp.get('stim_pulse_rate', None),
             stim_voltage=float(sp.get('stim_voltage', 5.0)),

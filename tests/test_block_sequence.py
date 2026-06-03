@@ -108,5 +108,26 @@ def test_run_neutral_reset_segment_skips_noop(b):
     b.daq_ao_do_sample_rate_hz = 1000.0
     result = b._run_neutral_reset_segment(0.0, 0.0, 'mock_device')
     assert result == 0.0
+
+
+def test_resolve_stim_onset_duration_migrates_legacy_settle(b):
+    onset, dur = b._resolve_stim_onset_duration_s(
+        {'settle_before_stim_s': 0.5, 'stim_duration_s': 2.0},
+        segment_duration_s=5.0,
+    )
+    assert onset == pytest.approx(0.5)
+    assert dur == pytest.approx(2.0)
+
+
+def test_resolve_stim_onset_duration_migrates_pre_iso(b):
+    onset, dur = b._resolve_stim_onset_duration_s(
+        {'pre_iso_stim_duration_s': 0.1, 'stim_duration_s': 0.15},
+        segment_duration_s=0.2,
+    )
+    assert onset == pytest.approx(-0.1)
+    assert dur == pytest.approx(0.15)
+
+
+def test_lateral_index_for_block_direction(b):
     assert b._lateral_index_for_block_direction('left') == b.specimen_side_index_left
     assert b._lateral_index_for_block_direction('right') == b.specimen_side_index_right

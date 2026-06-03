@@ -9,6 +9,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import bender_gui_preview as pv
+from bender_functions import Bender as _RealBender
 
 
 class _PreviewBender:
@@ -35,8 +36,11 @@ class _PreviewBender:
         self.isovelocity_num_steps = 2
         self.isovelocity_iso_duration_s = 0.2
         self.isovelocity_pre_hold_s = 0.1
-        self.isometric_stim_params = {'is_stim': True, 'stim_voltage': 5.0}
-        self.isovelocity_stim_params = {'is_stim': True, 'stim_voltage': 5.0}
+        self.block_sequence = [{'direction': 'left', 'stim_sides': 'left'}]
+        self.left_stim_voltage = 5.0
+        self.right_stim_voltage = 5.0
+        self.isometric_stim_params = {'is_stim': True, 'settle_before_stim_s': 0.5}
+        self.isovelocity_stim_params = {'is_stim': True, 'settle_before_stim_s': 0.02}
 
     def _effective_dclamp_mm(self):
         return float(self.dclamp)
@@ -74,6 +78,9 @@ class _PreviewBender:
 
     def _stim_params_with_lateral(self, sp):
         return dict(sp)
+
+    def _resolve_stim_onset_duration_s(self, sp, *, segment_duration_s):
+        return _RealBender._resolve_stim_onset_duration_s(self, sp, segment_duration_s=segment_duration_s)
 
     def _timeline_ramp_hold(self, a0, a1, ramp, hold, hz):
         n = max(4, int((ramp + hold) * hz))

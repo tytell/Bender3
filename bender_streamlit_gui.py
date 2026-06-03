@@ -1468,9 +1468,9 @@ def _flush_pending_bio_prof_rho_sync() -> None:
 ISOMETRIC_STIM_JSON_HELP = (
     'Optional per-step timing and stimulation. **Leave `{}`** unless your protocol needs custom ramps, holds, or stim.\n\n'
     '**Advanced (JSON text):** use `{ "key": value }` with commas. Common keys: **ramp_duration_s**, **hold_duration_s**, '
-    '**settle_before_stim_s**, **stim_duration_s** (null = through rest of hold), **inter_step_interval_s** (0 = back-to-back), '
-    '**is_stim**, **stim_pulse_rate** (Hz), **stim_voltage** (V), **device_name** (null = NI config). '
-    'Example: `{"ramp_duration_s": 2, "hold_duration_s": 5, "stim_pulse_rate": 75}`'
+    '**stim_onset_s** (signed, relative to hold start), **stim_duration_s**, **inter_step_interval_s** (0 = back-to-back), '
+    '**is_stim**, **stim_pulse_rate** (Hz), **device_name** (null = NI config). '
+    'Example: `{"ramp_duration_s": 2, "hold_duration_s": 5, "stim_onset_s": 0.5, "stim_duration_s": 4, "stim_pulse_rate": 75}`'
 )
 ISOMETRIC_STIM_OVERRIDES_HELP = (
     '**Rare.** Overrides stim **routing** (not timing). **Leave `{}`** unless directed.\n\n'
@@ -1479,8 +1479,8 @@ ISOMETRIC_STIM_OVERRIDES_HELP = (
 )
 ISOVELOCITY_STIM_JSON_HELP = (
     'Optional segment timing and stimulation. **Leave `{}`** unless you need overrides.\n\n'
-    '**Advanced (JSON text):** **settle_before_stim_s**, **stim_duration_s** (null = rest of segment), '
-    '**pre_iso_stim_duration_s**, **is_stim**, **stim_pulse_rate**, **stim_voltage**, **device_name**; '
+    '**Advanced (JSON text):** **stim_onset_s** (signed, relative to constant-velocity start), **stim_duration_s**, '
+    '**is_stim**, **stim_pulse_rate**, **device_name**; '
     'optionally **iso_duration_s** / **pre_hold_s** to override the main fields.'
 )
 ISOVELOCITY_STIM_OVERRIDES_HELP = ISOMETRIC_STIM_OVERRIDES_HELP
@@ -1807,6 +1807,21 @@ def _stim_params_dict_from_bender(b: Bender, attr_name: str) -> dict:
     return dict(sp) if isinstance(sp, dict) else {}
 
 
+def _stim_onset_duration_seed_from_sp(sp: dict, *, default_onset: float, default_duration: float) -> tuple[float, float]:
+    """Seed widget values from stim params, migrating legacy settle/pre-iso keys."""
+    if sp.get('stim_onset_s') is not None:
+        onset = float(sp['stim_onset_s'])
+    elif float(sp.get('pre_iso_stim_duration_s', 0) or 0) > 0:
+        onset = -float(sp['pre_iso_stim_duration_s'])
+    else:
+        onset = float(sp.get('settle_before_stim_s', default_onset) or default_onset)
+    if sp.get('stim_duration_s') is not None:
+        duration = float(sp['stim_duration_s'])
+    else:
+        duration = float(default_duration)
+    return onset, duration
+
+
 def _seed_isovelocity_stim_widget_state(b: Bender) -> None:
     """Initialize isovelocity stim widget keys before first render (Apply-button pattern)."""
     sp = _stim_params_dict_from_bender(b, 'isovelocity_stim_params')
@@ -1814,11 +1829,13 @@ def _seed_isovelocity_stim_widget_state(b: Bender) -> None:
     spr_default = float(
         spr_raw if spr_raw is not None else getattr(b, 'stim_pulse_rate', 75.0) or 75.0
     )
+    iso_seg = float(getattr(b, 'isovelocity_iso_duration_s', 0.2) or 0.2)
+    onset, duration = _stim_onset_duration_seed_from_sp(sp, default_onset=0.0, default_duration=iso_seg)
     defaults = {
         'isovelocity_stim_enable': bool(sp.get('is_stim', False)),
         'isovelocity_stim_pulse_rate': spr_default,
-        'isovelocity_settle_before_stim_s': float(sp.get('settle_before_stim_s', 0.02)),
-        'isovelocity_pre_iso_stim_duration_s': float(sp.get('pre_iso_stim_duration_s', 0.0)),
+        'isovelocity_stim_onset_s': onset,
+        'isovelocity_stim_duration_s': duration,
     }
     for name, val in defaults.items():
         sk = _widget_key(name)
@@ -1841,10 +1858,10 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
             help=MOTION_FIELD_HELP.get('is_stim'),
         )
     )
-    settle_sk = _widget_key('isovelocity_settle_before_stim_s')
-    pre_iso_sk = _widget_key('isovelocity_pre_iso_stim_duration_s')
-    settle = float(st.session_state[settle_sk])
-    pre_iso = float(st.session_state[pre_iso_sk])
+    onset_sk = _widget_key('isovelocity_stim_onset_s')
+    duration_sk = _widget_key('isovelocity_stim_duration_s')
+    onset = float(st.session_state[onset_sk])
+    duration = float(st.session_state[duration_sk])
 
     pulse_rate = float(st.session_state[_widget_key('isovelocity_stim_pulse_rate')])
 
@@ -1859,22 +1876,24 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
                 help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
             )
         )
-        settle = float(
+        onset = float(
             st.number_input(
-                'Settle before stim (s)',
-                key=settle_sk,
+                'Stim onset (s, relative to active-segment start)',
+                key=onset_sk,
                 format='%.6g',
-                min_value=0.0,
-                help='Delay after constant-velocity onset before stimulation starts.',
+                help=(
+                    'Signed seconds from constant-velocity segment start. Negative = pre-activation during '
+                    'pre-hold; 0 = at segment start; positive = after.'
+                ),
             )
         )
-        pre_iso = float(
+        duration = float(
             st.number_input(
-                'Pre-iso stim duration (s)',
-                key=pre_iso_sk,
+                'Stim duration (s)',
+                key=duration_sk,
                 format='%.6g',
                 min_value=0.0,
-                help='Optional stimulation window immediately before the velocity ramp (0 = off).',
+                help='How long stimulation runs from onset.',
             )
         )
         if not (np.isfinite(pulse_rate) and pulse_rate > 0):
@@ -1883,18 +1902,17 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
                 ['Enter a value > 0 Hz', 'Or uncheck Enable stimulation'],
             )
             return None
-    if not (np.isfinite(settle) and settle >= 0):
-        _st_error_actions('Settle before stim invalid.', ['Use a value ≥ 0 s'])
-        return None
-    if not (np.isfinite(pre_iso) and pre_iso >= 0):
-        _st_error_actions('Pre-iso stim duration invalid.', ['Use a value ≥ 0 s'])
+        if not (np.isfinite(duration) and duration > 0):
+            _st_error_actions('Stim duration invalid.', ['Enter a value > 0 s'])
+            return None
+    if not np.isfinite(onset):
+        _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
         return None
 
     params: dict = {
         'is_stim': enable,
-        'stim_duration_s': None,
-        'settle_before_stim_s': settle,
-        'pre_iso_stim_duration_s': pre_iso,
+        'stim_onset_s': onset,
+        'stim_duration_s': duration if enable else None,
     }
     if enable:
         params['stim_pulse_rate'] = pulse_rate
@@ -1908,10 +1926,12 @@ def _seed_isometric_stim_widget_state(b: Bender) -> None:
     spr_default = float(
         spr_raw if spr_raw is not None else getattr(b, 'stim_pulse_rate', 75.0) or 75.0
     )
+    onset, duration = _stim_onset_duration_seed_from_sp(sp, default_onset=0.5, default_duration=4.5)
     defaults = {
         'isometric_stim_enable': bool(sp.get('is_stim', False)),
         'isometric_stim_pulse_rate': spr_default,
-        'isometric_settle_before_stim_s': float(sp.get('settle_before_stim_s', 0.5)),
+        'isometric_stim_onset_s': onset,
+        'isometric_stim_duration_s': duration,
     }
     for name, val in defaults.items():
         sk = _widget_key(name)
@@ -1930,8 +1950,10 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
             help=MOTION_FIELD_HELP.get('is_stim'),
         )
     )
-    settle_sk = _widget_key('isometric_settle_before_stim_s')
-    settle = float(st.session_state[settle_sk])
+    onset_sk = _widget_key('isometric_stim_onset_s')
+    duration_sk = _widget_key('isometric_stim_duration_s')
+    onset = float(st.session_state[onset_sk])
+    duration = float(st.session_state[duration_sk])
     pulse_rate = float(st.session_state[_widget_key('isometric_stim_pulse_rate')])
 
     if enable:
@@ -1945,13 +1967,24 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
                 help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
             )
         )
-        settle = float(
+        onset = float(
             st.number_input(
-                'Settle before stim (s)',
-                key=settle_sk,
+                'Stim onset (s, relative to active-segment start)',
+                key=onset_sk,
+                format='%.6g',
+                help=(
+                    'Signed seconds from hold start (after ramp). Negative values are not used for isometric '
+                    '(no pre-hold); use 0 or positive.'
+                ),
+            )
+        )
+        duration = float(
+            st.number_input(
+                'Stim duration (s)',
+                key=duration_sk,
                 format='%.6g',
                 min_value=0.0,
-                help='Delay after ramp ends before stimulation starts during the hold.',
+                help='How long stimulation runs from onset.',
             )
         )
         if not (np.isfinite(pulse_rate) and pulse_rate > 0):
@@ -1960,14 +1993,17 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
                 ['Enter a value > 0 Hz', 'Or uncheck Enable stimulation'],
             )
             return None
-    if not (np.isfinite(settle) and settle >= 0):
-        _st_error_actions('Settle before stim invalid.', ['Use a value ≥ 0 s'])
+        if not (np.isfinite(duration) and duration > 0):
+            _st_error_actions('Stim duration invalid.', ['Enter a value > 0 s'])
+            return None
+    if not np.isfinite(onset):
+        _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
         return None
 
     params: dict = {
         'is_stim': enable,
-        'stim_duration_s': None,
-        'settle_before_stim_s': settle,
+        'stim_onset_s': onset,
+        'stim_duration_s': duration if enable else None,
     }
     if enable:
         params['stim_pulse_rate'] = pulse_rate
