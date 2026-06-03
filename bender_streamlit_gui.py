@@ -3391,81 +3391,6 @@ def _build_checklist_fix_lines(
     return lines
 
 
-def _check_sections_for_sidebar() -> Optional[frozenset[str]]:
-    """Which section labels to show in **Status check**. ``None`` = all sections (full workflow)."""
-    if _nav_route() != 'stepwise':
-        return None
-    s = _stepwise_step()
-    if s <= 0:
-        return frozenset()
-    if s == 1:
-        return frozenset({_CHK_SEC_DATA})
-    if s == 2:
-        return frozenset({_CHK_SEC_BIO})
-    if s == 3:
-        return frozenset({_CHK_SEC_EXP})
-    # Step 5 (index 4): full session review before plots
-    return None
-
-
-def _render_sidebar_stepwise_progress() -> None:
-    """Stepwise HW + path summary (sidebar)."""
-    b = st.session_state.get('bender')
-    st.markdown('**Progress**')
-    if b is None:
-        st.caption('Step 1: load hardware.')
-        return
-    st.caption(f"Module `{getattr(b, 'config_name', '?')}`")
-    composed = _compose_output_h5_path().strip()
-    applied = str(getattr(b, 'outputfile', '') or '').strip()
-    if not applied:
-        if composed:
-            st.success(f"Selected HDF5 → `{os.path.basename(composed)}` (not applied yet — click **Apply setup**)")
-        else:
-            st.caption('Step 2: apply data path.')
-    elif not composed:
-        st.caption('Step 2: set a file name.')
-    elif _paths_equal_norm(applied, composed):
-        st.caption(f"HDF5 → `{os.path.basename(applied)}`")
-    else:
-        st.success(
-            f"Selected HDF5 → `{os.path.basename(composed)}` (selected, not applied yet — click **Apply setup**)"
-        )
-    st.divider()
-
-
-def _render_sidebar_input_checks() -> None:
-    """Status check: suspicious or missing inputs when hardware is loaded; grouped by section, filtered in stepwise."""
-    b = st.session_state.get('bender')
-    if b is None:
-        return
-    items = _collect_check_tuples(b)
-    allowed = _check_sections_for_sidebar()
-    if allowed is not None:
-        items = [(sec, msg) for sec, msg in items if sec in allowed]
-    if not items:
-        return
-    st.markdown('**Status check**')
-    if allowed is None:
-        st.caption('Path, biometrics, and experiment settings worth a second look (full workflow).')
-    else:
-        st.caption(f'For **{_STEPWISE_TAB_LABELS[_stepwise_step()]}** only.')
-    groups: dict[str, list[str]] = {}
-    for sec, msg in items[:24]:
-        groups.setdefault(sec, []).append(msg)
-    parts: list[str] = []
-    for sec, msgs in groups.items():
-        parts.append(f'**{sec}**\n' + '\n'.join(f'- {m}' for m in msgs))
-    st.warning('\n\n'.join(parts))
-    if len(items) > 24:
-        st.caption(f'… and {len(items) - 24} more.')
-    if _CHK_SEC_EXP in groups:
-        st.caption(
-            'Experiment rows combine **Procedure fields** (form) and values on the **Bender** object after **Apply**.'
-        )
-    st.divider()
-
-
 def _render_simulation_sidebar() -> None:
     """Simulation mode: numpy stand-in for DAQ; material affects cantilever stiffness in :meth:`Bender.run`."""
     st.session_state.setdefault('gui_simulation_mode', False)
@@ -6254,81 +6179,18 @@ def _render_app_chrome() -> None:
 
 
 def _render_sidebar() -> None:
-    """Sidebar: unified workflow checklist + emergency + settings."""
-    # #region agent log
-    _agent_debug_log(
-        hypothesis_id='F',
-        location='bender_streamlit_gui.py:_render_sidebar_entry',
-        message='pre_sidebar_state',
-        data={
-            'sess_fishmass': st.session_state.get('bio_fishmass'),
-            'sess_dclamp': st.session_state.get('bio_dclamp'),
-            'bender_fishmass': getattr(st.session_state.get('bender'), 'fishmass', None) if st.session_state.get('bender') is not None else None,
-            'bender_dclamp': getattr(st.session_state.get('bender'), 'dclamp', None) if st.session_state.get('bender') is not None else None,
-            'meas_conf': bool(st.session_state.get('gui_measurements_confirmed')),
-            'invalidated': bool(st.session_state.get('gui_bio_apply_invalidated')),
-            'route': _nav_route(),
-            'step': _stepwise_step() if _nav_route() == 'stepwise' else None,
-        },
-    )
-    # #endregion
+    """Sidebar: simulation controls (offline route) + settings.
+
+    The status checklist panel and the in-sidebar emergency stop were removed (Phase 10b).
+    Readiness is now shown inline by each Apply section (dirty reminders + applied/selected
+    status) and by the Config+Path run gate; KILL DAQ lives next to the **Run experiment** button.
+    """
     with st.sidebar:
         if _nav_route() == 'sim_compare':
             st.markdown('### Simulation & Comparison')
             st.caption('This path does not use NI-DAQ or the live experiment stack. Use **Settings** for display options.')
             _render_sidebar_settings_expander(leading_divider=False)
             return
-        b = st.session_state.get('bender')
-        checks = _collect_check_tuples(b) if b is not None else []
-        checks_by_sec: dict[str, list[str]] = {}
-        for sec, msg in checks:
-            checks_by_sec.setdefault(sec, []).append(msg)
-        st.markdown('**Workflow checklist**')
-        _session_src = str(st.session_state.get('gui_session_source') or 'fresh')
-        st.caption(f"Session: {'Restored' if _session_src == 'restored' else 'Fresh start'}")
-        tt_chk = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
-        _ready = _workflow_ready_state(b, tt_chk)
-        _setup_ok = _ready['setup_ok']
-        _meas_ok = _ready['measurements_ok']
-        _proto_ok = _ready['protocol_ok']
-        _review_used = bool(st.session_state.get('gui_review_data_used'))
-        st.caption(f"1. Setup {'✅' if _setup_ok else '⚠️'}")
-        st.caption(f"2. Measurements {'✅' if _meas_ok else '⚠️'}")
-        st.caption(f"3. Protocol/Run {'✅' if _proto_ok else '⚠️'}")
-        st.caption(f"4. Review Data {'✅' if _review_used else '⚪'}")
-        st.session_state.setdefault('gui_fix_panel_seen', False)
-        if st.button('Click here to fix warning', key='gui_fix_warning_open', use_container_width=True, type='secondary'):
-            st.session_state['gui_fix_panel_open'] = True
-        _show_fix_panel = bool(st.session_state.get('gui_fix_panel_open'))
-        if _show_fix_panel:
-            fix_lines = _build_checklist_fix_lines(
-                b=b,
-                setup_ok=_setup_ok,
-                measurements_ok=_meas_ok,
-                protocol_ok=_proto_ok,
-                checks_by_sec=checks_by_sec,
-                tt=tt_chk,
-            )
-            with st.container(border=True):
-                if fix_lines:
-                    for row in fix_lines:
-                        st.caption(f'- {row}')
-                else:
-                    st.caption('All required checklist steps are complete.')
-                if st.button('Hide fixes', key='gui_fix_warning_hide', use_container_width=True):
-                    st.session_state['gui_fix_panel_open'] = False
-                    st.session_state['gui_fix_panel_seen'] = True
-                    st.rerun()
-            st.session_state['gui_fix_panel_seen'] = True
-        with st.expander('Advanced diagnostics', expanded=False):
-            if checks_by_sec:
-                for sec, rows in checks_by_sec.items():
-                    st.caption(f'{sec}')
-                    for row in rows:
-                        st.caption(f'- {row}')
-            else:
-                st.caption('No diagnostics.')
-        st.divider()
         # No simulation-mode toggle on NI-DAQ experiment workflows (real hardware path only).
         _route = _nav_route()
         if _route in ('stepwise', 'scratch', 'templates'):
@@ -6338,20 +6200,7 @@ def _render_sidebar() -> None:
                 _b.simulation_mode = False
         else:
             _render_simulation_sidebar()
-        with st.container(border=True):
-            st.markdown('### Emergency stop')
-            if st.button(
-                'Stop DAQ & reset NI device',
-                key='gui_kill_daq',
-                type='primary',
-                use_container_width=True,
-            ):
-                ok, msg = _trigger_emergency_stop()
-                if ok:
-                    st.success(msg)
-                else:
-                    st.warning(msg)
-        _render_sidebar_settings_expander(leading_divider=True)
+        _render_sidebar_settings_expander(leading_divider=False)
 
 
 _STEPWISE_TAB_LABELS = (
@@ -8522,6 +8371,31 @@ def main():
                 st.rerun()
         elif _ready_run['protocol_ok'] and _ready_run['setup_ok'] and _ready_run['measurements_ok']:
             st.caption('Checklist complete — review warnings below if any, then run or click Proceed.')
+
+        # KILL DAQ — relocated next to RUN (Phase 10b). Resets the NI device (stops AI/AO/DO).
+        # LOUD LIMITATION FLAG: a run executes synchronously inside st.spinner, which blocks
+        # Streamlit's single script thread. While a run is in progress this button cannot be
+        # clicked to interrupt it — Streamlit will not process the click until run_experiment
+        # returns. It is functional BEFORE/AFTER a run (or from a second browser session) to
+        # reset the device; it is NOT a mid-run interrupt. Do not rely on it as a live e-stop.
+        with st.container(border=True):
+            if st.button(
+                'KILL DAQ — stop & reset NI device',
+                key='gui_kill_daq',
+                type='primary',
+                use_container_width=True,
+                help='Resets the NI-DAQ device (stops tasks, clears outputs).',
+            ):
+                ok, msg = _trigger_emergency_stop()
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+            st.caption(
+                '⚠️ Cannot interrupt a run already in progress: acquisition runs synchronously and '
+                'blocks the app thread. Use this before/after a run, or trigger the rig hardware e-stop mid-run.'
+            )
+
         if st.button(
             'Run experiment',
             type='primary',
