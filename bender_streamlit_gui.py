@@ -3375,7 +3375,7 @@ def _build_checklist_fix_lines(
     if not setup_ok:
         lines.append('Setup: complete Step 1 and click Apply setup.')
     if not measurements_ok:
-        lines.append('Measurements: enter required values and click Apply section or Apply all biometrics.')
+        lines.append('Measurements: enter required values and click Apply specimen and Apply clamp geometry & inertial correction.')
     if not protocol_ok:
         lines.append('Protocol/Run: fill required procedure fields and click Apply procedure or Refresh experiment preview.')
     if b is None:
@@ -4118,8 +4118,8 @@ def _render_pending_bio_nav_warning(origin: str) -> None:
         'You have unsaved biometrics form edits. Click Apply in Measurements before switching workflows, '
         'or continue and keep edits only in this session state.'
     )
-    st.caption('- Apply specimen identity')
-    st.caption('- Apply section or Apply all biometrics')
+    st.caption('- Apply specimen')
+    st.caption('- Apply clamp geometry & inertial correction (or Apply all biometrics)')
     _w1, _w2 = st.columns(2, gap='small')
     with _w1:
         if st.button('Switch anyway', key=f'gui_bio_nav_switch_anyway_{origin}', type='primary', use_container_width=True):
@@ -7443,15 +7443,14 @@ def main():
     _consume_pending_protocol_template(test_types)
 
     if _show_full_sec2():
-        st.subheader('3 · Specimen identity')
+        st.subheader('3 · Specimen')
         if _bio_apply_dirty():
             _soft_apply_reminder()
 
         with st.expander('About the measurements', expanded=False):
             st.markdown(
-                '- Use this section to set specimen identity, intrinsic dimensions, experimental conditions, clamp geometry, and profile/inertial settings.\n'
-                '- **Apply** buttons commit the current values to the in-memory experiment object.\n'
-                '- **Apply all biometrics** commits every block at once.\n'
+                '- Use this section to set specimen identity, morphometrics, experimental conditions, clamp geometry, and profile/inertial settings.\n'
+                '- **Apply specimen** commits identity, morphometrics, and session conditions; **Apply clamp geometry & inertial correction** commits clamp geometry, profile, and the inertial flag.\n'
                 '- Biometrics templates are separate from protocol templates.'
             )
 
@@ -7499,7 +7498,7 @@ def main():
             if _load_save_button(
                 'Load biometrics into form',
                 key='gui_biometrics_btn_load',
-                help='Fills biometrics widgets from the file. Use **Apply** in each block (identity, intrinsic, conditions, clamp, profile) or **Apply all**.',
+                help='Fills biometrics widgets from the file. Then click **Apply specimen** and **Apply clamp geometry & inertial correction** (or **Apply all biometrics**).',
             ):
                 if not _bio_pick:
                     st.session_state['gui_biometrics_load_feedback'] = (False, 'Choose a biometrics file first.')
@@ -7545,123 +7544,126 @@ def main():
                 st.rerun()
 
         st.divider()
-        st.markdown('**Specimen identity**')
-        sub_bio_id = False
-        with st.form('bio_form_identity', clear_on_submit=False):
-            id1, id2 = st.columns(2)
-            with id1:
-                st.text_input(
-                    'Genus-species',
-                    key='gui_genus_species',
-                    placeholder='e.g. Danio rerio',
-                    help='Stored in the exported `.h5` under protocol metadata (`genus_species`) when you run or export.',
-                )
-            with id2:
-                st.text_input(
-                    'Specimen ID',
-                    key='gui_specimen_id',
-                    placeholder='e.g. fish-042 or prep code',
-                    help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
-                )
-            if 'bio_segment' not in st.session_state:
-                st.session_state['bio_segment'] = ''
-            st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
-            sub_bio_id = st.form_submit_button(
-                'Apply specimen identity',
-                use_container_width=True,
-                help='Writes genus/species, specimen ID, fishcode, and segment onto the experiment object (HDF5 metadata on export).',
-            )
-        if sub_bio_id:
-            _apply_specimen_identity_to_bender(b)
-            st.toast('Specimen identity applied.')
-
-        st.divider()
         st.session_state.setdefault('gui_bio_hide', False)
         _bio_section_collapsed = bool(st.session_state.get('gui_bio_hide')) and _nav_route() != 'stepwise'
-        s_bio_section = s_bio_all = False
+        sub_specimen = sub_clamp_inertial = False
         if _bio_section_collapsed:
             st.caption(
-                'Section body hidden. Uncheck **Hide section** at the bottom to edit biometrics inputs.'
+                'Section body hidden. Uncheck **Hide section** at the bottom to edit specimen and clamp inputs.'
             )
             if st.button(
                 'Apply all biometrics',
                 key='bio_btn_apply_all_collapsed',
                 help=(
-                    'Runs all applies in order: intrinsic (incl. identity metadata), experimental conditions, clamp geometry '
+                    'Runs all applies in order: identity, morphometrics, experimental conditions, clamp geometry '
                     '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
                 ),
             ):
                 _apply_all_biometrics_to_bender(b)
                 st.toast('Biometrics applied.')
         else:
-            with st.form('bio_main_form', clear_on_submit=False):
-                bio_l, bio_r = st.columns(2, gap='large')
-                with bio_l:
-                    st.markdown('### 4 · Morphometrics & conditions')
-                    if 'bio_fishlen_TL' not in st.session_state:
-                        st.session_state['bio_fishlen_TL'] = 0.0
-                    st.number_input(
-                        'Total Length (`fishlen_TL`, mm)',
-                        min_value=0.0,
-                        format='%.6g',
-                        key='bio_fishlen_TL',
-                    )
-                    if 'bio_fishlen_SL' not in st.session_state:
-                        st.session_state['bio_fishlen_SL'] = 0.0
-                    st.number_input(
-                        'Standard Length (`fishlen_SL`, mm)',
-                        min_value=0.0,
-                        format='%.6g',
-                        key='bio_fishlen_SL',
-                    )
-                    if 'bio_fishmass' not in st.session_state:
-                        st.session_state['bio_fishmass'] = 0.0
-                    st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
-                    st.divider()
-                    if 'bio_temp_room' not in st.session_state:
-                        st.session_state['bio_temp_room'] = 0.0
-                    st.number_input(
-                        'Room temperature (`temp_C_room`, °C)',
-                        min_value=-5.0,
-                        max_value=60.0,
-                        format='%.3f',
-                        key='bio_temp_room',
-                    )
-                    if 'bio_temp_tank' not in st.session_state:
-                        st.session_state['bio_temp_tank'] = 0.0
-                    st.number_input(
-                        'Tank / bath temperature (`temp_C_tank`, °C)',
-                        min_value=-5.0,
-                        max_value=60.0,
-                        format='%.3f',
-                        key='bio_temp_tank',
-                    )
+            # Section 2 (Specimen): identity + morphometrics + session temperature + prep condition.
+            # One Apply commits only these fields (per 4-section model, ux_spec §2.1/§3).
+            with st.form('bio_form_specimen', clear_on_submit=False):
+                id1, id2 = st.columns(2)
+                with id1:
                     st.text_input(
-                        'Prep condition',
-                        key='bio_prep_condition',
-                        placeholder='e.g. anesthetized, recovered 24 h, fasted',
-                        help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+                        'Genus-species',
+                        key='gui_genus_species',
+                        placeholder='e.g. Danio rerio',
+                        help='Stored in the exported `.h5` under protocol metadata (`genus_species`) when you run or export.',
                     )
+                with id2:
+                    st.text_input(
+                        'Specimen ID',
+                        key='gui_specimen_id',
+                        placeholder='e.g. fish-042 or prep code',
+                        help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
+                    )
+                if 'bio_segment' not in st.session_state:
+                    st.session_state['bio_segment'] = ''
+                st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
 
-                with bio_r:
-                    st.markdown('### 5 · Clamp geometry')
-                    if 'bio_dclamp' not in st.session_state:
-                        st.session_state['bio_dclamp'] = 0.0
-                    st.number_input(
-                        'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
-                        min_value=0.001,
-                        format='%.6g',
-                        key='bio_dclamp',
-                    )
-                    if 'bio_dbend' not in st.session_state:
-                        st.session_state['bio_dbend'] = 0.0
-                    st.number_input(
-                        'Along-body distance to center of clamped test segment (mm)',
-                        min_value=0.0,
-                        format='%.6g',
-                        key='bio_dbend',
-                        help=BIO_DBEND_FIELD_HELP,
-                    )
+                st.divider()
+                st.markdown('**Morphometrics**')
+                if 'bio_fishlen_TL' not in st.session_state:
+                    st.session_state['bio_fishlen_TL'] = 0.0
+                st.number_input(
+                    'Total Length (`fishlen_TL`, mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='bio_fishlen_TL',
+                )
+                if 'bio_fishlen_SL' not in st.session_state:
+                    st.session_state['bio_fishlen_SL'] = 0.0
+                st.number_input(
+                    'Standard Length (`fishlen_SL`, mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='bio_fishlen_SL',
+                )
+                if 'bio_fishmass' not in st.session_state:
+                    st.session_state['bio_fishmass'] = 0.0
+                st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
+
+                st.divider()
+                st.markdown('**Session conditions**')
+                if 'bio_temp_room' not in st.session_state:
+                    st.session_state['bio_temp_room'] = 0.0
+                st.number_input(
+                    'Room temperature (`temp_C_room`, °C)',
+                    min_value=-5.0,
+                    max_value=60.0,
+                    format='%.3f',
+                    key='bio_temp_room',
+                )
+                if 'bio_temp_tank' not in st.session_state:
+                    st.session_state['bio_temp_tank'] = 0.0
+                st.number_input(
+                    'Tank / bath temperature (`temp_C_tank`, °C)',
+                    min_value=-5.0,
+                    max_value=60.0,
+                    format='%.3f',
+                    key='bio_temp_tank',
+                )
+                st.text_input(
+                    'Prep condition',
+                    key='bio_prep_condition',
+                    placeholder='e.g. anesthetized, recovered 24 h, fasted',
+                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+                )
+                sub_specimen = st.form_submit_button(
+                    'Apply specimen',
+                    type='primary',
+                    use_container_width=True,
+                    help='Commits identity, morphometrics, session temperatures, and prep condition onto the experiment object.',
+                )
+
+            st.divider()
+            st.subheader('4 · Clamp geometry & inertial correction')
+            # Section 3: clamp geometry + mounted profile + inertial flag. One merged Apply
+            # commits only these fields (replaces the former separate clamp / profile Applies).
+            with st.form('bio_form_clamp_inertial', clear_on_submit=False):
+                st.markdown('**Clamp geometry**')
+                if 'bio_dclamp' not in st.session_state:
+                    st.session_state['bio_dclamp'] = 0.0
+                st.number_input(
+                    'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
+                    min_value=0.001,
+                    format='%.6g',
+                    key='bio_dclamp',
+                )
+                if 'bio_dbend' not in st.session_state:
+                    st.session_state['bio_dbend'] = 0.0
+                st.number_input(
+                    'Along-body distance to center of clamped test segment (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='bio_dbend',
+                    help=BIO_DBEND_FIELD_HELP,
+                )
+                cw1, cw2 = st.columns(2)
+                with cw1:
                     if 'bio_xsec' not in st.session_state:
                         st.session_state['bio_xsec'] = 0.0
                     st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
@@ -7677,26 +7679,30 @@ def main():
                             '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
                         ),
                     )
+                with cw2:
                     if 'bio_xsec_height' not in st.session_state:
                         st.session_state['bio_xsec_height'] = 0.0
                     st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
+                co1, co2 = st.columns(2)
+                with co1:
                     if 'bio_dvert' not in st.session_state:
                         st.session_state['bio_dvert'] = 0.0
                     st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
+                with co2:
                     if 'bio_dhoriz' not in st.session_state:
                         st.session_state['bio_dhoriz'] = 0.0
                     st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
 
                 st.divider()
-                st.markdown('### 6 · Mounted body profile (inertial model)')
+                st.markdown('**Mounted body profile (inertial model)**')
                 st.selectbox(
                     'Typical density (sets g/mm³ on Apply)',
                     BIO_DENSITY_PRESET_LABELS,
                     key='bio_prof_rho_preset',
                     help=(
                         'Quick picks from literature-scale values: ~1.00 g/cm³ water-like, ~1.06 g/cm³ muscle/soft tissue, '
-                        '~1.9 g/cm³ cortical bone. Values are copied into **Specimen density** when you click **Apply profile** '
-                        'or **Apply all** (or choose **Custom** and edit the number).'
+                        '~1.9 g/cm³ cortical bone. Values are copied into **Specimen density** when you click **Apply clamp '
+                        'geometry & inertial correction** (or choose **Custom** and edit the number).'
                     ),
                 )
                 _flush_pending_bio_prof_rho_sync()
@@ -7761,28 +7767,23 @@ def main():
                         'profile above when correcting measured torque.'
                     ),
                 )
-                br1 = st.columns(2)
-                with br1[0]:
-                    s_bio_section = st.form_submit_button(
-                        'Apply section',
-                        use_container_width=True,
-                        help='Applies specimen identity, measurements/conditions, clamp geometry, profile, and inertial setting.',
-                    )
-                s_bio_all = st.form_submit_button(
-                    'Apply all biometrics',
+                sub_clamp_inertial = st.form_submit_button(
+                    'Apply clamp geometry & inertial correction',
                     type='primary',
                     use_container_width=True,
-                    help=(
-                        'Runs all applies in order: intrinsic (incl. identity metadata), experimental conditions, clamp geometry '
-                        '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
-                    ),
+                    help='Commits clamp spacing/offsets, cross-section, mounted profile, density, and the inertial-correction flag.',
                 )
-        if s_bio_section:
-            _apply_all_biometrics_to_bender(b)
-            st.toast('Biometrics section applied.')
-        elif s_bio_all:
-            _apply_all_biometrics_to_bender(b)
-            st.toast('Biometrics applied.')
+        if sub_specimen:
+            _apply_specimen_identity_to_bender(b)
+            _apply_intrinsic_biometrics_to_bender(b)
+            _apply_experimental_conditions_to_bender(b)
+            st.toast('Specimen applied.')
+        if sub_clamp_inertial:
+            _sync_biometric_flags_from_session(b)
+            if _apply_clamp_geometry_to_bender(b):
+                _apply_mounted_profile_inertial_to_bender(b)
+                st.session_state['gui_measurements_confirmed'] = True
+                st.toast('Clamp geometry & inertial correction applied.')
 
         if _nav_route() != 'stepwise':
             st.checkbox(
