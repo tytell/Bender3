@@ -154,7 +154,9 @@ class BenderData:
         else:
             labels['f'] = '{:.1f}-{:.1f}'.format(min(self.frequencies), max(self.frequencies))
 
-        m = re.search('(\d+)\.h5', fn)
+        # Acquisition number: prefer the standardized `..._bender_<NN>_<protocol>.h5` token,
+        # falling back to a trailing `<NNN>.h5` for legacy filenames.
+        m = re.search(r'_bender_(\d+)', fn) or re.search(r'(\d+)\.h5', fn)
         if m is not None:
             labels['num'] = m.group(1)
 
@@ -163,7 +165,9 @@ class BenderData:
     def get_data(self):
         fn = os.path.basename(self.filename)
 
-        m = re.search('(\d+)\.h5', fn)
+        # Acquisition number: prefer the standardized `..._bender_<NN>_<protocol>.h5` token,
+        # falling back to a trailing `<NNN>.h5` for legacy filenames.
+        m = re.search(r'_bender_(\d+)', fn) or re.search(r'(\d+)\.h5', fn)
         if m is not None:
             trial = m.group(1)
             trial = int(trial)

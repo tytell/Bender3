@@ -2404,27 +2404,98 @@ def _read_qc_trial_index(b: Bender) -> int:
     return int(max(0, min(ix, n - 1)))
 
 
-def _qc_figure_base_path(b: Bender, selected_path: str, trial_idx: int) -> Optional[str]:
-    """Output stem for `save_universal_qc_figure` when tying the QC file name to a chosen `.h5`."""
+def _qc_figure_base_path(b: Bender, selected_path: str, trial_idx: int = 0) -> Optional[str]:
+    """Output stem for `save_universal_qc_figure`, tied to a chosen `.h5`.
+
+    The QC PNG uses the **identical stem** to its paired HDF5 (only the extension differs), so the
+    two always sort together in the file browser.
+    """
     p = str(selected_path or '').strip()
     if not p.lower().endswith('.h5'):
         return None
-    proc = str(getattr(b, 'test_type', 'unknown'))
-    stem = p[:-3]
-    return stem + f'_{proc}_trial{int(trial_idx):03d}_qc'
+    return p[:-3]
+
+
+def _sanitize_filename_token(s) -> str:
+    """Filesystem-safe token: keep ``[A-Za-z0-9._-]``, collapse any other run to a single ``-``."""
+    raw = str(s or '').strip()
+    out_chars: list[str] = []
+    prev_dash = False
+    for ch in raw:
+        if ch.isalnum() or ch in ('.', '_', '-'):
+            out_chars.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out_chars.append('-')
+            prev_dash = True
+    return ''.join(out_chars).strip('-_.')
+
+
+def _session_date_str() -> str:
+    """Today's date (``YYYY-MM-DD``), captured once per session so a run spanning midnight keeps
+    a single date for the whole session."""
+    d = str(st.session_state.get('gui_session_date') or '').strip()
+    if not d:
+        d = datetime.now().strftime('%Y-%m-%d')
+        st.session_state['gui_session_date'] = d
+    return d
+
+
+def _session_trial_counter() -> int:
+    """Number of acquisitions saved this session (0 at session start)."""
+    try:
+        return int(st.session_state.get('gui_session_trial_counter', 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _increment_session_trial_counter() -> None:
+    st.session_state['gui_session_trial_counter'] = _session_trial_counter() + 1
+
+
+def _current_protocol_token() -> str:
+    """Selected protocol token (``dynamic`` / ``isometric`` / ``isovelocity`` / …)."""
+    b0 = st.session_state.get('bender')
+    return str(
+        st.session_state.get('test_type_select')
+        or (getattr(b0, 'test_type', '') if b0 is not None else '')
+        or 'dynamic'
+    )
+
+
+def _standard_filename_stem(proc: str) -> str:
+    """``YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>`` for the next acquisition.
+
+    ``NN`` is the 1-based acquisition number for this session (``counter + 1``), zero-padded to two
+    digits, so files sort by acquisition order in the file browser.
+    """
+    date = _session_date_str()
+    specimen = _sanitize_filename_token(st.session_state.get('gui_specimen_id')) or 'specimen'
+    proc_token = _sanitize_filename_token(proc).lower() or 'unknown'
+    n = _session_trial_counter() + 1
+    return f'{date}_{specimen}_bender_{n:02d}_{proc_token}'
 
 
 def _compose_output_h5_path() -> str:
-    """Full `.h5` path from **section 2** **Data folder** + **Data file name**."""
+    """Full `.h5` path for the next save.
+
+    When a specimen ID is set, the file name follows the standardized convention
+    ``YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5`` (sorts by acquisition sequence). With no
+    specimen ID we fall back to the legacy **section 2** **Data file name** field.
+    """
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
-    fn = str(st.session_state.get('gui_data_filename') or '').strip()
-    # When a folder is selected, treat filename input as basename-only.
-    if folder and fn:
-        fn = os.path.basename(os.path.normpath(fn))
-    if not fn:
-        return ''
-    if not fn.lower().endswith('.h5'):
-        fn = fn + '.h5'
+    specimen = str(st.session_state.get('gui_specimen_id') or '').strip()
+    if specimen:
+        fn = _standard_filename_stem(_current_protocol_token()) + '.h5'
+    else:
+        fn = str(st.session_state.get('gui_data_filename') or '').strip()
+        # When a folder is selected, treat filename input as basename-only.
+        if folder and fn:
+            fn = os.path.basename(os.path.normpath(fn))
+        if not fn:
+            return ''
+        if not fn.lower().endswith('.h5'):
+            fn = fn + '.h5'
     if folder:
         return os.path.normpath(os.path.join(folder, fn))
     return os.path.normpath(fn)
@@ -6988,13 +7059,20 @@ def main():
                 elif _preview_folder:
                     st.caption(f'Save path: `{_preview_folder}`')
             with fn_col:
+                _auto_named = bool(str(st.session_state.get('gui_specimen_id') or '').strip())
                 st.text_input(
                     ' ',
                     key='gui_data_filename',
                     placeholder='datafilename.h5',
                     help=DATA_FILE_NAME_HELP,
                     label_visibility='collapsed',
+                    disabled=_auto_named,
                 )
+                if _auto_named:
+                    st.caption(
+                        'Auto-named: `YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5` '
+                        '(NN increments per acquisition this session).'
+                    )
             full_out = _compose_output_h5_path()
             if full_out:
                 # Show "selected" state immediately; committing to the in-memory experiment still requires "Apply setup".
@@ -8136,9 +8214,10 @@ def main():
                                 outputfile=outp or None,
                                 append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
                             )
+                        _increment_session_trial_counter()
                         qix = _read_qc_trial_index(b)
-                        sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
-                        qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                        # QC PNG takes the identical stem to the .h5 that was just written.
+                        qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
                         run_status.write('QC plot…')
                         with st.spinner('Saving QC plot…'):
                             qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
@@ -8165,9 +8244,10 @@ def main():
                             outputfile=outp or None,
                             append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
                         )
+                    _increment_session_trial_counter()
                     qix = _read_qc_trial_index(b)
-                    sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
-                    qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                    # QC PNG takes the identical stem to the .h5 that was just written.
+                    qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
                     with st.spinner('Saving QC plot…'):
                         qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
                     st.success('Data has been saved! Check data folder to confirm before proceeding.')
@@ -8366,8 +8446,8 @@ def main():
                         pass
                     else:
                         qix = _read_qc_trial_index(b)
-                        sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
-                        qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                        # Pair the QC PNG with the .h5 just written (identical stem).
+                        qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
                         try:
                             with st.spinner('Saving QC plot…'):
                                 qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)

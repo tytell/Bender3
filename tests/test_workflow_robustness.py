@@ -340,3 +340,52 @@ def test_stepwise_does_not_show_redundant_hardware_not_loaded_banner():
     assert not at.exception
     rendered = '\n'.join(getattr(n, 'value', '') for n in list(at.markdown) + list(at.caption))
     assert 'Hardware not loaded.' not in rendered
+
+
+def test_standard_output_filename_convention():
+    """`_compose_output_h5_path` follows YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5."""
+    _clear_streamlit_session_state()
+    st.session_state['gui_session_date'] = '2026-06-03'
+    st.session_state['gui_data_folder'] = r'C:\tmp'
+    st.session_state['gui_specimen_id'] = 'bass 01/L'  # exercises token sanitization
+    st.session_state['test_type_select'] = 'isovelocity'
+    st.session_state['gui_session_trial_counter'] = 0
+
+    p = gui._compose_output_h5_path()
+    assert os.path.basename(p) == '2026-06-03_bass-01-L_bender_01_isovelocity.h5'
+
+    # The counter drives a zero-padded, sortable acquisition number.
+    gui._increment_session_trial_counter()
+    p2 = gui._compose_output_h5_path()
+    assert os.path.basename(p2) == '2026-06-03_bass-01-L_bender_02_isovelocity.h5'
+
+
+def test_standard_filename_falls_back_to_manual_without_specimen():
+    _clear_streamlit_session_state()
+    st.session_state['gui_data_folder'] = r'C:\tmp'
+    st.session_state['gui_specimen_id'] = ''
+    st.session_state['gui_data_filename'] = 'manual.h5'
+    assert os.path.basename(gui._compose_output_h5_path()) == 'manual.h5'
+
+
+def test_qc_figure_base_path_matches_h5_stem():
+    """QC PNG stem must be identical to the paired .h5 stem (only extension differs)."""
+    _clear_streamlit_session_state()
+    h5 = r'C:\tmp\2026-06-03_bass01_bender_01_dynamic.h5'
+    assert gui._qc_figure_base_path(None, h5) == r'C:\tmp\2026-06-03_bass01_bender_01_dynamic'
+    assert gui._qc_figure_base_path(None, 'not_an_h5.txt') is None
+
+
+def test_bender_data_trial_regex_handles_new_and_legacy_names():
+    """The acquisition-number regex used by bender_data must match the new convention
+    (`..._bender_<NN>_<protocol>.h5`) and still fall back to legacy `<NNN>.h5`."""
+    import re
+
+    def _num(fn):
+        m = re.search(r'_bender_(\d+)', fn) or re.search(r'(\d+)\.h5', fn)
+        return int(m.group(1)) if m else None
+
+    assert _num('2026-06-03_bass01_bender_07_dynamic.h5') == 7
+    assert _num('2026-06-03_bass01_bender_12_isometric.h5') == 12
+    assert _num('legacy_trial_042.h5') == 42
+    assert _num('no_number_here.h5') is None
