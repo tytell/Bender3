@@ -1662,6 +1662,216 @@ def _widget_key(name: str) -> str:
     return f'fld_{name}'
 
 
+def _stim_params_dict_from_bender(b: Bender, attr_name: str) -> dict:
+    sp = getattr(b, attr_name, None)
+    return dict(sp) if isinstance(sp, dict) else {}
+
+
+def _seed_isovelocity_stim_widget_state(b: Bender) -> None:
+    """Initialize isovelocity stim widget keys before first render (Apply-button pattern)."""
+    sp = _stim_params_dict_from_bender(b, 'isovelocity_stim_params')
+    spr_raw = sp.get('stim_pulse_rate', None)
+    spr_default = float(
+        spr_raw if spr_raw is not None else getattr(b, 'stim_pulse_rate', 75.0) or 75.0
+    )
+    defaults = {
+        'isovelocity_stim_enable': bool(sp.get('is_stim', False)),
+        'isovelocity_stim_pulse_rate': spr_default,
+        'isovelocity_stim_voltage': float(sp.get('stim_voltage', 5.0)),
+        'isovelocity_settle_before_stim_s': float(sp.get('settle_before_stim_s', 0.02)),
+        'isovelocity_pre_iso_stim_duration_s': float(sp.get('pre_iso_stim_duration_s', 0.0)),
+    }
+    for name, val in defaults.items():
+        sk = _widget_key(name)
+        if sk not in st.session_state:
+            st.session_state[sk] = val
+
+
+def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
+    """
+    Render isovelocity stimulation widgets and return assembled ``isovelocity_stim_params``.
+
+    Returns None when validation fails (caller must skip setattr on Apply).
+    """
+    _seed_isovelocity_stim_widget_state(b)
+    enable_sk = _widget_key('isovelocity_stim_enable')
+    enable = bool(
+        st.checkbox(
+            'Enable stimulation',
+            key=enable_sk,
+            help=MOTION_FIELD_HELP.get('is_stim'),
+        )
+    )
+    settle_sk = _widget_key('isovelocity_settle_before_stim_s')
+    pre_iso_sk = _widget_key('isovelocity_pre_iso_stim_duration_s')
+    settle = float(st.session_state[settle_sk])
+    pre_iso = float(st.session_state[pre_iso_sk])
+
+    pulse_rate = float(st.session_state[_widget_key('isovelocity_stim_pulse_rate')])
+    voltage = float(st.session_state[_widget_key('isovelocity_stim_voltage')])
+
+    if enable:
+        pr_sk = _widget_key('isovelocity_stim_pulse_rate')
+        vol_sk = _widget_key('isovelocity_stim_voltage')
+        pulse_rate = float(
+            st.number_input(
+                'Stim pulse rate (Hz)',
+                key=pr_sk,
+                format='%.6g',
+                min_value=0.0,
+                help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
+            )
+        )
+        voltage = float(
+            st.number_input(
+                'Stim voltage (V)',
+                key=vol_sk,
+                format='%.6g',
+                min_value=0.0,
+                help='Stimulus amplitude (V) during the active window.',
+            )
+        )
+        settle = float(
+            st.number_input(
+                'Settle before stim (s)',
+                key=settle_sk,
+                format='%.6g',
+                min_value=0.0,
+                help='Delay after constant-velocity onset before stimulation starts.',
+            )
+        )
+        pre_iso = float(
+            st.number_input(
+                'Pre-iso stim duration (s)',
+                key=pre_iso_sk,
+                format='%.6g',
+                min_value=0.0,
+                help='Optional stimulation window immediately before the velocity ramp (0 = off).',
+            )
+        )
+        if not (np.isfinite(pulse_rate) and pulse_rate > 0):
+            _st_error_actions(
+                'Stim pulse rate invalid.',
+                ['Enter a value > 0 Hz', 'Or uncheck Enable stimulation'],
+            )
+            return None
+        if not (np.isfinite(voltage) and voltage > 0):
+            _st_error_actions(
+                'Stim voltage invalid.',
+                ['Enter a value > 0 V', 'Or uncheck Enable stimulation'],
+            )
+            return None
+    if not (np.isfinite(settle) and settle >= 0):
+        _st_error_actions('Settle before stim invalid.', ['Use a value ≥ 0 s'])
+        return None
+    if not (np.isfinite(pre_iso) and pre_iso >= 0):
+        _st_error_actions('Pre-iso stim duration invalid.', ['Use a value ≥ 0 s'])
+        return None
+
+    params: dict = {
+        'is_stim': enable,
+        'stim_duration_s': None,
+        'settle_before_stim_s': settle,
+        'pre_iso_stim_duration_s': pre_iso,
+    }
+    if enable:
+        params['stim_pulse_rate'] = pulse_rate
+        params['stim_voltage'] = voltage
+    return params
+
+
+def _seed_isometric_stim_widget_state(b: Bender) -> None:
+    """Initialize isometric stim widget keys before first render."""
+    sp = _stim_params_dict_from_bender(b, 'isometric_stim_params')
+    spr_raw = sp.get('stim_pulse_rate', None)
+    spr_default = float(
+        spr_raw if spr_raw is not None else getattr(b, 'stim_pulse_rate', 75.0) or 75.0
+    )
+    defaults = {
+        'isometric_stim_enable': bool(sp.get('is_stim', False)),
+        'isometric_stim_pulse_rate': spr_default,
+        'isometric_stim_voltage': float(sp.get('stim_voltage', 5.0)),
+        'isometric_settle_before_stim_s': float(sp.get('settle_before_stim_s', 0.5)),
+    }
+    for name, val in defaults.items():
+        sk = _widget_key(name)
+        if sk not in st.session_state:
+            st.session_state[sk] = val
+
+
+def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
+    """Render isometric stimulation widgets; return assembled ``isometric_stim_params`` or None."""
+    _seed_isometric_stim_widget_state(b)
+    enable_sk = _widget_key('isometric_stim_enable')
+    enable = bool(
+        st.checkbox(
+            'Enable stimulation',
+            key=enable_sk,
+            help=MOTION_FIELD_HELP.get('is_stim'),
+        )
+    )
+    settle_sk = _widget_key('isometric_settle_before_stim_s')
+    settle = float(st.session_state[settle_sk])
+    pulse_rate = float(st.session_state[_widget_key('isometric_stim_pulse_rate')])
+    voltage = float(st.session_state[_widget_key('isometric_stim_voltage')])
+
+    if enable:
+        pr_sk = _widget_key('isometric_stim_pulse_rate')
+        vol_sk = _widget_key('isometric_stim_voltage')
+        pulse_rate = float(
+            st.number_input(
+                'Stim pulse rate (Hz)',
+                key=pr_sk,
+                format='%.6g',
+                min_value=0.0,
+                help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
+            )
+        )
+        voltage = float(
+            st.number_input(
+                'Stim voltage (V)',
+                key=vol_sk,
+                format='%.6g',
+                min_value=0.0,
+                help='Stimulus amplitude (V) during the hold window.',
+            )
+        )
+        settle = float(
+            st.number_input(
+                'Settle before stim (s)',
+                key=settle_sk,
+                format='%.6g',
+                min_value=0.0,
+                help='Delay after ramp ends before stimulation starts during the hold.',
+            )
+        )
+        if not (np.isfinite(pulse_rate) and pulse_rate > 0):
+            _st_error_actions(
+                'Stim pulse rate invalid.',
+                ['Enter a value > 0 Hz', 'Or uncheck Enable stimulation'],
+            )
+            return None
+        if not (np.isfinite(voltage) and voltage > 0):
+            _st_error_actions(
+                'Stim voltage invalid.',
+                ['Enter a value > 0 V', 'Or uncheck Enable stimulation'],
+            )
+            return None
+    if not (np.isfinite(settle) and settle >= 0):
+        _st_error_actions('Settle before stim invalid.', ['Use a value ≥ 0 s'])
+        return None
+
+    params: dict = {
+        'is_stim': enable,
+        'stim_duration_s': None,
+        'settle_before_stim_s': settle,
+    }
+    if enable:
+        params['stim_pulse_rate'] = pulse_rate
+        params['stim_voltage'] = voltage
+    return params
+
+
 def _get_session_value(b: Bender, name: str, default=None):
     if hasattr(b, name):
         v = getattr(b, name)
@@ -7339,13 +7549,9 @@ def main():
                     st.markdown('**Optional**')
                     for key in schema['isometric_optional']:
                         if key == 'isometric_stim_params':
-                            updates[key] = _render_field(
-                                b,
-                                key,
-                                'json_dict',
-                                'Isometric step timing & stimulation (optional)',
-                                help_text=ISOMETRIC_STIM_JSON_HELP,
-                            )
+                            st.markdown('**Stimulation**')
+                            assembled = _render_isometric_stim_fields(b)
+                            updates[key] = assembled
                         elif key == 'isometric_stim_overrides':
                             updates[key] = _render_field(
                                 b,
@@ -7488,13 +7694,9 @@ def main():
                     st.markdown('**Optional**')
                     for key in schema['isovelocity_optional']:
                         if key == 'isovelocity_stim_params':
-                            updates[key] = _render_field(
-                                b,
-                                key,
-                                'json_dict',
-                                'Isovelocity segment timing & stimulation (optional)',
-                                help_text=ISOVELOCITY_STIM_JSON_HELP,
-                            )
+                            st.markdown('**Stimulation**')
+                            assembled = _render_isovelocity_stim_fields(b)
+                            updates[key] = assembled
                         elif key == 'isovelocity_stim_overrides':
                             updates[key] = _render_field(
                                 b,
@@ -7530,18 +7732,7 @@ def main():
                                 b, key, 'float', 'Left-side fraction (0-1)', help_text=ISOVELOCITY_FIELD_HELP.get(key)
                             )
                         elif key == 'isovelocity_velocity_mode':
-                            vmodes = list(VELOCITY_MODE_OPTIONS)
-                            skv = _widget_key('isovelocity_velocity_mode')
-                            cur_v = str(_get_session_value(b, key, 'angle_vel'))
-                            if skv not in st.session_state:
-                                st.session_state[skv] = cur_v if cur_v in vmodes else 'angle_vel'
-                            updates[key] = st.selectbox(
-                                ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for min/max velocity'),
-                                vmodes,
-                                key=skv,
-                                format_func=_format_velocity_mode,
-                                help=ISOVELOCITY_FIELD_HELP.get(key),
-                            )
+                            pass  # required-only; rendered in Required section
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:
