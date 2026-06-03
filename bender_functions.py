@@ -3251,6 +3251,10 @@ class Bender:
                     global_step += 1
                 last_deg = float(block_out[-1]['angle_cmd'][-1])
                 all_out.extend(block_out)
+            # Return the motor to neutral once after the final block: block resets only
+            # fire BEFORE each block, so without this the motor is left at the last hold
+            # angle after the run ends.
+            last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
             uidx = None
             seq_frac = float(
                 sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5))
@@ -3325,6 +3329,22 @@ class Bender:
             mirror_hold_deg_left=mhl,
             mirror_hold_deg_right=mhr,
         )
+        # Return the motor to neutral once after the final trial. The simple isometric
+        # path has no block boundaries, so without this the motor is left at the last
+        # hold angle when the run ends.
+        if out:
+            reset_ramp = float(
+                sp.get(
+                    'block_reset_ramp_duration_s',
+                    getattr(self, 'block_reset_ramp_duration_s', sp.get('ramp_duration_s', 2.0)),
+                )
+            )
+            if not np.isfinite(reset_ramp) or reset_ramp < 0:
+                raise ValueError(
+                    f"block_reset_ramp_duration_s must be finite and >= 0; got {reset_ramp!r}."
+                )
+            dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
+            self._run_neutral_reset_segment(float(out[-1]['angle_cmd'][-1]), reset_ramp, dev)
         for i, e in enumerate(out):
             e['target_value_native'] = float(vals[i])
             e['curvature_1_per_m'] = float(kappa[i])
