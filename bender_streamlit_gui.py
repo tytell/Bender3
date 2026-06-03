@@ -104,7 +104,6 @@ from bender_simulation import (  # noqa: E402
 from bender_biometrics_templates import (  # noqa: E402
     apply_biometrics_template_to_session,
     biometrics_template_display_label,
-    default_biometrics_templates_dir,
     list_biometrics_template_files,
     load_biometrics_template,
     save_biometrics_template,
@@ -2904,30 +2903,6 @@ def _session_float(key: str) -> Optional[float]:
         return None
 
 
-def _measurements_confirmed_for_checklist() -> bool:
-    """True when biometrics/measurements look intentionally confirmed, not just default-populated."""
-    if not bool(st.session_state.get('gui_measurements_confirmed')):
-        return False
-    if 'gui_bio_applied_sig' not in st.session_state:
-        return False
-    if _bio_apply_dirty():
-        return False
-    if not str(st.session_state.get('gui_specimen_id') or '').strip():
-        return False
-    if not str(st.session_state.get('gui_genus_species') or '').strip():
-        return False
-    m = _session_float('bio_fishmass')
-    if m is None or m <= 0:
-        return False
-    dc = _session_float('bio_dclamp')
-    if dc is None or dc <= 0:
-        return False
-    xw = _session_float('bio_xsec')
-    if xw is None or xw <= 0:
-        return False
-    return True
-
-
 def _sanitize_stale_run_state() -> None:
     """Clear stuck run flags when no acquisition can be active (e.g. after refresh)."""
     if st.session_state.get('bender') is None:
@@ -3031,17 +3006,6 @@ def _workflow_ready_state(b: Optional[Bender], tt: str) -> dict[str, Any]:
         'run_disabled': run_disabled,
         'run_disabled_reason': run_reason,
     }
-
-
-def _setup_confirmed_for_checklist(b: Optional[Bender]) -> bool:
-    tt = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
-    return _workflow_ready_state(b, tt)['setup_ok']
-
-
-def _measurements_confirmed_for_checklist() -> bool:
-    b = st.session_state.get('bender')
-    tt = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
-    return _workflow_ready_state(b, tt)['measurements_ok']
 
 
 _CHK_SEC_DATA = '2 · Data path'
@@ -3267,22 +3231,6 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
             seen.add(t)
             uniq.append(t)
     return uniq
-
-
-def _setup_confirmed_for_checklist(b: Optional[Bender]) -> bool:
-    if b is None:
-        return False
-    if not bool(st.session_state.get('gui_setup_confirmed')):
-        return False
-    if _section2_destination_incomplete() or _data_path_apply_dirty():
-        return False
-    _cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-    if not _cfg_sel:
-        return False
-    _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
-    if _cfg_mode == 'Load existing' and not _selected_config_matches_bender(b, _cfg_sel):
-        return False
-    return True
 
 
 def _protocol_confirmed_for_checklist(b: Optional[Bender], checks_by_sec: dict[str, list[str]]) -> bool:
@@ -5846,7 +5794,7 @@ def _render_h5_explorer() -> None:
     )
 
     with st.container(border=True):
-        path_in = st.text_input(
+        st.text_input(
             'Path to `.h5` file',
             key='gui_h5_explore_path',
             placeholder=r'Example: C:\Data\experiment_001.h5',
