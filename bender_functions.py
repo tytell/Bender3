@@ -826,6 +826,7 @@ class Bender:
         elif motion_test_type == 'frequency_sweep':
             if self.duration is None:
                 raise AttributeError("frequency_sweep requires 'self.duration' to be set in the notebook first.")
+            self._ensure_all_curves_for_run()
 
             duration = self.duration + self.waitbefore + self.waitafter
 
@@ -1230,6 +1231,33 @@ class Bender:
             phases,
             spr,
             muscle_depth_mm=md,
+        )
+
+    def _ensure_all_curves_for_run(self):
+        """Build ``self.all_curves`` (κ, 1/m) from ``all_amps`` + mode if it is absent.
+
+        Mirrors the curve auto-conversion done elsewhere (``get_all_amps``) so that the
+        ``frequency_sweep`` branch of :meth:`run_experiment` does not read a missing
+        ``all_curves`` attribute — the analogue of ``period_by_cycle`` being built by
+        :meth:`_organize_cycles_for_dynamic_run` before the dynamic branch reads it.
+        """
+        ac = getattr(self, 'all_curves', None)
+        if ac is not None:
+            try:
+                if np.asarray(ac, dtype=float).reshape(-1).size > 0:
+                    return
+            except (TypeError, ValueError):
+                pass
+        aa = getattr(self, 'all_amps', None)
+        vals = aa if aa is not None else getattr(self, 'curve_input_values', None)
+        mode = getattr(self, 'all_amps_mode', None) or getattr(self, 'curve_input_mode', None)
+        if vals is not None and mode is not None:
+            conv = self.get_all_amps(vals, mode=mode)
+            self.all_curves = np.asarray(conv['curvature_1_per_m'], dtype=float).tolist()
+            return
+        raise AttributeError(
+            "frequency_sweep requires all_curves (or all_amps + all_amps_mode) to be set "
+            "before run_experiment."
         )
 
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate, muscle_depth_mm=0.0):
@@ -2649,6 +2677,11 @@ class Bender:
                 f"{from_deg:.6g}° before the next block; got {ramp_duration_s!r}."
             )
         daq_hz = float(self.daq_ai_sample_rate_hz)
+        # Floor the reset ramp so a tiny-but-positive duration still spans at least two
+        # AI samples; otherwise _timeline_ramp_hold can collapse and trip "timeline too short".
+        min_ramp_s = 2.0 / daq_hz
+        if ramp_s < min_ramp_s:
+            ramp_s = min_ramp_s
         t, angle, anglevel = self._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
         s1 = np.zeros_like(t)
         s2 = np.zeros_like(t)

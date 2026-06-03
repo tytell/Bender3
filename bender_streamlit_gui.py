@@ -3402,12 +3402,12 @@ def _render_simulation_sidebar() -> None:
     st.divider()
 
 
-def _seed_cfg_build_from_base(base: str) -> None:
+def _seed_cfg_build_from_source_config(source_config: str) -> None:
     """Fill ``gui_cfg_bld_*`` widget defaults from an existing config module."""
     try:
         if _ROOT not in sys.path:
             sys.path.insert(0, _ROOT)
-        base_stem = _normalize_config_module_name(base)
+        base_stem = _normalize_config_module_name(source_config)
         build_path = str(st.session_state.get('gui_cfg_build_base_path') or '').strip()
         if build_path and os.path.isfile(os.path.normpath(build_path)):
             try:
@@ -3460,11 +3460,11 @@ def _seed_cfg_build_from_base(base: str) -> None:
 
 
 def _maybe_seed_cfg_build_fields() -> None:
-    base = str(st.session_state.get('gui_cfg_build_base') or 'jimenez_bender_config_A')
-    if st.session_state.get('gui_cfg_build_seeded_for') == base:
+    source_config = str(st.session_state.get('gui_cfg_build_base') or 'jimenez_bender_config_A')
+    if st.session_state.get('gui_cfg_build_seeded_for') == source_config:
         return
-    _seed_cfg_build_from_base(base)
-    st.session_state['gui_cfg_build_seeded_for'] = base
+    _seed_cfg_build_from_source_config(source_config)
+    st.session_state['gui_cfg_build_seeded_for'] = source_config
 
 
 def _flush_pending_cfg_build_base() -> None:
@@ -7981,6 +7981,13 @@ def main():
 
                 else:
                     st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
+
+                # Persistent anti-bleed warning: re-evaluated every render so it stays visible
+                # while the stim-timing condition holds, instead of flashing for one rerun
+                # after Apply. Returns None when stim is disabled or timing is valid.
+                _stim_timing_warn = _validate_procedure_stim_timing(b, updates, tt)
+                if _stim_timing_warn:
+                    st.warning(_stim_timing_warn)
 
                 st.divider()
                 if 'gui_protocol_show_save_template' not in st.session_state:

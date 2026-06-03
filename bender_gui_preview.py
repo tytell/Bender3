@@ -441,6 +441,11 @@ def _preview_append_neutral_reset(
             f"block_reset_ramp_duration_s must be > 0 s to return the motor to neutral from "
             f"{from_deg:.6g}° before the next block."
         )
+    # Mirror the backend reset-ramp floor: a tiny-but-positive ramp must still span at least
+    # two AI samples so the preview and run agree and neither trips "timeline too short".
+    min_ramp_s = 2.0 / float(daq_hz)
+    if ramp_s < min_ramp_s:
+        ramp_s = min_ramp_s
     tloc, aloc, wloc = b._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
     z = np.zeros_like(tloc)
     t_chunks.append(np.asarray(tloc, dtype=float) + toff)
