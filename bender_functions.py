@@ -837,6 +837,7 @@ class Bender:
             if self.duration is None:
                 raise AttributeError("frequency_sweep requires 'self.duration' to be set in the notebook first.")
             self._ensure_all_curves_for_run()
+            self._ensure_cycle_stim_arrays_for_sweep()
 
             duration = self.duration + self.waitbefore + self.waitafter
 
@@ -1269,6 +1270,23 @@ class Bender:
             "frequency_sweep requires all_curves (or all_amps + all_amps_mode) to be set "
             "before run_experiment."
         )
+
+    def _ensure_cycle_stim_arrays_for_sweep(self):
+        """Guarantee the per-cycle stim arrays exist before the shared ``make_stimuli`` call.
+
+        The ``frequency_sweep`` motion path never runs :meth:`_organize_cycles_for_dynamic_run`,
+        so the per-cycle arrays it populates (``freq_by_cycle``, ``phase_by_cycle``,
+        ``duty_by_cycle``, ``stimburstdur``, ``period_by_cycle``) may be missing and the shared
+        stimulation-params dict in :meth:`run_experiment` would raise ``AttributeError``.
+
+        A sweep is a continuous chirp with no discrete cycles, and its ``tnorm`` is in radians
+        rather than cycle counts, so the cycle-indexed stim loop in :meth:`make_stimuli` is not
+        meaningful here. Set these arrays to empty (clearing any stale values left over from a
+        prior dynamic run) so that loop is a no-op while the absolute-time pre/post stim bursts
+        still fire.
+        """
+        for name in ('freq_by_cycle', 'phase_by_cycle', 'duty_by_cycle', 'stimburstdur', 'period_by_cycle'):
+            setattr(self, name, np.array([], dtype=float))
 
     def organize_cycles(self, all_curves, all_freqs, randomize, cycles_per_step, n_end_cycles, dclamp, xsec_width, stim_cycles_in_step, all_stimduties, all_stimphases, stim_pulse_rate, target_muscle_depth_mm=0.0):
         """Build per-cycle arrays. ``all_curves`` is κ (1/m); use :meth:`get_all_amps` to build it from strain/angle."""
