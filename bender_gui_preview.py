@@ -80,7 +80,7 @@ def _stim_table_rows(b: Any, sp: dict, *, recruitment: str) -> List[dict]:
     spr_raw = sp.get('stim_pulse_rate', None)
     spr = float(spr_raw) if spr_raw is not None else float(getattr(b, 'stim_pulse_rate', 75.0) or 75.0)
     return [
-        {'metric': 'stimulation enabled', 'value': bool(sp.get('is_stim', True))},
+        {'metric': 'stimulation enabled', 'value': bool(sp.get('is_stim', False))},
         {'metric': 'pulse rate (Hz)', 'value': spr},
         {'metric': 'stim voltage (V)', 'value': float(sp.get('stim_voltage', 5.0))},
         {'metric': 'recruitment', 'value': recruitment},
@@ -103,7 +103,7 @@ def _stim_for_ramp_hold(
     stim_voltage = float(sp.get('stim_voltage', 5.0))
     settle = float(sp.get('settle_before_stim_s', 0.5))
     stim_duration_s = sp.get('stim_duration_s', None)
-    is_stim = bool(sp.get('is_stim', True))
+    is_stim = bool(sp.get('is_stim', False))
     seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(b, 'bilateral_sequential_left_frac', 0.5)))
     t = np.asarray(t, dtype=float).reshape(-1)
     if mirror and hold_windows is not None:
@@ -249,7 +249,7 @@ def _isovelocity_stim_params_from_b(b: Any) -> dict:
         'settle_before_stim_s': 0.02,
         'pre_iso_stim_duration_s': 0.0,
         'stim_duration_s': None,
-        'is_stim': True,
+        'is_stim': False,
         'stim_pulse_rate': None,
         'stim_voltage': 5.0,
         'device_name': None,
@@ -388,7 +388,7 @@ def _isometric_stim_params_from_b(b: Any) -> dict:
         'settle_before_stim_s': 0.5,
         'stim_duration_s': None,
         'inter_step_interval_s': None,
-        'is_stim': True,
+        'is_stim': False,
         'stim_pulse_rate': None,
         'stim_voltage': 5.0,
         'device_name': None,
