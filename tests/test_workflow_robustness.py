@@ -95,7 +95,10 @@ def test_streamlit_routes_render_with_stressed_session_state():
         at.session_state['morpho_fishmass'] = -1.0
         at.session_state['morpho_dclamp'] = -50.0
         at.session_state['morpho_fishlen_TL'] = np.nan
-        at.session_state['morpho_prof_samples'] = -100
+        # Stress the specimen-geometry parser inputs (mismatched / invalid lists).
+        at.session_state['morpho_geom_x'] = '1, 5, 7'
+        at.session_state['morpho_geom_y'] = '3, 2'
+        at.session_state['morpho_geom_pos'] = 'abc, 0, 10'
         at.session_state['gui_run_morphometrics_confirm'] = False
         at.session_state['gui_confirm_run_without_calibration'] = False
         at.session_state['gui_confirm_run_without_destination'] = False

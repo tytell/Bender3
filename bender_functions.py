@@ -510,7 +510,7 @@ class Bender:
 
     def _specimen_moi_for_inertial_torque(self):
         """Return specimen-only MOI estimate (g*mm^2) from active geometry model, else 0."""
-        for key in ('specimen_moi_profile', 'specimen_moi_frustum'):
+        for key in ('specimen_moi_specimen', 'specimen_moi_profile', 'specimen_moi_frustum'):
             v = getattr(self, key, None)
             if v is not None and np.isfinite(v) and float(v) > 0:
                 return float(v)
@@ -1898,6 +1898,132 @@ class Bender:
         print(
             f"Profiled model set: specimen mass={m_spec:.3f} g, specimen MOI={i_spec:.3f} g*mm^2, "
             f"total MOI={self.i_total_system:.3f} g*mm^2"
+        )
+        return self.i_total_system
+
+    @staticmethod
+    def _parse_geometry_dimension_list(values, name, *, require_positive):
+        """Coerce ``values`` (list/tuple/ndarray of numbers) to a list of finite floats.
+
+        ``require_positive`` rejects NaN/Inf and any value <= 0 (cross-section
+        dimensions). Position lists allow any finite value (AoR-relative, may be
+        negative) but still reject NaN/Inf.
+        """
+        try:
+            seq = list(values)
+        except TypeError:
+            raise ValueError(f"{name} must be a list of numbers.")
+        if len(seq) == 0:
+            raise ValueError(f"{name} is empty.")
+        out = []
+        for i, v in enumerate(seq):
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                raise ValueError(f"{name}[{i}] is not a number: {v!r}.")
+            if not np.isfinite(fv):
+                raise ValueError(f"{name}[{i}] is not finite ({fv}).")
+            if require_positive and fv <= 0:
+                raise ValueError(f"{name}[{i}] must be > 0 (got {fv:g} mm).")
+            out.append(fv)
+        return out
+
+    def set_specimen_geometry_inertial_model(
+        self,
+        heights_mm,
+        depths_mm,
+        positions_mm,
+        density_g_per_mm3,
+        *,
+        clamp_offset_mm=20.0,
+    ):
+        """User-defined specimen geometry -> volume, mass, and specimen MOI about the
+        CENTER transverse axis (the rotation axis = midpoint between clamps).
+
+        Inputs are three equal-length, variable-length per-station lists:
+            heights_mm   : x, cross-section height (mm), full dimension
+            depths_mm    : y, cross-section depth/width (mm), full dimension
+            positions_mm : station position relative to the AoR (mm); AoR center = 0
+
+        Cross-section convention mirrors :meth:`calculate_moi_specimen`: an ELLIPSE
+        with semi-axes (height/2, depth/2). Area per station = (pi/4) * height * depth.
+        Between adjacent stations height and depth vary linearly with position, so the
+        area integral is evaluated analytically per segment (no integration-count knob).
+
+        Specimen MOI about the center transverse axis, mirroring the existing convention
+        (rotation axis parallel to the height direction, ``r^2 = x^2 + z^2``):
+
+            I_spec = rho * integral[ (depth/2)**2 / 4 + s**2 ] * area(s) ds
+
+        where the first term is each elliptical slice's own MOI about the transverse axis
+        (uses the depth/width semi-axis, as in ``calculate_moi_specimen``) and ``s`` =
+        position relative to the AoR is the parallel-axis distance.
+
+        I_spec is the SPECIMEN term ONLY. It composes downstream with the EMPIRICAL
+        apparatus inertia (empty run): ``M_corrected = M_raw - (I_apparatus + I_spec)*alpha``.
+        This method subtracts nothing; it stores I_spec and the parsed geometry.
+        I_spec is NOT rod-scale validated.
+        """
+        x = self._parse_geometry_dimension_list(heights_mm, 'heights_mm (x)', require_positive=True)
+        y = self._parse_geometry_dimension_list(depths_mm, 'depths_mm (y)', require_positive=True)
+        s = self._parse_geometry_dimension_list(positions_mm, 'positions_mm', require_positive=False)
+        n = len(x)
+        if not (len(y) == n and len(s) == n):
+            raise ValueError(
+                "Specimen geometry lists must be equal length: got "
+                f"heights={len(x)}, depths={len(y)}, positions={len(s)}."
+            )
+        if n < 2:
+            raise ValueError("Specimen geometry needs >= 2 stations to integrate a volume.")
+        rho = float(density_g_per_mm3)
+        if not np.isfinite(rho) or rho <= 0:
+            raise ValueError("density_g_per_mm3 must be a finite value > 0.")
+
+        # Integrate front->back: sort stations by AoR-relative position.
+        order = np.argsort(np.asarray(s, dtype=float))
+        xs = np.asarray(x, dtype=float)[order]
+        ys = np.asarray(y, dtype=float)[order]
+        ss = np.asarray(s, dtype=float)[order]
+
+        def _integ_0_1(poly):
+            # Exact definite integral over t in [0, 1] of a polynomial.
+            return float(poly.integ()(1.0))
+
+        quarter_pi = np.pi / 4.0
+        volume = 0.0
+        i_spec = 0.0
+        for k in range(n - 1):
+            ds = float(ss[k + 1] - ss[k])
+            if ds == 0.0:
+                continue  # coincident stations contribute no length
+            # Linear interpolation in t in [0, 1] between station k and k+1.
+            xp = np.polynomial.Polynomial([xs[k], xs[k + 1] - xs[k]])
+            yp = np.polynomial.Polynomial([ys[k], ys[k + 1] - ys[k]])
+            sp = np.polynomial.Polynomial([ss[k], ss[k + 1] - ss[k]])
+            area_p = quarter_pi * xp * yp                       # ellipse area(t)
+            volume += ds * _integ_0_1(area_p)
+            # slice-own MOI per mass = (depth/2)**2 / 4 = y**2 / 16 ; parallel-axis = s**2
+            ispec_p = ((yp * yp) * (1.0 / 16.0) + sp * sp) * area_p
+            i_spec += rho * ds * _integ_0_1(ispec_p)
+
+        mass = rho * volume
+
+        i_shaft, m_shaft, i_clamps, m_clamps, _ = self._hardware_inertia_baseline(clamp_offset_mm)
+        self.i_total_system = float(i_shaft + i_clamps + i_spec)
+        self.total_mass = float(m_shaft + m_clamps + mass)
+        # Specimen-only term consumed by _specimen_moi_for_inertial_torque (when enabled).
+        self.specimen_moi_specimen = float(i_spec)
+        self.specimen_mass_specimen = float(mass)
+        self.specimen_volume_mm3 = float(volume)
+        self.specimen_inertial_model = "user_geometry_center_axis"
+        self.specimen_geometry_heights_mm = [float(v) for v in xs]
+        self.specimen_geometry_depths_mm = [float(v) for v in ys]
+        self.specimen_geometry_positions_mm = [float(v) for v in ss]
+        self.specimen_geometry_density_g_per_mm3 = rho
+        self.specimen_profile_clamp_offset_mm = float(clamp_offset_mm)
+        print(
+            f"User-geometry model set: specimen volume={volume:.3f} mm^3, mass={mass:.3f} g, "
+            f"specimen MOI (center axis)={i_spec:.3f} g*mm^2 [NOT scale-validated]"
         )
         return self.i_total_system
 

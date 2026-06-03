@@ -2740,15 +2740,12 @@ _MORPHO_APPLY_SESSION_KEYS = (
     'morpho_temp_tank',
     'morpho_prep_condition',
     'morpho_use_theoretical_inertial',
-    'morpho_prof_L',
     'morpho_prof_rho_preset',
     'morpho_prof_rho',
-    'morpho_prof_ph',
-    'morpho_prof_pw',
-    'morpho_prof_dh',
-    'morpho_prof_dw',
+    'morpho_geom_x',
+    'morpho_geom_y',
+    'morpho_geom_pos',
     'morpho_prof_clamp',
-    'morpho_prof_samples',
 )
 
 
@@ -3150,8 +3147,7 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
         ('Muscle depth from surface', 'morpho_muscle_depth'),
         ('Cross-section height', 'morpho_xsec_height'),
     )
-    _MORPHO_PROFILE_OUTLINE_MM = (('Profile outline length', 'morpho_prof_L'),)
-    for label, key in _MORPHO_INTRINSIC_MM + _MORPHO_CLAMP_GEOMETRY_MM + _MORPHO_PROFILE_OUTLINE_MM:
+    for label, key in _MORPHO_INTRINSIC_MM + _MORPHO_CLAMP_GEOMETRY_MM:
         v = _session_float(key)
         if v is None:
             continue
@@ -3192,19 +3188,32 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
         elif 0 < v < 1.0:
             out.append((_CHK_SEC_MORPHO, f'{label}: {v:g} mm (check units).'))
 
-    for label, key in (
-        ('Profile proximal H', 'morpho_prof_ph'),
-        ('Profile proximal W', 'morpho_prof_pw'),
-        ('Profile distal H', 'morpho_prof_dh'),
-        ('Profile distal W', 'morpho_prof_dw'),
-    ):
-        v = _session_float(key)
-        if v is None:
-            continue
-        if v <= 0:
-            out.append((_CHK_SEC_MORPHO, f'{label}: invalid ({v:g} mm).'))
-        elif v < 1.0:
-            out.append((_CHK_SEC_MORPHO, f'{label}: {v:g} mm (check units).'))
+    _geom_x_str = str(st.session_state.get('morpho_geom_x') or '').strip()
+    _geom_y_str = str(st.session_state.get('morpho_geom_y') or '').strip()
+    _geom_pos_str = str(st.session_state.get('morpho_geom_pos') or '').strip()
+    if _geom_x_str or _geom_y_str or _geom_pos_str:
+        if not (_geom_x_str and _geom_y_str and _geom_pos_str):
+            out.append((_CHK_SEC_MORPHO, 'Specimen geometry needs all three lists (heights x, depths y, position vs AoR).'))
+        else:
+            try:
+                _gx = _parse_comma_floats(_geom_x_str)
+                _gy = _parse_comma_floats(_geom_y_str)
+                _gp = _parse_comma_floats(_geom_pos_str)
+                if not (len(_gx) == len(_gy) == len(_gp)):
+                    out.append((
+                        _CHK_SEC_MORPHO,
+                        f'Specimen geometry lists must be equal length (got x={len(_gx)}, y={len(_gy)}, pos={len(_gp)}).',
+                    ))
+                elif len(_gx) < 2:
+                    out.append((_CHK_SEC_MORPHO, 'Specimen geometry needs >= 2 stations.'))
+                else:
+                    for _lbl, _vals in (('height x', _gx), ('depth y', _gy)):
+                        for _val in _vals:
+                            if _val <= 0:
+                                out.append((_CHK_SEC_MORPHO, f'Specimen geometry {_lbl}: invalid ({_val:g} mm).'))
+                                break
+            except ValueError as _ge:
+                out.append((_CHK_SEC_MORPHO, f'Specimen geometry: {_ge}'))
 
     v_pclamp = _session_float('morpho_prof_clamp')
     if v_pclamp is not None:
@@ -3713,23 +3722,58 @@ def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
     return True
 
 
+def _parse_comma_floats(s: str) -> list[float]:
+    """Parse a comma-separated string into a list of floats (blank tokens skipped).
+
+    Raises ``ValueError`` (loud) naming the offending token if any entry is not numeric.
+    """
+    out: list[float] = []
+    for tok in str(s or '').split(','):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.append(float(tok))
+        except ValueError:
+            raise ValueError(f'Not a number: {tok!r}.')
+    return out
+
+
 def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
-    """Tapered outline + specimen density + length for profiled / inertial (and frustum-style) corrections → ``b``."""
+    """User-defined specimen geometry (x heights, y depths, AoR-relative positions) → ``b``.
+
+    Builds the center-axis specimen MOI model. The model is optional: if all three lists
+    are blank, nothing is computed. Parse / equal-length / numeric guards surface loudly
+    and do not abort the (already-applied) clamp geometry.
+    """
+    st.session_state.pop('gui_morpho_geom_feedback', None)
     rho = _resolved_morpho_prof_rho_g_per_mm3()
     _queue_morpho_prof_rho_widget_sync_from_preset()
-    stations = b.make_profile_stations(
-        st.session_state['morpho_prof_ph'],
-        st.session_state['morpho_prof_pw'],
-        st.session_state['morpho_prof_dh'],
-        st.session_state['morpho_prof_dw'],
-    )
-    b.set_profiled_specimen_inertial_model(
-        stations,
-        st.session_state['morpho_prof_L'],
-        rho,
-        clamp_offset_mm=float(st.session_state['morpho_prof_clamp']),
-        num_samples=int(st.session_state['morpho_prof_samples']),
-    )
+    x_str = str(st.session_state.get('morpho_geom_x') or '').strip()
+    y_str = str(st.session_state.get('morpho_geom_y') or '').strip()
+    pos_str = str(st.session_state.get('morpho_geom_pos') or '').strip()
+    if not (x_str or y_str or pos_str):
+        _mark_morpho_applied()
+        return  # no specimen geometry model requested
+    if not (x_str and y_str and pos_str):
+        st.session_state['gui_morpho_geom_feedback'] = (
+            'Specimen geometry needs all three lists (heights x, depths y, position vs AoR).'
+        )
+        _mark_morpho_applied()
+        return
+    try:
+        xs = _parse_comma_floats(x_str)
+        ys = _parse_comma_floats(y_str)
+        ps = _parse_comma_floats(pos_str)
+        b.set_specimen_geometry_inertial_model(
+            xs,
+            ys,
+            ps,
+            rho,
+            clamp_offset_mm=float(st.session_state.get('morpho_prof_clamp') or 0.0),
+        )
+    except ValueError as e:
+        st.session_state['gui_morpho_geom_feedback'] = f'Specimen geometry not applied: {e}'
     _mark_morpho_applied()
 
 
@@ -3782,31 +3826,21 @@ def _sync_morphometric_flags_from_session(b: Bender):
         b.fishlen_SL = float(st.session_state['morpho_fishlen_SL'])
 
 
-def _morpho_prof_outline_mm_from_bender(b: Bender) -> tuple[float, float, float, float]:
-    """Proximal H/W and distal H/W (mm) from ``specimen_profile_stations`` when present; else GUI placeholders."""
-    st_list = getattr(b, 'specimen_profile_stations', None)
-    if not isinstance(st_list, list) or len(st_list) < 2:
-        return (4.0, 6.0, 3.5, 5.0)
-    valid: list = []
-    for s in st_list:
-        if not isinstance(s, dict):
-            continue
+def _morpho_geometry_strings_from_bender(b: Bender) -> tuple[str, str, str]:
+    """Comma-separated heights/depths/positions strings from stored specimen geometry; '' if none."""
+
+    def _fmt(seq) -> str:
+        if not isinstance(seq, (list, tuple)) or len(seq) == 0:
+            return ''
         try:
-            float(s.get('position', 0.0))
-            float(s.get('height_mm', 0.0))
-            float(s.get('width_mm', 0.0))
+            return ', '.join(f'{float(v):g}' for v in seq)
         except (TypeError, ValueError):
-            continue
-        valid.append(s)
-    if len(valid) < 2:
-        return (4.0, 6.0, 3.5, 5.0)
-    by_pos = sorted(valid, key=lambda s: float(s['position']))
-    p0, p1 = by_pos[0], by_pos[-1]
+            return ''
+
     return (
-        float(p0['height_mm']),
-        float(p0['width_mm']),
-        float(p1['height_mm']),
-        float(p1['width_mm']),
+        _fmt(getattr(b, 'specimen_geometry_heights_mm', None)),
+        _fmt(getattr(b, 'specimen_geometry_depths_mm', None)),
+        _fmt(getattr(b, 'specimen_geometry_positions_mm', None)),
     )
 
 
@@ -3815,7 +3849,7 @@ def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
     dc = getattr(b, 'dclamp', None)
     xw = getattr(b, 'xsec_width', None)
     meta = getattr(b, 'h5_protocol_metadata', {}) or {}
-    ph, pw, dh, dw = _morpho_prof_outline_mm_from_bender(b)
+    geom_x, geom_y, geom_pos = _morpho_geometry_strings_from_bender(b)
     _fm = getattr(b, 'fishmass', None)
     _ftl = getattr(b, 'fishlen_TL', None)
     _fsl = getattr(b, 'fishlen_SL', None)
@@ -3839,14 +3873,15 @@ def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
         'morpho_temp_tank': float(getattr(b, 'temp_C_tank', 22.0) or 22.0),
         'morpho_prep_condition': str(meta.get('prep_condition', '') or ''),
         'morpho_use_theoretical_inertial': bool(getattr(b, 'use_theoretical_inertial_correction', False)),
-        'morpho_prof_L': float(getattr(b, 'specimen_profile_length_mm', 25.0) or 25.0),
-        'morpho_prof_rho': float(getattr(b, 'specimen_profile_density_g_per_mm3', 1.03e-3) or 1.03e-3),
-        'morpho_prof_ph': ph,
-        'morpho_prof_pw': pw,
-        'morpho_prof_dh': dh,
-        'morpho_prof_dw': dw,
+        'morpho_prof_rho': float(
+            getattr(b, 'specimen_geometry_density_g_per_mm3', None)
+            or getattr(b, 'specimen_profile_density_g_per_mm3', 1.03e-3)
+            or 1.03e-3
+        ),
+        'morpho_geom_x': geom_x,
+        'morpho_geom_y': geom_y,
+        'morpho_geom_pos': geom_pos,
         'morpho_prof_clamp': float(getattr(b, 'specimen_profile_clamp_offset_mm', 20.0) or 20.0),
-        'morpho_prof_samples': int(getattr(b, 'specimen_profile_num_samples', 120) or 120),
         'morpho_prof_rho_preset': MORPHO_DENSITY_PRESET_LABELS[0],
     }
 
@@ -7261,45 +7296,48 @@ def main():
                         '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
                     ),
                 )
-                if 'morpho_prof_L' not in st.session_state:
-                    st.session_state['morpho_prof_L'] = 0.0
-                st.number_input(
-                    'Specimen outline length for profile model (mm)',
-                    min_value=0.001,
-                    format='%.6g',
-                    key='morpho_prof_L',
-                    help='Length along the specimen used with the tapered outline below (`specimen_profile_length_mm`).',
+                for _gk in ('morpho_geom_x', 'morpho_geom_y', 'morpho_geom_pos'):
+                    if _gk not in st.session_state:
+                        st.session_state[_gk] = ''
+                st.caption(
+                    'Define the specimen as cross-section stations along its length. Enter three '
+                    '**equal-length**, comma-separated lists (one value per station). Cross-sections '
+                    'are ellipses with semi-axes height/2 and depth/2 (mirrors the existing '
+                    'convention). I_spec is computed about the **center transverse axis** (AoR = 0). '
+                    '⚠️ I_spec is **NOT rod-scale validated** — leave inertial correction OFF unless '
+                    'validated on the rig.'
                 )
-                p1, p2 = st.columns(2)
-                with p1:
-                    if 'morpho_prof_ph' not in st.session_state:
-                        st.session_state['morpho_prof_ph'] = 0.0
-                    st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='morpho_prof_ph')
-                    if 'morpho_prof_pw' not in st.session_state:
-                        st.session_state['morpho_prof_pw'] = 0.0
-                    st.number_input('Proximal width (mm)', min_value=0.001, format='%.6g', key='morpho_prof_pw')
-                with p2:
-                    if 'morpho_prof_dh' not in st.session_state:
-                        st.session_state['morpho_prof_dh'] = 0.0
-                    st.number_input('Distal height (mm)', min_value=0.001, format='%.6g', key='morpho_prof_dh')
-                    if 'morpho_prof_dw' not in st.session_state:
-                        st.session_state['morpho_prof_dw'] = 0.0
-                    st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='morpho_prof_dw')
-                p3, p4 = st.columns(2)
-                with p3:
-                    if 'morpho_prof_clamp' not in st.session_state:
-                        st.session_state['morpho_prof_clamp'] = 0.0
-                    st.number_input(
-                        'Distance from rotation axis to clamps (mm)',
-                        min_value=0.0,
-                        format='%.6g',
-                        key='morpho_prof_clamp',
-                        help=MORPHO_PROF_CLAMP_FIELD_HELP,
+                g1, g2, g3 = st.columns(3)
+                with g1:
+                    st.text_input(
+                        'Heights x (mm, comma-separated)',
+                        key='morpho_geom_x',
+                        placeholder='e.g. 1, 5, 7',
+                        help='Cross-section height per station (full dimension, each > 0).',
                     )
-                with p4:
-                    if 'morpho_prof_samples' not in st.session_state:
-                        st.session_state['morpho_prof_samples'] = 0.0
-                    st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='morpho_prof_samples')
+                with g2:
+                    st.text_input(
+                        'Depths y (mm, comma-separated)',
+                        key='morpho_geom_y',
+                        placeholder='e.g. 3, 2, 1',
+                        help='Cross-section depth per station (full dimension, each > 0).',
+                    )
+                with g3:
+                    st.text_input(
+                        'Position vs AoR (mm, comma-separated)',
+                        key='morpho_geom_pos',
+                        placeholder='e.g. -10, 0, 10',
+                        help='Station position relative to the axis of rotation (center between clamps = 0; may be negative).',
+                    )
+                if 'morpho_prof_clamp' not in st.session_state:
+                    st.session_state['morpho_prof_clamp'] = 0.0
+                st.number_input(
+                    'Distance from rotation axis to clamps (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='morpho_prof_clamp',
+                    help=MORPHO_PROF_CLAMP_FIELD_HELP,
+                )
 
                 st.divider()
                 if 'morpho_use_theoretical_inertial' not in st.session_state:
@@ -7329,6 +7367,8 @@ def main():
                 _apply_mounted_profile_inertial_to_bender(b)
                 st.session_state['gui_measurements_confirmed'] = True
                 st.toast('Clamp geometry & inertial correction applied.')
+        if _geom_fb := st.session_state.get('gui_morpho_geom_feedback'):
+            st.warning(_geom_fb)
 
         _touch_morpho_apply_baseline_if_clean()
 
