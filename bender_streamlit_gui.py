@@ -18,7 +18,9 @@ import hashlib
 import importlib
 import json
 import math
+import ntpath
 import os
+import posixpath
 import sys
 import tempfile
 import time
@@ -2432,12 +2434,43 @@ def _normalize_data_filename_field() -> None:
         st.session_state['gui_data_filename'] = base
 
 
+def _split_path_cross_platform(p: str) -> Tuple[str, str]:
+    """Return ``(dirname, basename)`` for a path that may use Windows or POSIX separators.
+
+    Acquisition runs on Windows, but persisted signatures may be re-read on macOS where
+    ``os.path`` would not split ``C:\\...\\file.h5`` (backslashes aren't separators on POSIX).
+    Detect Windows-style paths (drive letter or backslash) and split with :mod:`ntpath`;
+    otherwise use :mod:`posixpath`. Returns ``('', '')`` for empty input.
+    """
+    s = str(p or '').strip()
+    if not s:
+        return '', ''
+    mod = _pathmod_cross_platform(s)
+    nv = mod.normpath(s)
+    return mod.dirname(nv), mod.basename(nv)
+
+
+def _pathmod_cross_platform(p: str):
+    """Return :mod:`ntpath` for Windows-style paths (drive letter or backslash), else :mod:`posixpath`."""
+    s = str(p or '')
+    is_windows = ('\\' in s) or (len(s) >= 2 and s[1] == ':' and s[0].isalpha())
+    return ntpath if is_windows else posixpath
+
+
+def _normpath_cross_platform(p: str) -> str:
+    s = str(p or '').strip()
+    if not s:
+        return ''
+    return _pathmod_cross_platform(s).normpath(s)
+
+
 def _repair_data_path_fields_from_session() -> None:
     """Best-effort repair for data-path fields from persisted session artifacts."""
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
     fn = str(st.session_state.get('gui_data_filename') or '').strip()
     if folder and fn:
-        st.session_state['gui_data_filename'] = os.path.basename(os.path.normpath(fn))
+        _, fn_base = _split_path_cross_platform(fn)
+        st.session_state['gui_data_filename'] = fn_base or fn
         return
 
     sig = st.session_state.get('gui_data_path_applied_sig')
@@ -2449,22 +2482,23 @@ def _repair_data_path_fields_from_session() -> None:
         return
 
     for v in vals:
-        nv = os.path.normpath(v)
-        if nv.lower().endswith('.h5') and (os.path.dirname(nv) or ('\\' in nv or '/' in nv)):
-            st.session_state['gui_data_folder'] = os.path.dirname(nv) or folder
-            st.session_state['gui_data_filename'] = os.path.basename(nv)
+        v_dir, v_base = _split_path_cross_platform(v)
+        if v_base.lower().endswith('.h5') and (v_dir or ('\\' in v or '/' in v)):
+            st.session_state['gui_data_folder'] = v_dir or folder
+            st.session_state['gui_data_filename'] = v_base
             return
 
     if len(vals) == 2:
         a, b = vals
-        a_norm, b_norm = os.path.normpath(a), os.path.normpath(b)
-        if os.path.dirname(a_norm) and os.path.basename(b_norm):
-            st.session_state['gui_data_folder'] = a_norm
-            st.session_state['gui_data_filename'] = os.path.basename(b_norm)
+        a_dir, a_base = _split_path_cross_platform(a)
+        b_dir, b_base = _split_path_cross_platform(b)
+        if a_dir and b_base:
+            st.session_state['gui_data_folder'] = _normpath_cross_platform(a)
+            st.session_state['gui_data_filename'] = b_base
             return
-        if os.path.dirname(b_norm) and os.path.basename(a_norm):
-            st.session_state['gui_data_folder'] = b_norm
-            st.session_state['gui_data_filename'] = os.path.basename(a_norm)
+        if b_dir and a_base:
+            st.session_state['gui_data_folder'] = _normpath_cross_platform(b)
+            st.session_state['gui_data_filename'] = a_base
 
 
 def _section2_destination_incomplete() -> bool:
