@@ -1161,7 +1161,7 @@ class Bender:
         if dc is None:
             raise ValueError(
                 'Dynamic run needs test_segment_length_mm (internally `dclamp`) on the Bender — '
-                'usually set in the biometrics section.'
+                'usually set in the morphometrics section.'
             )
         xw = getattr(self, 'xsec_width', None)
         if xw is None:

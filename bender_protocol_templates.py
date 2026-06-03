@@ -1,5 +1,5 @@
 """
-Named protocol templates: saved **procedure** parameters (test_type + form fields), not biometrics.
+Named protocol templates: saved **procedure** parameters (test_type + form fields), not morphometrics.
 
 Supports every GUI experiment type: **dynamic**, **frequency_sweep**, **frequency_step**,
 **curvature_step**, **step_change**, **isometric**, **isovelocity**, and **calibration**.
@@ -7,8 +7,8 @@ Supports every GUI experiment type: **dynamic**, **frequency_sweep**, **frequenc
 for ``calibration_base_test_type``) so load + **Apply** restores both layers.
 
 Templates are JSON files you can share or version-control. Load fills Streamlit ``fld_*`` session
-keys and ``test_type_select``; the user then **Apply**es to the ``Bender`` instance. Biometrics
-(geometry, profile, species) are separate—use **Load / Save biometrics** in the Streamlit GUI
+keys and ``test_type_select``; the user then **Apply**es to the ``Bender`` instance. Morphometrics
+(geometry, profile, species) are separate—use **Load / Save morphometrics** in the Streamlit GUI
 (section 2) or enter them manually after loading a protocol template.
 """
 from __future__ import annotations

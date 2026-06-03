@@ -622,7 +622,7 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         if dc is None:
             r['error'] = (
                 'Isometric preview needs clamp spacing (mm): set **test_segment_length_mm** (or `dclamp`) '
-                'in biometrics / section 2.'
+                'in morphometrics / section 2.'
             )
             return r
         xw = getattr(b, 'xsec_width', None)
@@ -758,7 +758,7 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
     if dc is None:
         r['error'] = (
             'Isovelocity preview needs clamp spacing (mm): set **test_segment_length_mm** (or `dclamp`) '
-            'in biometrics / section 2.'
+            'in morphometrics / section 2.'
         )
         return r
     xw = getattr(b, 'xsec_width', None)

@@ -51,7 +51,7 @@ titles:
 | Pillar | Role |
 |--------|------|
 | **Hardware configuration** | Instrument / DAQ / channels |
-| **Specimen** | Specimen and subject metadata (formerly "Biometrics"; rename to "Morphometrics" pending — see ux_spec Section 10) |
+| **Specimen** | Specimen and subject metadata (morphometrics; renamed from the former "Biometrics") |
 | **Protocol** | Experiment procedure (use "protocol" consistently, never "procedure") |
 
 ---

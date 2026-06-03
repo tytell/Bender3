@@ -77,7 +77,7 @@ def _length_m_from_mm(length_mm: Optional[float], fallback_mm: float = 30.0) -> 
 
 
 def specimen_effective_length_m(length_mm: Optional[float]) -> float:
-    """Cantilever span (m) for simulation, from biometrics ``dclamp`` / segment length."""
+    """Cantilever span (m) for simulation, from morphometrics ``dclamp`` / segment length."""
     return _length_m_from_mm(length_mm)
 
 

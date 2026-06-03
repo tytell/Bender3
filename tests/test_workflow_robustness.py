@@ -88,15 +88,15 @@ def test_streamlit_routes_render_with_stressed_session_state():
         at = AppTest.from_file('bender_streamlit_gui.py')
         at.session_state['gui_app_route'] = route
 
-        # Stress key areas: config/path/biometrics/protocol-related session values.
+        # Stress key areas: config/path/morphometrics/protocol-related session values.
         at.session_state['gui_cfg_mod'] = 'nonexistent_config'
         at.session_state['gui_data_folder'] = r'Z:\definitely\not\real\folder'
         at.session_state['gui_data_filename'] = ''
-        at.session_state['bio_fishmass'] = -1.0
-        at.session_state['bio_dclamp'] = -50.0
-        at.session_state['bio_fishlen_TL'] = np.nan
-        at.session_state['bio_prof_samples'] = -100
-        at.session_state['gui_run_biometrics_confirm'] = False
+        at.session_state['morpho_fishmass'] = -1.0
+        at.session_state['morpho_dclamp'] = -50.0
+        at.session_state['morpho_fishlen_TL'] = np.nan
+        at.session_state['morpho_prof_samples'] = -100
+        at.session_state['gui_run_morphometrics_confirm'] = False
         at.session_state['gui_confirm_run_without_calibration'] = False
         at.session_state['gui_confirm_run_without_destination'] = False
         at.session_state['gui_h5_explore_path'] = r'C:\not_real\fake.h5'
@@ -116,7 +116,7 @@ def test_autosave_roundtrip_and_start_fresh_cleanup(tmp_path, monkeypatch):
     st.session_state['gui_app_route'] = 'scratch'
     st.session_state['gui_data_folder'] = str(tmp_path)
     st.session_state['gui_data_filename'] = 'trial.h5'
-    st.session_state['bio_fishmass'] = 10.0
+    st.session_state['morpho_fishmass'] = 10.0
     st.session_state['gui_setup_confirmed'] = True
     st.session_state['gui_measurements_confirmed'] = True
     st.session_state['gui_protocol_confirmed'] = True
@@ -139,7 +139,7 @@ def test_autosave_roundtrip_and_start_fresh_cleanup(tmp_path, monkeypatch):
     _clear_streamlit_session_state()
     gui._restore_autosave_payload(payload)
     assert st.session_state['gui_data_filename'] == 'trial.h5'
-    assert st.session_state['bio_fishmass'] == 10.0
+    assert st.session_state['morpho_fishmass'] == 10.0
     assert st.session_state['gui_session_source'] == 'restored'
 
     gui._reset_workflow_session_to_home(clear_autosave=True)
@@ -251,10 +251,10 @@ def test_checklist_requires_confirmation_plus_valid_state():
 
     st.session_state['gui_genus_species'] = 'Danio rerio'
     st.session_state['gui_specimen_id'] = 'fish-1'
-    st.session_state['bio_fishmass'] = 2.0
-    st.session_state['bio_dclamp'] = 10.0
-    st.session_state['bio_xsec'] = 2.0
-    gui._mark_bio_applied()
+    st.session_state['morpho_fishmass'] = 2.0
+    st.session_state['morpho_dclamp'] = 10.0
+    st.session_state['morpho_xsec'] = 2.0
+    gui._mark_morpho_applied()
     ready2 = gui._workflow_ready_state(b, 'dynamic')
     assert ready2['measurements_ok']
 
@@ -286,11 +286,11 @@ def test_refresh_confirmation_flags_clear_when_dirty():
     st.session_state['gui_data_folder'] = r'C:\tmp'
     st.session_state['gui_data_filename'] = 'x.h5'
     gui._mark_data_path_applied()
-    st.session_state['gui_bio_applied_sig'] = gui._bio_fingerprint()
+    st.session_state['gui_morpho_applied_sig'] = gui._morpho_fingerprint()
     st.session_state['gui_proc_applied_sig'] = gui._procedure_fingerprint()
 
     st.session_state['gui_data_filename'] = 'changed.h5'
-    st.session_state['gui_bio_apply_invalidated'] = True
+    st.session_state['gui_morpho_apply_invalidated'] = True
     st.session_state['gui_proc_apply_invalidated'] = True
     gui._refresh_confirmation_flags()
 

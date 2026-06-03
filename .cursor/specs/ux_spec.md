@@ -227,7 +227,7 @@ of these during restore:
 
 - Bilateral pre/post stimulus in `make_stimuli()` — approved design, validate
   on the rig.
-- `bio_*` / "biometrics" key rename to "morphometrics" — deferred refactor.
+- `morpho_*` / "morphometrics" keys: renamed from the former `bio_*` / "biometrics" (completed refactor).
 - `prepoststim_sep` wiring — part of the bilateral stim extension.
 
 ---

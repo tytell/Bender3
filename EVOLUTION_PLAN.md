@@ -13,7 +13,7 @@
 - This file is advisory by default.
 - It becomes binding only when a task/user explicitly references specific items or sprints.
 - It does not override Tier 1 (`.cursorrules`) or Tier 2 (`.cursor/specs/ui_style.md`) constraints.
-- Use the canonical user-facing triad consistently: **Hardware configuration**, **Biometrics**, **Protocol**.
+- Use the canonical user-facing triad consistently: **Hardware configuration**, **Morphometrics**, **Protocol**.
 
 This document proposes a structured set of 100 critical “finalization” questions across:
 - Hardware Safety
@@ -51,8 +51,8 @@ Goal: Ensure the operator always knows what is selected vs applied, what will ha
 - [ ] 12. When users change Step 2 selections (folder/filename), does the UI explicitly indicate whether that choice is “selected” vs “applied/committed” to the experiment object?
 - [ ] 13. If users change folder/filename after applying setup, does the app automatically mark setup as unconfirmed (or warn) before allowing run/save?
 - [ ] 14. Are browse/selection failures (tk dialogs) surfaced with actionable guidance and a fallback manual entry option?
-- [ ] 15. Do stepwise navigation controls prevent skipping required safety-critical selections (hardware config, destination, biometrics basics) even when using “Back/Next”?
-- [ ] 16. When soft warnings are generated (missing calibration, incomplete biometrics, destination incomplete), do “Proceed/Abort” messages clearly state consequences for hardware and saving?
+- [ ] 15. Do stepwise navigation controls prevent skipping required safety-critical selections (hardware config, destination, morphometrics basics) even when using “Back/Next”?
+- [ ] 16. When soft warnings are generated (missing calibration, incomplete morphometrics, destination incomplete), do “Proceed/Abort” messages clearly state consequences for hardware and saving?
 - [ ] 17. Is there a clear “what will be written where” summary immediately before the operator proceeds to DAQ acquisition?
 - [ ] 18. If “Stop DAQ & reset NI device” is pressed during/around a run, does the UI prevent further export/QC steps until the operator restarts the workflow?
 - [ ] 19. Are UI states consistent across full workflow and template mode so the operator cannot hit a hidden “different semantics” trap?
@@ -84,18 +84,18 @@ Goal: Make path composition, normalization, and session restore robust so the wr
 - [ ] 37. Are multiple tabs/sessions isolated so one operator cannot affect another operator’s session_state through shared Streamlit server state?
 - [ ] 38. Do Streamlit reruns (widget interactions) mid-flow preserve invariants so in-memory experiment state never diverges from UI?
 - [ ] 39. When users switch hardware config modules, does the app correctly invalidate dependent state so the next run does not reuse mismatched calibration channels?
-- [ ] 40. Are missing biometrics/template files handled gracefully so the operator cannot apply partial measurements and proceed unknowingly?
+- [ ] 40. Are missing morphometrics/template files handled gracefully so the operator cannot apply partial measurements and proceed unknowingly?
 
 ## Sprint 5: Reliability for Templates & Procedure Loading (41-50)
 Goal: Ensure template and procedure loading are deterministic, validated, and cannot accidentally mismatch data destinations or experiment parameters.
 
 - [ ] 41. When loading a hardware config module, does the app clear stale experiment buffers so new runs never reuse old data arrays?
 - [ ] 42. When applying setup (data path), does the dirty/applied state tracking reliably reflect whether the experiment object actually changed?
-- [ ] 43. When applying biometrics templates, does the app always apply all required blocks (intrinsic, clamp geometry, mounted/inertial profile) and mark measurement state correctly?
-- [ ] 44. Are there guardrails preventing biometrics application without a valid data folder when templates assume those paths?
+- [ ] 43. When applying morphometrics templates, does the app always apply all required blocks (intrinsic, clamp geometry, mounted/inertial profile) and mark measurement state correctly?
+- [ ] 44. Are there guardrails preventing morphometrics application without a valid data folder when templates assume those paths?
 - [ ] 45. Do template workflow loaders correctly handle “reload module” without losing user-selected data destination selections?
-- [ ] 46. If JSON parsing fails for biometrics/template files, does the error message name the offending file/key and provide next steps?
-- [ ] 47. After biometrics application, are derived flags (for example, inertial usage and computed derived parameters) updated consistently in the `Bender` object?
+- [ ] 46. If JSON parsing fails for morphometrics/template files, does the error message name the offending file/key and provide next steps?
+- [ ] 47. After morphometrics application, are derived flags (for example, inertial usage and computed derived parameters) updated consistently in the `Bender` object?
 - [ ] 48. After template loading, does the app enforce that required measurement values exist before enabling procedure/run actions?
 - [ ] 49. Does protocol preview generation match exactly what DAQ acquisition will use (no parameter drift between preview and run)?
 - [ ] 50. If protocol parameters change after refresh preview, does the UI force the operator to refresh preview before allowing run?
@@ -124,7 +124,7 @@ Goal: Make failures understandable and recoverable so operators can return to a 
 - [ ] 65. If QC fails due to missing/invalid HDF5 content, does the GUI report that clearly and point to likely causes?
 - [ ] 66. Does the app prevent Streamlit crashes on file I/O exceptions (permissions, missing directories, invalid HDF5 reads)?
 - [ ] 67. Are advanced diagnostics features safe and do they avoid leaking secrets or irrelevant internal paths?
-- [ ] 68. For template/biometrics loaders, does the UI indicate schema/version compatibility to prevent silent misinterpretation?
+- [ ] 68. For template/morphometrics loaders, does the UI indicate schema/version compatibility to prevent silent misinterpretation?
 - [ ] 69. Are common filesystem errors (permission denied, wrong directory, locked file) handled gracefully with retries or next steps?
 - [ ] 70. Are there recovery pathways to retry failed operations without needing a full browser refresh?
 
@@ -164,7 +164,7 @@ Goal: Improve clarity, consistency, and usability so operators trust the app and
 - [ ] 93. Are all critical buttons styled consistently (colors, emphasis, width) and do they match operator expectations?
 - [ ] 94. Does CSS injection remain robust across Streamlit version changes (no broken selectors/layout drift)?
 - [ ] 95. Are accessibility basics covered (contrast, focus order, readable font sizes, keyboard navigability)?
-- [ ] 96. Is wording standardized for “Apply setup”, “Apply section”, “Apply biometrics”, “Proceed”, and “Abort” to avoid ambiguity?
+- [ ] 96. Is wording standardized for “Apply setup”, “Apply section”, “Apply morphometrics”, “Proceed”, and “Abort” to avoid ambiguity?
 - [ ] 97. Are tooltips or “operator cheat sheets” available for the safety-critical steps so new operators can follow them?
 - [ ] 98. Does the app run startup preflight checks (nidaqmx availability, device name present, output directories) and communicate results?
 - [ ] 99. Are session restore and autosave behaviors transparent enough that operators understand what state was reused?
@@ -192,7 +192,7 @@ Goal: Improve clarity, consistency, and usability so operators trust the app and
 **Touches:**
 - bender_streamlit_gui.py — every file/folder text_input and selectbox.
 - bender_functions.py — any path resolution that bypasses the UI.
-- Template loaders for biometrics, protocols, hardware config.
+- Template loaders for morphometrics, protocols, hardware config.
 
 **Risk:**
 - Touches every file path in the app. Requires the validation-gate discipline from jlab_project_consolidation_sop §5: run end-to-end against a known-good output before declaring done.
@@ -224,7 +224,7 @@ Disposition each item as: **FIXED** / **DEFERRED** (with reason) / **SPEC-AMENDE
 - Items **64–66, 69–73** (layout: dead stepwise route, duplicate section numbers, three-mode launcher).
 
 ### Tier 4 — Decide, do not drop
-- Items **26–29** (`gui_` prefix violations on `fld_*` / `bio_*`): **DEFERRED** for safety — renames must change reads, writes, and HDF5 saves together or data breaks. Revisit as dedicated session.
+- Items **26–29** (`gui_` prefix violations on `fld_*` / `morpho_*`): **DEFERRED** for safety — renames must change reads, writes, and HDF5 saves together or data breaks. Revisit as dedicated session.
 - Items **59–63** (filesystem selectboxes vs paste-only §7): **DECISION NEEDED** — either fix to match spec, or amend §7 to allow short known-list pickers. Likely resolves naturally with JLAB_ROOT path anchor (see backlog above).
 - Items **84–101** (missing button `type=`): cosmetic. Fix during a styling pass.
 
@@ -236,8 +236,8 @@ Disposition each item as: **FIXED** / **DEFERRED** (with reason) / **SPEC-AMENDE
 **Action:** Audit validator for fields that should be required only when an enabling checkbox is true. Common pattern, likely affects other conditional groups (sono, stim monitor, profile inertial).
 
 ## Measurements green check fails after Apply
-**Bug:** Measurements section status icon does not turn green even after fields are filled and "Apply section" / "Apply all biometrics" is clicked.
+**Bug:** Measurements section status icon does not turn green even after fields are filled and "Apply section" / "Apply all morphometrics" is clicked.
 **Spec ref:** ux_spec §3 (Dirty state).
 **Audit cross-ref:** Related to items 11, 13, 49 (status icons reading unapplied state).
 **Pre-existing:** Yes — present before Batch B fixes.
-**Action:** Audit `_workflow_ready_state` / `_measurements_fields_ok` / `_bio_apply_dirty` chain. Confirm Apply actually clears dirty state AND that the dirty check reads the post-Apply baseline correctly.
+**Action:** Audit `_workflow_ready_state` / `_measurements_fields_ok` / `_morpho_apply_dirty` chain. Confirm Apply actually clears dirty state AND that the dirty check reads the post-Apply baseline correctly.

@@ -5,7 +5,7 @@ Run from the project directory:
     streamlit run bender_streamlit_gui.py
 
 Select ``test_type`` first; edit fields, use **Apply** to copy them onto the
-``Bender`` instance, optionally **save / load protocol** and **biometrics** files in **section 3**,
+``Bender`` instance, optionally **save / load protocol** and **morphometrics** files in **section 3**,
 **Check required fields** to validate,
 **Refresh experiment preview** (in **Procedure fields**) for a table/plot of commanded motion (no DAQ), then **Run experiment**
 when hardware is ready.
@@ -101,13 +101,13 @@ from bender_simulation import (  # noqa: E402
     oscillatory_viscoelastic_timeseries,
     static_stiffness_comparison_delta_grid,
 )
-from bender_biometrics_templates import (  # noqa: E402
-    apply_biometrics_template_to_session,
-    biometrics_template_display_label,
-    list_biometrics_template_files,
-    load_biometrics_template,
-    save_biometrics_template,
-    sanitize_biometrics_filename_stem,
+from bender_morphometrics_templates import (  # noqa: E402
+    apply_morphometrics_template_to_session,
+    morphometrics_template_display_label,
+    list_morphometrics_template_files,
+    load_morphometrics_template,
+    save_morphometrics_template,
+    sanitize_morphometrics_filename_stem,
 )
 from bender_protocol_templates import (  # noqa: E402
     apply_template_to_session_state,
@@ -884,7 +884,7 @@ def _hardware_configuration_mode_toggle() -> str:
 
 
 def _shared_experiment_dir() -> str:
-    """Protocol & biometrics JSON files use the same folder as **Data folder** (section 2) when it exists."""
+    """Protocol & morphometrics JSON files use the same folder as **Data folder** (section 2) when it exists."""
     d = str(st.session_state.get('gui_data_folder') or '').strip()
     if d:
         norm = os.path.normpath(d)
@@ -898,7 +898,7 @@ def _session_snapshots_dir() -> str:
 
 
 _AUTOSAVE_SCHEMA_VERSION = 1
-_AUTOSAVE_PREFIXES = ('gui_', 'bio_', 'fld_')
+_AUTOSAVE_PREFIXES = ('gui_', 'morpho_', 'fld_')
 _AUTOSAVE_EXCLUDE_KEYS = {
     'gui_autosave_last_saved_at',
     'gui_autosave_last_sig',
@@ -983,8 +983,8 @@ def _is_restore_safe_key(key: str) -> bool:
             key.startswith('gui_btn_')
             or key.startswith('gui_save_')
             or key.startswith('gui_go_')
-            or key.startswith('gui_biometrics_btn_')
-            or key.startswith('bio_btn_')
+            or key.startswith('gui_morphometrics_btn_')
+            or key.startswith('morpho_btn_')
             or key.startswith('gui_nav_')
             or key.startswith('gui_sw_')
             or key.startswith('gui_hw_cfg_mode_')
@@ -1275,7 +1275,7 @@ def _update_state_origin_summary() -> None:
 def _reset_workflow_session_to_home(*, clear_autosave: bool = False, target_route: str = 'landing') -> None:
     """Clear workflow state and route to target module."""
     keep = {'gui_ui_theme', 'gui_ui_large_text', 'gui_data_folder', 'gui_data_filename', 'gui_autosave_bootstrapped'}
-    keep_prefixes = ('bio_', 'gui_biometrics_', 'gui_genus_', 'gui_specimen_')
+    keep_prefixes = ('morpho_', 'gui_morphometrics_', 'gui_genus_', 'gui_specimen_')
     for k in list(st.session_state.keys()):
         if k not in keep and not k.startswith(keep_prefixes):
             st.session_state.pop(k, None)
@@ -1291,10 +1291,10 @@ def _protocol_template_option_label(p: Optional[str]):
     return f'{template_display_label(p)}  ·  {os.path.basename(p)}'
 
 
-def _biometrics_template_option_label(p: Optional[str]):
+def _morphometrics_template_option_label(p: Optional[str]):
     if p is None:
-        return '— Choose a biometrics file —'
-    return biometrics_template_display_label(p)
+        return '— Choose a morphometrics file —'
+    return morphometrics_template_display_label(p)
 from bender_h5_export import build_universal_qc_figure, export_primary_h5, save_universal_qc_figure  # noqa: E402
 from bender_h5_plot_helpers import (  # noqa: E402
     align_xy,
@@ -1404,7 +1404,7 @@ VELOCITY_MODE_OPTIONS = ('strain_rate', 'strain_pct_rate', 'curvature_rate', 'an
 
 DATA_FOLDER_HELP = (
     'Choose the folder where experiment files live. Enter the folder path only — do not put the file name here. '
-    'Runs, exports, protocol templates, and biometrics files can all use this folder.'
+    'Runs, exports, protocol templates, and morphometrics files can all use this folder.'
 )
 DATA_FILE_NAME_HELP = (
     'This is the name of your saved measurements file (HDF5). Enter only the file name, not the full path. '
@@ -1413,56 +1413,56 @@ DATA_FILE_NAME_HELP = (
 )
 
 # Specimen density presets: ρ (g/cm³) × 1e-3 → g/mm³ (same mass per volume, different unit).
-BIO_DENSITY_PRESET_LABELS = (
+MORPHO_DENSITY_PRESET_LABELS = (
     'Custom — edit the number below',
     'Water-like (~1.00 g/cm³)',
     'Skeletal muscle / soft tissue (~1.06 g/cm³)',
     'Cortical bone (~1.9 g/cm³)',
 )
-BIO_DENSITY_PRESET_G_PER_MM3 = {
+MORPHO_DENSITY_PRESET_G_PER_MM3 = {
     'Water-like (~1.00 g/cm³)': 1.0e-3,
     'Skeletal muscle / soft tissue (~1.06 g/cm³)': 1.06e-3,
     'Cortical bone (~1.9 g/cm³)': 1.9e-3,
 }
 
-BIO_DBEND_FIELD_HELP = (
+MORPHO_DBEND_FIELD_HELP = (
     'Distance **along the body** (mm) from your length reference (same as TL/SL, often snout or a fixed landmark) to the '
     '**midpoint between the two clamps** — i.e. where the bending test is centered. Use **0** only if that reference is '
     'already at the segment center. Saved as `dbend` / `test_segment_position_mm`.'
 )
 
-BIO_PROF_CLAMP_FIELD_HELP = (
+MORPHO_PROF_CLAMP_FIELD_HELP = (
     'Used only for **rotating hardware** mass/MOI in the profiled inertial model: offset from the **bend / rotation axis** '
     'to the clamps (mm). The code adds half of its built-in clamp depth to this value when estimating clamp contribution. '
     'Saved as `specimen_profile_clamp_offset_mm`.'
 )
 
 
-def _resolved_bio_prof_rho_g_per_mm3() -> float:
-    """Density for profile/inertial apply: preset table value, or the custom ``bio_prof_rho`` number input."""
-    label = str(st.session_state.get('bio_prof_rho_preset') or '')
-    v = BIO_DENSITY_PRESET_G_PER_MM3.get(label)
+def _resolved_morpho_prof_rho_g_per_mm3() -> float:
+    """Density for profile/inertial apply: preset table value, or the custom ``morpho_prof_rho`` number input."""
+    label = str(st.session_state.get('morpho_prof_rho_preset') or '')
+    v = MORPHO_DENSITY_PRESET_G_PER_MM3.get(label)
     if v is not None:
         return float(v)
-    return float(st.session_state['bio_prof_rho'])
+    return float(st.session_state['morpho_prof_rho'])
 
 
-def _queue_bio_prof_rho_widget_sync_from_preset() -> None:
+def _queue_morpho_prof_rho_widget_sync_from_preset() -> None:
     """
-    Preset-driven density cannot assign ``st.session_state['bio_prof_rho']`` during the same run as the
-    ``number_input(..., key='bio_prof_rho')`` widget (Streamlit blocks writes to widget-bound keys after mount).
-    Queue the value and flush at the start of the next run (see ``_flush_pending_bio_prof_rho_sync``).
+    Preset-driven density cannot assign ``st.session_state['morpho_prof_rho']`` during the same run as the
+    ``number_input(..., key='morpho_prof_rho')`` widget (Streamlit blocks writes to widget-bound keys after mount).
+    Queue the value and flush at the start of the next run (see ``_flush_pending_morpho_prof_rho_sync``).
     """
-    label = str(st.session_state.get('bio_prof_rho_preset') or '')
-    v = BIO_DENSITY_PRESET_G_PER_MM3.get(label)
+    label = str(st.session_state.get('morpho_prof_rho_preset') or '')
+    v = MORPHO_DENSITY_PRESET_G_PER_MM3.get(label)
     if v is not None:
-        st.session_state['_pending_sync_bio_prof_rho'] = float(v)
+        st.session_state['_pending_sync_morpho_prof_rho'] = float(v)
 
 
-def _flush_pending_bio_prof_rho_sync() -> None:
-    """Copy queued preset density into the widget key before ``bio_prof_rho`` number_input is created."""
-    if '_pending_sync_bio_prof_rho' in st.session_state:
-        st.session_state['bio_prof_rho'] = float(st.session_state.pop('_pending_sync_bio_prof_rho'))
+def _flush_pending_morpho_prof_rho_sync() -> None:
+    """Copy queued preset density into the widget key before ``morpho_prof_rho`` number_input is created."""
+    if '_pending_sync_morpho_prof_rho' in st.session_state:
+        st.session_state['morpho_prof_rho'] = float(st.session_state.pop('_pending_sync_morpho_prof_rho'))
 
 
 ISOMETRIC_STIM_JSON_HELP = (
@@ -2679,9 +2679,9 @@ def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
         st.session_state['gui_pending_genus_species'] = str(_meta0.get('genus_species', '') or '')
         st.session_state['gui_pending_specimen_id'] = str(_meta0.get('specimen_id', '') or '')
         st.session_state['gui_pending_post_notes'] = str(getattr(b0, 'post_trial_notes', '') or '')
-        _init_biometrics_session_state(b0, force=True)
+        _init_morphometrics_session_state(b0, force=True)
         _clear_fld_session_keys()
-        st.session_state.pop('gui_tpl_bio_done', None)
+        st.session_state.pop('gui_tpl_morpho_done', None)
         return None
     except ImportError as e:
         st.session_state.pop('bender', None)
@@ -2722,38 +2722,38 @@ def _paths_equal_norm(a: str, b: str) -> bool:
         return str(a).strip() == str(b).strip()
 
 
-_BIO_APPLY_SESSION_KEYS = (
+_MORPHO_APPLY_SESSION_KEYS = (
     'gui_genus_species',
     'gui_specimen_id',
-    'bio_segment',
-    'bio_fishmass',
-    'bio_fishlen_TL',
-    'bio_fishlen_SL',
-    'bio_xsec_height',
-    'bio_dvert',
-    'bio_dhoriz',
-    'bio_dclamp',
-    'bio_xsec',
-    'bio_muscle_depth',
-    'bio_dbend',
-    'bio_temp_room',
-    'bio_temp_tank',
-    'bio_prep_condition',
-    'bio_use_theoretical_inertial',
-    'bio_prof_L',
-    'bio_prof_rho_preset',
-    'bio_prof_rho',
-    'bio_prof_ph',
-    'bio_prof_pw',
-    'bio_prof_dh',
-    'bio_prof_dw',
-    'bio_prof_clamp',
-    'bio_prof_samples',
+    'morpho_segment',
+    'morpho_fishmass',
+    'morpho_fishlen_TL',
+    'morpho_fishlen_SL',
+    'morpho_xsec_height',
+    'morpho_dvert',
+    'morpho_dhoriz',
+    'morpho_dclamp',
+    'morpho_xsec',
+    'morpho_muscle_depth',
+    'morpho_dbend',
+    'morpho_temp_room',
+    'morpho_temp_tank',
+    'morpho_prep_condition',
+    'morpho_use_theoretical_inertial',
+    'morpho_prof_L',
+    'morpho_prof_rho_preset',
+    'morpho_prof_rho',
+    'morpho_prof_ph',
+    'morpho_prof_pw',
+    'morpho_prof_dh',
+    'morpho_prof_dw',
+    'morpho_prof_clamp',
+    'morpho_prof_samples',
 )
 
 
-def _bio_fingerprint() -> tuple:
-    return tuple(st.session_state.get(k) for k in _BIO_APPLY_SESSION_KEYS)
+def _morpho_fingerprint() -> tuple:
+    return tuple(st.session_state.get(k) for k in _MORPHO_APPLY_SESSION_KEYS)
 
 
 def _data_path_fingerprint() -> tuple:
@@ -2772,39 +2772,39 @@ def _ensure_apply_tracking_bender(b: Bender) -> None:
     if st.session_state.get('gui_apply_tracking_bender_id') != bid:
         st.session_state['gui_apply_tracking_bender_id'] = bid
         for _k in (
-            'gui_bio_applied_sig',
+            'gui_morpho_applied_sig',
             'gui_data_path_applied_sig',
             'gui_proc_applied_sig',
-            'gui_bio_apply_invalidated',
+            'gui_morpho_apply_invalidated',
             'gui_proc_apply_invalidated',
         ):
             st.session_state.pop(_k, None)
 
 
-def _touch_bio_apply_baseline_if_clean() -> None:
-    _inv = bool(st.session_state.get('gui_bio_apply_invalidated'))
-    _has_sig = 'gui_bio_applied_sig' in st.session_state
+def _touch_morpho_apply_baseline_if_clean() -> None:
+    _inv = bool(st.session_state.get('gui_morpho_apply_invalidated'))
+    _has_sig = 'gui_morpho_applied_sig' in st.session_state
     if _inv:
         # #region agent log
         _agent_debug_log(
             hypothesis_id='B',
-            location='bender_streamlit_gui.py:_touch_bio_apply_baseline_if_clean',
+            location='bender_streamlit_gui.py:_touch_morpho_apply_baseline_if_clean',
             message='skip_touch_invalidated',
             data={'invalidated': True, 'has_sig': _has_sig},
         )
         # #endregion
         return
     if not _has_sig:
-        st.session_state['gui_bio_applied_sig'] = _bio_fingerprint()
+        st.session_state['gui_morpho_applied_sig'] = _morpho_fingerprint()
         # #region agent log
         _agent_debug_log(
             hypothesis_id='B',
-            location='bender_streamlit_gui.py:_touch_bio_apply_baseline_if_clean',
+            location='bender_streamlit_gui.py:_touch_morpho_apply_baseline_if_clean',
             message='baseline_sig_set_without_apply',
             data={
-                'fishmass': st.session_state.get('bio_fishmass'),
-                'dclamp': st.session_state.get('bio_dclamp'),
-                'xsec': st.session_state.get('bio_xsec'),
+                'fishmass': st.session_state.get('morpho_fishmass'),
+                'dclamp': st.session_state.get('morpho_dclamp'),
+                'xsec': st.session_state.get('morpho_xsec'),
             },
         )
         # #endregion
@@ -2822,9 +2822,9 @@ def _touch_proc_apply_baseline_if_clean() -> None:
         st.session_state['gui_proc_applied_sig'] = _procedure_fingerprint()
 
 
-def _mark_bio_applied() -> None:
-    st.session_state['gui_bio_apply_invalidated'] = False
-    st.session_state['gui_bio_applied_sig'] = _bio_fingerprint()
+def _mark_morpho_applied() -> None:
+    st.session_state['gui_morpho_apply_invalidated'] = False
+    st.session_state['gui_morpho_applied_sig'] = _morpho_fingerprint()
 
 
 def _mark_data_path_applied() -> None:
@@ -2836,24 +2836,24 @@ def _mark_procedure_applied() -> None:
     st.session_state['gui_proc_applied_sig'] = _procedure_fingerprint()
 
 
-def _bio_apply_dirty() -> bool:
+def _morpho_apply_dirty() -> bool:
     if st.session_state.get('bender') is None:
         return False
-    if st.session_state.get('gui_bio_apply_invalidated'):
+    if st.session_state.get('gui_morpho_apply_invalidated'):
         return True
-    if 'gui_bio_applied_sig' not in st.session_state:
+    if 'gui_morpho_applied_sig' not in st.session_state:
         return False
-    return _bio_fingerprint() != st.session_state['gui_bio_applied_sig']
+    return _morpho_fingerprint() != st.session_state['gui_morpho_applied_sig']
 
 
-def _bio_apply_dirty_reason() -> str:
+def _morpho_apply_dirty_reason() -> str:
     if st.session_state.get('bender') is None:
         return 'no_bender'
-    if st.session_state.get('gui_bio_apply_invalidated'):
+    if st.session_state.get('gui_morpho_apply_invalidated'):
         return 'invalidated'
-    if 'gui_bio_applied_sig' not in st.session_state:
+    if 'gui_morpho_applied_sig' not in st.session_state:
         return 'no_applied_sig'
-    if _bio_fingerprint() != st.session_state['gui_bio_applied_sig']:
+    if _morpho_fingerprint() != st.session_state['gui_morpho_applied_sig']:
         return 'fingerprint_mismatch'
     return 'clean'
 
@@ -2925,13 +2925,13 @@ def _measurements_fields_ok() -> bool:
         return False
     if not str(st.session_state.get('gui_genus_species') or '').strip():
         return False
-    m = _session_float('bio_fishmass')
+    m = _session_float('morpho_fishmass')
     if m is None or m <= 0:
         return False
-    dc = _session_float('bio_dclamp')
+    dc = _session_float('morpho_dclamp')
     if dc is None or dc <= 0:
         return False
-    xw = _session_float('bio_xsec')
+    xw = _session_float('morpho_xsec')
     if xw is None or xw <= 0:
         return False
     return True
@@ -2973,7 +2973,7 @@ def _workflow_ready_state(b: Optional[Bender], tt: str) -> dict[str, Any]:
     """Unified readiness for sidebar checklist and Run UX (scratch-oriented)."""
     run_disabled, run_reason = _run_button_state()
     setup_ok = _setup_ready(b)
-    measurements_ok = _measurements_fields_ok() and not _bio_apply_dirty()
+    measurements_ok = _measurements_fields_ok() and not _morpho_apply_dirty()
     # #region agent log
     _agent_debug_log(
         hypothesis_id='A',
@@ -2983,11 +2983,11 @@ def _workflow_ready_state(b: Optional[Bender], tt: str) -> dict[str, Any]:
             'route': _nav_route(),
             'stepwise_step': _stepwise_step() if _nav_route() == 'stepwise' else None,
             'fields_ok': _measurements_fields_ok(),
-            'bio_dirty': _bio_apply_dirty(),
-            'dirty_reason': _bio_apply_dirty_reason(),
+            'morpho_dirty': _morpho_apply_dirty(),
+            'dirty_reason': _morpho_apply_dirty_reason(),
             'measurements_ok': measurements_ok,
-            'fishmass': st.session_state.get('bio_fishmass'),
-            'dclamp': st.session_state.get('bio_dclamp'),
+            'fishmass': st.session_state.get('morpho_fishmass'),
+            'dclamp': st.session_state.get('morpho_dclamp'),
             'bender_dclamp': getattr(b, 'dclamp', None) if b is not None else None,
         },
     )
@@ -3009,7 +3009,7 @@ def _workflow_ready_state(b: Optional[Bender], tt: str) -> dict[str, Any]:
 
 
 _CHK_SEC_DATA = '2 · Data path'
-_CHK_SEC_BIO = '3 · Measurements'
+_CHK_SEC_MORPHO = '3 · Measurements'
 _CHK_SEC_EXP = '4–6 · Experiment'
 
 
@@ -3104,7 +3104,7 @@ def _collect_experiment_form_status_messages(tt: str) -> list[str]:
 
 
 def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
-    """Return ``(section_label, message)`` for sidebar **Status check**: path, biometrics, experiment form + Bender validation."""
+    """Return ``(section_label, message)`` for sidebar **Status check**: path, morphometrics, experiment form + Bender validation."""
     out: list[tuple[str, str]] = []
     tt = str(st.session_state.get('test_type_select') or getattr(b, 'test_type', '') or 'dynamic')
 
@@ -3129,89 +3129,89 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
         out.append((_CHK_SEC_DATA, 'Data path not set on experiment object (section 2).'))
 
     if not str(st.session_state.get('gui_specimen_id') or '').strip():
-        out.append((_CHK_SEC_BIO, 'Specimen ID is blank.'))
+        out.append((_CHK_SEC_MORPHO, 'Specimen ID is blank.'))
     if not str(st.session_state.get('gui_genus_species') or '').strip():
-        out.append((_CHK_SEC_BIO, 'Genus-species is blank.'))
+        out.append((_CHK_SEC_MORPHO, 'Genus-species is blank.'))
 
-    m = _session_float('bio_fishmass')
+    m = _session_float('morpho_fishmass')
     if m is not None:
         if m <= 0:
-            out.append((_CHK_SEC_BIO, 'Mass is zero or negative.'))
+            out.append((_CHK_SEC_MORPHO, 'Mass is zero or negative.'))
         elif m < 1.0:
-            out.append((_CHK_SEC_BIO, f'Mass {m:g} g (check units).'))
+            out.append((_CHK_SEC_MORPHO, f'Mass {m:g} g (check units).'))
 
-    _BIO_INTRINSIC_MM = (
-        ('Whole-body TL', 'bio_fishlen_TL'),
-        ('Whole-body SL', 'bio_fishlen_SL'),
+    _MORPHO_INTRINSIC_MM = (
+        ('Whole-body TL', 'morpho_fishlen_TL'),
+        ('Whole-body SL', 'morpho_fishlen_SL'),
     )
-    _BIO_CLAMP_GEOMETRY_MM = (
-        ('Clamp spacing (dclamp)', 'bio_dclamp'),
-        ('Cross-section width', 'bio_xsec'),
-        ('Muscle depth from surface', 'bio_muscle_depth'),
-        ('Cross-section height', 'bio_xsec_height'),
+    _MORPHO_CLAMP_GEOMETRY_MM = (
+        ('Clamp spacing (dclamp)', 'morpho_dclamp'),
+        ('Cross-section width', 'morpho_xsec'),
+        ('Muscle depth from surface', 'morpho_muscle_depth'),
+        ('Cross-section height', 'morpho_xsec_height'),
     )
-    _BIO_PROFILE_OUTLINE_MM = (('Profile outline length', 'bio_prof_L'),)
-    for label, key in _BIO_INTRINSIC_MM + _BIO_CLAMP_GEOMETRY_MM + _BIO_PROFILE_OUTLINE_MM:
+    _MORPHO_PROFILE_OUTLINE_MM = (('Profile outline length', 'morpho_prof_L'),)
+    for label, key in _MORPHO_INTRINSIC_MM + _MORPHO_CLAMP_GEOMETRY_MM + _MORPHO_PROFILE_OUTLINE_MM:
         v = _session_float(key)
         if v is None:
             continue
         if v <= 0:
-            out.append((_CHK_SEC_BIO, f'{label}: invalid ({v:g} mm).'))
-        elif v < 1.0 and key != 'bio_muscle_depth':
-            out.append((_CHK_SEC_BIO, f'{label}: {v:g} mm (check units).'))
+            out.append((_CHK_SEC_MORPHO, f'{label}: invalid ({v:g} mm).'))
+        elif v < 1.0 and key != 'morpho_muscle_depth':
+            out.append((_CHK_SEC_MORPHO, f'{label}: {v:g} mm (check units).'))
 
-    xw_chk = _session_float('bio_xsec')
-    md_chk = _session_float('bio_muscle_depth')
+    xw_chk = _session_float('morpho_xsec')
+    md_chk = _session_float('morpho_muscle_depth')
     if md_chk is not None and xw_chk is not None and xw_chk > 0:
         if md_chk < 0:
-            out.append((_CHK_SEC_BIO, f'Muscle depth: invalid ({md_chk:g} mm).'))
+            out.append((_CHK_SEC_MORPHO, f'Muscle depth: invalid ({md_chk:g} mm).'))
         elif md_chk >= xw_chk / 2.0:
             out.append(
                 (
-                    _CHK_SEC_BIO,
+                    _CHK_SEC_MORPHO,
                     f'Muscle depth ({md_chk:g} mm) must be < half width ({xw_chk / 2.0:g} mm).',
                 )
             )
 
-    v_dbend = _session_float('bio_dbend')
+    v_dbend = _session_float('morpho_dbend')
     if v_dbend is not None:
         if v_dbend < 0:
-            out.append((_CHK_SEC_BIO, f'Segment center distance: invalid ({v_dbend:g} mm).'))
+            out.append((_CHK_SEC_MORPHO, f'Segment center distance: invalid ({v_dbend:g} mm).'))
         elif 0 < v_dbend < 1.0:
-            out.append((_CHK_SEC_BIO, f'Segment center distance: {v_dbend:g} mm (check units).'))
+            out.append((_CHK_SEC_MORPHO, f'Segment center distance: {v_dbend:g} mm (check units).'))
 
     for label, key in (
-        ('Vertical offset (dvert)', 'bio_dvert'),
-        ('Horizontal offset (dhoriz)', 'bio_dhoriz'),
+        ('Vertical offset (dvert)', 'morpho_dvert'),
+        ('Horizontal offset (dhoriz)', 'morpho_dhoriz'),
     ):
         v = _session_float(key)
         if v is None:
             continue
         if v < 0:
-            out.append((_CHK_SEC_BIO, f'{label}: invalid ({v:g} mm).'))
+            out.append((_CHK_SEC_MORPHO, f'{label}: invalid ({v:g} mm).'))
         elif 0 < v < 1.0:
-            out.append((_CHK_SEC_BIO, f'{label}: {v:g} mm (check units).'))
+            out.append((_CHK_SEC_MORPHO, f'{label}: {v:g} mm (check units).'))
 
     for label, key in (
-        ('Profile proximal H', 'bio_prof_ph'),
-        ('Profile proximal W', 'bio_prof_pw'),
-        ('Profile distal H', 'bio_prof_dh'),
-        ('Profile distal W', 'bio_prof_dw'),
+        ('Profile proximal H', 'morpho_prof_ph'),
+        ('Profile proximal W', 'morpho_prof_pw'),
+        ('Profile distal H', 'morpho_prof_dh'),
+        ('Profile distal W', 'morpho_prof_dw'),
     ):
         v = _session_float(key)
         if v is None:
             continue
         if v <= 0:
-            out.append((_CHK_SEC_BIO, f'{label}: invalid ({v:g} mm).'))
+            out.append((_CHK_SEC_MORPHO, f'{label}: invalid ({v:g} mm).'))
         elif v < 1.0:
-            out.append((_CHK_SEC_BIO, f'{label}: {v:g} mm (check units).'))
+            out.append((_CHK_SEC_MORPHO, f'{label}: {v:g} mm (check units).'))
 
-    v_pclamp = _session_float('bio_prof_clamp')
+    v_pclamp = _session_float('morpho_prof_clamp')
     if v_pclamp is not None:
         if v_pclamp < 0:
-            out.append((_CHK_SEC_BIO, f'Axis-clamp distance (profile): invalid ({v_pclamp:g} mm).'))
+            out.append((_CHK_SEC_MORPHO, f'Axis-clamp distance (profile): invalid ({v_pclamp:g} mm).'))
         elif 0 < v_pclamp < 1.0:
-            out.append((_CHK_SEC_BIO, f'Axis-clamp distance (profile): {v_pclamp:g} mm (check units).'))
+            out.append((_CHK_SEC_MORPHO, f'Axis-clamp distance (profile): {v_pclamp:g} mm (check units).'))
 
     for msg in _collect_experiment_form_status_messages(tt):
         out.append((_CHK_SEC_EXP, msg))
@@ -3248,7 +3248,7 @@ def _refresh_confirmation_flags() -> None:
         return
     if _data_path_apply_dirty() or _section2_destination_incomplete():
         st.session_state['gui_setup_confirmed'] = False
-    if _bio_apply_dirty():
+    if _morpho_apply_dirty():
         st.session_state['gui_measurements_confirmed'] = False
     if _procedure_apply_dirty():
         st.session_state['gui_protocol_confirmed'] = False
@@ -3327,7 +3327,7 @@ def _build_checklist_fix_lines(
     if b is None:
         lines.append('Hardware: load a hardware configuration in Setup.')
     if checks_by_sec:
-        for sec in (_CHK_SEC_DATA, _CHK_SEC_BIO, _CHK_SEC_EXP):
+        for sec in (_CHK_SEC_DATA, _CHK_SEC_MORPHO, _CHK_SEC_EXP):
             for msg in (checks_by_sec.get(sec) or [])[:2]:
                 lines.append(f'{sec}: {msg}')
     elif b is not None and not protocol_ok:
@@ -3515,31 +3515,31 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
         meta[bender_attr] = v
         setattr(b, bender_attr, v)
 
-    _str_attr('bio_segment', 'segment')
-    _float_attr('bio_fishmass', 'fishmass')
-    _float_attr('bio_fishlen_TL', 'fishlen_TL')
-    _float_attr('bio_fishlen_SL', 'fishlen_SL')
-    _float_attr('bio_xsec_height', 'xsec_height')
-    if 'bio_prep_condition' in st.session_state:
-        meta['prep_condition'] = str(st.session_state.get('bio_prep_condition') or '').strip()
-    if 'bio_temp_room' in st.session_state:
+    _str_attr('morpho_segment', 'segment')
+    _float_attr('morpho_fishmass', 'fishmass')
+    _float_attr('morpho_fishlen_TL', 'fishlen_TL')
+    _float_attr('morpho_fishlen_SL', 'fishlen_SL')
+    _float_attr('morpho_xsec_height', 'xsec_height')
+    if 'morpho_prep_condition' in st.session_state:
+        meta['prep_condition'] = str(st.session_state.get('morpho_prep_condition') or '').strip()
+    if 'morpho_temp_room' in st.session_state:
         try:
-            meta['temp_C_room'] = float(st.session_state['bio_temp_room'])
+            meta['temp_C_room'] = float(st.session_state['morpho_temp_room'])
         except (TypeError, ValueError):
             pass
-    if 'bio_temp_tank' in st.session_state:
+    if 'morpho_temp_tank' in st.session_state:
         try:
-            meta['temp_C_tank'] = float(st.session_state['bio_temp_tank'])
+            meta['temp_C_tank'] = float(st.session_state['morpho_temp_tank'])
         except (TypeError, ValueError):
             pass
-    if 'bio_dvert' in st.session_state:
+    if 'morpho_dvert' in st.session_state:
         try:
-            meta['dvert'] = float(st.session_state['bio_dvert'])
+            meta['dvert'] = float(st.session_state['morpho_dvert'])
         except (TypeError, ValueError):
             pass
-    if 'bio_dhoriz' in st.session_state:
+    if 'morpho_dhoriz' in st.session_state:
         try:
-            meta['dhoriz'] = float(st.session_state['bio_dhoriz'])
+            meta['dhoriz'] = float(st.session_state['morpho_dhoriz'])
         except (TypeError, ValueError):
             pass
 
@@ -3553,11 +3553,11 @@ def _apply_specimen_identity_to_bender(b: Bender) -> None:
     sid = str(st.session_state.get('gui_specimen_id') or '').strip()
     meta['specimen_id'] = sid
     b.fishcode = sid
-    seg = str(st.session_state.get('bio_segment') or '').strip()
+    seg = str(st.session_state.get('morpho_segment') or '').strip()
     meta['segment'] = seg
     b.segment = seg
     b.h5_protocol_metadata = meta
-    _mark_bio_applied()
+    _mark_morpho_applied()
 
 
 def _apply_pair(b: Bender, name: str, value):
@@ -3596,8 +3596,8 @@ def _apply_form_updates(b: Bender, updates: dict, tt: str):
 
 
 def _apply_procedure_form_to_bender(b: Bender, updates: dict, tt: str) -> None:
-    """Sync biometrics flags, copy procedure fields onto ``b``, and mirror any QC note text from session."""
-    _sync_biometric_flags_from_session(b)
+    """Sync morphometrics flags, copy procedure fields onto ``b``, and mirror any QC note text from session."""
+    _sync_morphometric_flags_from_session(b)
     _apply_form_updates(b, updates, tt)
     _sync_genus_species_to_bender(b)
     _pn = str(st.session_state.get('gui_post_notes') or '').strip()
@@ -3631,112 +3631,112 @@ def _consume_pending_protocol_template(valid_test_types: list) -> None:
         st.session_state['gui_protocol_load_feedback'] = (False, f'{type(e).__name__}: {e}')
 
 
-def _consume_pending_biometrics_template() -> None:
-    path = st.session_state.pop('gui_pending_biometrics_path', None)
+def _consume_pending_morphometrics_template() -> None:
+    path = st.session_state.pop('gui_pending_morphometrics_path', None)
     if not path:
         return
     try:
-        data = load_biometrics_template(path)
-        ok, msg = apply_biometrics_template_to_session(st.session_state, data)
-        st.session_state['gui_biometrics_load_feedback'] = (ok, msg)
+        data = load_morphometrics_template(path)
+        ok, msg = apply_morphometrics_template_to_session(st.session_state, data)
+        st.session_state['gui_morphometrics_load_feedback'] = (ok, msg)
         if ok:
-            st.session_state['gui_bio_apply_invalidated'] = True
-            st.session_state.pop('gui_tpl_bio_done', None)
+            st.session_state['gui_morpho_apply_invalidated'] = True
+            st.session_state.pop('gui_tpl_morpho_done', None)
             # #region agent log
             _agent_debug_log(
                 hypothesis_id='A',
-                location='bender_streamlit_gui.py:_consume_pending_biometrics_template',
+                location='bender_streamlit_gui.py:_consume_pending_morphometrics_template',
                 message='template_loaded',
                 data={
                     'path': os.path.basename(str(path)),
-                    'fishmass': st.session_state.get('bio_fishmass'),
-                    'dclamp': st.session_state.get('bio_dclamp'),
-                    'xsec': st.session_state.get('bio_xsec'),
+                    'fishmass': st.session_state.get('morpho_fishmass'),
+                    'dclamp': st.session_state.get('morpho_dclamp'),
+                    'xsec': st.session_state.get('morpho_xsec'),
                     'invalidated': True,
                 },
             )
             # #endregion
             st.rerun()
     except OSError as e:
-        st.session_state['gui_biometrics_load_feedback'] = (False, f'Could not read file: {e}')
+        st.session_state['gui_morphometrics_load_feedback'] = (False, f'Could not read file: {e}')
     except json.JSONDecodeError as e:
-        st.session_state['gui_biometrics_load_feedback'] = (False, f'Could not read biometrics file: {e}')
+        st.session_state['gui_morphometrics_load_feedback'] = (False, f'Could not read morphometrics file: {e}')
     except Exception as e:
-        st.session_state['gui_biometrics_load_feedback'] = (False, f'{type(e).__name__}: {e}')
+        st.session_state['gui_morphometrics_load_feedback'] = (False, f'{type(e).__name__}: {e}')
 
 
-def _apply_intrinsic_biometrics_to_bender(b: Bender) -> None:
+def _apply_intrinsic_morphometrics_to_bender(b: Bender) -> None:
     """Whole-body TL/SL and mass → ``b``; identity/metadata via ``_sync_genus_species_to_bender``."""
-    b.fishlen_TL = float(st.session_state['bio_fishlen_TL'])
-    b.fishlen_SL = float(st.session_state['bio_fishlen_SL'])
-    b.fishmass = float(st.session_state['bio_fishmass'])
+    b.fishlen_TL = float(st.session_state['morpho_fishlen_TL'])
+    b.fishlen_SL = float(st.session_state['morpho_fishlen_SL'])
+    b.fishmass = float(st.session_state['morpho_fishmass'])
     _sync_genus_species_to_bender(b)
-    _mark_bio_applied()
+    _mark_morpho_applied()
 
 
 def _apply_experimental_conditions_to_bender(b: Bender) -> None:
     """Room/tank temperatures and prep condition → ``b`` and ``h5_protocol_metadata``."""
-    b.temp_C_room = float(st.session_state['bio_temp_room'])
-    b.temp_C_tank = float(st.session_state['bio_temp_tank'])
+    b.temp_C_room = float(st.session_state['morpho_temp_room'])
+    b.temp_C_tank = float(st.session_state['morpho_temp_tank'])
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
-    meta['temp_C_room'] = float(st.session_state['bio_temp_room'])
-    meta['temp_C_tank'] = float(st.session_state['bio_temp_tank'])
-    meta['prep_condition'] = str(st.session_state.get('bio_prep_condition') or '').strip()
+    meta['temp_C_room'] = float(st.session_state['morpho_temp_room'])
+    meta['temp_C_tank'] = float(st.session_state['morpho_temp_tank'])
+    meta['prep_condition'] = str(st.session_state.get('morpho_prep_condition') or '').strip()
     b.h5_protocol_metadata = meta
-    _mark_bio_applied()
+    _mark_morpho_applied()
 
 
 def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
     """Clamp spacing, bend position, cross-section, and vertical/horizontal offsets → ``b``."""
-    xw = float(st.session_state['bio_xsec'])
-    md = float(st.session_state.get('bio_muscle_depth', 0.0) or 0.0)
+    xw = float(st.session_state['morpho_xsec'])
+    md = float(st.session_state.get('morpho_muscle_depth', 0.0) or 0.0)
     try:
         _strain_lever_arm_m(xw, md)
     except ValueError as exc:
         st.error(str(exc))
         return False
-    b.dclamp = float(st.session_state['bio_dclamp'])
-    b.test_segment_length_mm = float(st.session_state['bio_dclamp'])
-    b.dbend = float(st.session_state['bio_dbend'])
-    b.test_segment_position_mm = float(st.session_state['bio_dbend'])
+    b.dclamp = float(st.session_state['morpho_dclamp'])
+    b.test_segment_length_mm = float(st.session_state['morpho_dclamp'])
+    b.dbend = float(st.session_state['morpho_dbend'])
+    b.test_segment_position_mm = float(st.session_state['morpho_dbend'])
     b.xsec_width = xw
     b.target_muscle_depth_mm = md
-    b.xsec_height = float(st.session_state['bio_xsec_height'])
-    b.dvert = float(st.session_state['bio_dvert'])
-    b.dhoriz = float(st.session_state['bio_dhoriz'])
+    b.xsec_height = float(st.session_state['morpho_xsec_height'])
+    b.dvert = float(st.session_state['morpho_dvert'])
+    b.dhoriz = float(st.session_state['morpho_dhoriz'])
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
-    meta['dvert'] = float(st.session_state['bio_dvert'])
-    meta['dhoriz'] = float(st.session_state['bio_dhoriz'])
+    meta['dvert'] = float(st.session_state['morpho_dvert'])
+    meta['dhoriz'] = float(st.session_state['morpho_dhoriz'])
     meta['target_muscle_depth_mm'] = md
     b.h5_protocol_metadata = meta
-    _mark_bio_applied()
+    _mark_morpho_applied()
     return True
 
 
 def _apply_mounted_profile_inertial_to_bender(b: Bender) -> None:
     """Tapered outline + specimen density + length for profiled / inertial (and frustum-style) corrections → ``b``."""
-    rho = _resolved_bio_prof_rho_g_per_mm3()
-    _queue_bio_prof_rho_widget_sync_from_preset()
+    rho = _resolved_morpho_prof_rho_g_per_mm3()
+    _queue_morpho_prof_rho_widget_sync_from_preset()
     stations = b.make_profile_stations(
-        st.session_state['bio_prof_ph'],
-        st.session_state['bio_prof_pw'],
-        st.session_state['bio_prof_dh'],
-        st.session_state['bio_prof_dw'],
+        st.session_state['morpho_prof_ph'],
+        st.session_state['morpho_prof_pw'],
+        st.session_state['morpho_prof_dh'],
+        st.session_state['morpho_prof_dw'],
     )
     b.set_profiled_specimen_inertial_model(
         stations,
-        st.session_state['bio_prof_L'],
+        st.session_state['morpho_prof_L'],
         rho,
-        clamp_offset_mm=float(st.session_state['bio_prof_clamp']),
-        num_samples=int(st.session_state['bio_prof_samples']),
+        clamp_offset_mm=float(st.session_state['morpho_prof_clamp']),
+        num_samples=int(st.session_state['morpho_prof_samples']),
     )
-    _mark_bio_applied()
+    _mark_morpho_applied()
 
 
-def _apply_all_biometrics_to_bender(b: Bender) -> None:
+def _apply_all_morphometrics_to_bender(b: Bender) -> None:
     """Copy intrinsic, experimental conditions, clamp, profile (density + outline), and inertial flags from section 3 onto ``b``."""
-    _sync_biometric_flags_from_session(b)
-    _apply_intrinsic_biometrics_to_bender(b)
+    _sync_morphometric_flags_from_session(b)
+    _apply_intrinsic_morphometrics_to_bender(b)
     _apply_experimental_conditions_to_bender(b)
     if not _apply_clamp_geometry_to_bender(b):
         return
@@ -3744,45 +3744,45 @@ def _apply_all_biometrics_to_bender(b: Bender) -> None:
     st.session_state['gui_measurements_confirmed'] = True
 
 
-def _sync_biometric_flags_from_session(b: Bender):
-    """Copy biometrics panel session state onto ``b`` (flags + specimen geometry aliases)."""
-    if 'bio_use_theoretical_inertial' in st.session_state:
-        b.use_theoretical_inertial_correction = bool(st.session_state['bio_use_theoretical_inertial'])
-    if 'bio_dclamp' in st.session_state:
-        v = float(st.session_state['bio_dclamp'])
+def _sync_morphometric_flags_from_session(b: Bender):
+    """Copy morphometrics panel session state onto ``b`` (flags + specimen geometry aliases)."""
+    if 'morpho_use_theoretical_inertial' in st.session_state:
+        b.use_theoretical_inertial_correction = bool(st.session_state['morpho_use_theoretical_inertial'])
+    if 'morpho_dclamp' in st.session_state:
+        v = float(st.session_state['morpho_dclamp'])
         b.dclamp = v
         b.test_segment_length_mm = v
-    if 'bio_dbend' in st.session_state:
-        v = float(st.session_state['bio_dbend'])
+    if 'morpho_dbend' in st.session_state:
+        v = float(st.session_state['morpho_dbend'])
         b.dbend = v
         b.test_segment_position_mm = v
-    if 'bio_xsec' in st.session_state:
-        b.xsec_width = float(st.session_state['bio_xsec'])
-    if 'bio_muscle_depth' in st.session_state:
-        b.target_muscle_depth_mm = float(st.session_state['bio_muscle_depth'] or 0.0)
-    if 'bio_temp_room' in st.session_state:
-        b.temp_C_room = float(st.session_state['bio_temp_room'])
-    if 'bio_temp_tank' in st.session_state:
-        b.temp_C_tank = float(st.session_state['bio_temp_tank'])
-    if 'bio_xsec_height' in st.session_state:
-        b.xsec_height = float(st.session_state['bio_xsec_height'])
-    if 'bio_dvert' in st.session_state:
-        b.dvert = float(st.session_state['bio_dvert'])
-    if 'bio_dhoriz' in st.session_state:
-        b.dhoriz = float(st.session_state['bio_dhoriz'])
+    if 'morpho_xsec' in st.session_state:
+        b.xsec_width = float(st.session_state['morpho_xsec'])
+    if 'morpho_muscle_depth' in st.session_state:
+        b.target_muscle_depth_mm = float(st.session_state['morpho_muscle_depth'] or 0.0)
+    if 'morpho_temp_room' in st.session_state:
+        b.temp_C_room = float(st.session_state['morpho_temp_room'])
+    if 'morpho_temp_tank' in st.session_state:
+        b.temp_C_tank = float(st.session_state['morpho_temp_tank'])
+    if 'morpho_xsec_height' in st.session_state:
+        b.xsec_height = float(st.session_state['morpho_xsec_height'])
+    if 'morpho_dvert' in st.session_state:
+        b.dvert = float(st.session_state['morpho_dvert'])
+    if 'morpho_dhoriz' in st.session_state:
+        b.dhoriz = float(st.session_state['morpho_dhoriz'])
     if 'gui_specimen_id' in st.session_state:
         b.fishcode = str(st.session_state.get('gui_specimen_id') or '')
-    if 'bio_segment' in st.session_state:
-        b.segment = str(st.session_state['bio_segment'] or '')
-    if 'bio_fishmass' in st.session_state:
-        b.fishmass = float(st.session_state['bio_fishmass'])
-    if 'bio_fishlen_TL' in st.session_state:
-        b.fishlen_TL = float(st.session_state['bio_fishlen_TL'])
-    if 'bio_fishlen_SL' in st.session_state:
-        b.fishlen_SL = float(st.session_state['bio_fishlen_SL'])
+    if 'morpho_segment' in st.session_state:
+        b.segment = str(st.session_state['morpho_segment'] or '')
+    if 'morpho_fishmass' in st.session_state:
+        b.fishmass = float(st.session_state['morpho_fishmass'])
+    if 'morpho_fishlen_TL' in st.session_state:
+        b.fishlen_TL = float(st.session_state['morpho_fishlen_TL'])
+    if 'morpho_fishlen_SL' in st.session_state:
+        b.fishlen_SL = float(st.session_state['morpho_fishlen_SL'])
 
 
-def _bio_prof_outline_mm_from_bender(b: Bender) -> tuple[float, float, float, float]:
+def _morpho_prof_outline_mm_from_bender(b: Bender) -> tuple[float, float, float, float]:
     """Proximal H/W and distal H/W (mm) from ``specimen_profile_stations`` when present; else GUI placeholders."""
     st_list = getattr(b, 'specimen_profile_stations', None)
     if not isinstance(st_list, list) or len(st_list) < 2:
@@ -3810,12 +3810,12 @@ def _bio_prof_outline_mm_from_bender(b: Bender) -> tuple[float, float, float, fl
     )
 
 
-def _bio_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
-    """Map ``Bender`` + protocol metadata to Streamlit biometrics widget keys (same source as **Apply all**)."""
+def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
+    """Map ``Bender`` + protocol metadata to Streamlit morphometrics widget keys (same source as **Apply all**)."""
     dc = getattr(b, 'dclamp', None)
     xw = getattr(b, 'xsec_width', None)
     meta = getattr(b, 'h5_protocol_metadata', {}) or {}
-    ph, pw, dh, dw = _bio_prof_outline_mm_from_bender(b)
+    ph, pw, dh, dw = _morpho_prof_outline_mm_from_bender(b)
     _fm = getattr(b, 'fishmass', None)
     _ftl = getattr(b, 'fishlen_TL', None)
     _fsl = getattr(b, 'fishlen_SL', None)
@@ -3823,37 +3823,37 @@ def _bio_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
     return {
         'gui_genus_species': str(meta.get('genus_species', '') or '').strip(),
         'gui_specimen_id': str(meta.get('specimen_id') or getattr(b, 'fishcode', '') or '').strip(),
-        'bio_segment': str(getattr(b, 'segment', '') or ''),
-        'bio_fishmass': float(_fm) if _fm is not None and math.isfinite(float(_fm)) else 0.0,
-        'bio_fishlen_TL': float(_ftl) if _ftl is not None and math.isfinite(float(_ftl)) else 0.0,
-        'bio_fishlen_SL': float(_fsl) if _fsl is not None and math.isfinite(float(_fsl)) else 0.0,
-        'bio_xsec_height': float(_xh)
+        'morpho_segment': str(getattr(b, 'segment', '') or ''),
+        'morpho_fishmass': float(_fm) if _fm is not None and math.isfinite(float(_fm)) else 0.0,
+        'morpho_fishlen_TL': float(_ftl) if _ftl is not None and math.isfinite(float(_ftl)) else 0.0,
+        'morpho_fishlen_SL': float(_fsl) if _fsl is not None and math.isfinite(float(_fsl)) else 0.0,
+        'morpho_xsec_height': float(_xh)
         if _xh is not None and math.isfinite(float(_xh))
         else (float(xw) if xw is not None else 8.0),
-        'bio_dvert': float(getattr(b, 'dvert', 0.0) or 0.0),
-        'bio_dhoriz': float(getattr(b, 'dhoriz', 0.0) or 0.0),
-        'bio_dclamp': float(dc) if dc is not None else 10.0,
-        'bio_xsec': float(xw) if xw is not None else 8.0,
-        'bio_dbend': float(getattr(b, 'dbend', 0.0) or 0.0),
-        'bio_temp_room': float(getattr(b, 'temp_C_room', 22.0) or 22.0),
-        'bio_temp_tank': float(getattr(b, 'temp_C_tank', 22.0) or 22.0),
-        'bio_prep_condition': str(meta.get('prep_condition', '') or ''),
-        'bio_use_theoretical_inertial': bool(getattr(b, 'use_theoretical_inertial_correction', False)),
-        'bio_prof_L': float(getattr(b, 'specimen_profile_length_mm', 25.0) or 25.0),
-        'bio_prof_rho': float(getattr(b, 'specimen_profile_density_g_per_mm3', 1.03e-3) or 1.03e-3),
-        'bio_prof_ph': ph,
-        'bio_prof_pw': pw,
-        'bio_prof_dh': dh,
-        'bio_prof_dw': dw,
-        'bio_prof_clamp': float(getattr(b, 'specimen_profile_clamp_offset_mm', 20.0) or 20.0),
-        'bio_prof_samples': int(getattr(b, 'specimen_profile_num_samples', 120) or 120),
-        'bio_prof_rho_preset': BIO_DENSITY_PRESET_LABELS[0],
+        'morpho_dvert': float(getattr(b, 'dvert', 0.0) or 0.0),
+        'morpho_dhoriz': float(getattr(b, 'dhoriz', 0.0) or 0.0),
+        'morpho_dclamp': float(dc) if dc is not None else 10.0,
+        'morpho_xsec': float(xw) if xw is not None else 8.0,
+        'morpho_dbend': float(getattr(b, 'dbend', 0.0) or 0.0),
+        'morpho_temp_room': float(getattr(b, 'temp_C_room', 22.0) or 22.0),
+        'morpho_temp_tank': float(getattr(b, 'temp_C_tank', 22.0) or 22.0),
+        'morpho_prep_condition': str(meta.get('prep_condition', '') or ''),
+        'morpho_use_theoretical_inertial': bool(getattr(b, 'use_theoretical_inertial_correction', False)),
+        'morpho_prof_L': float(getattr(b, 'specimen_profile_length_mm', 25.0) or 25.0),
+        'morpho_prof_rho': float(getattr(b, 'specimen_profile_density_g_per_mm3', 1.03e-3) or 1.03e-3),
+        'morpho_prof_ph': ph,
+        'morpho_prof_pw': pw,
+        'morpho_prof_dh': dh,
+        'morpho_prof_dw': dw,
+        'morpho_prof_clamp': float(getattr(b, 'specimen_profile_clamp_offset_mm', 20.0) or 20.0),
+        'morpho_prof_samples': int(getattr(b, 'specimen_profile_num_samples', 120) or 120),
+        'morpho_prof_rho_preset': MORPHO_DENSITY_PRESET_LABELS[0],
     }
 
 
-def _init_biometrics_session_state(b: Bender, *, force: bool = False):
+def _init_morphometrics_session_state(b: Bender, *, force: bool = False):
     """Seed Streamlit widget keys from ``b`` (``force`` overwrites after config reload)."""
-    defaults = _bio_widget_defaults_from_bender(b)
+    defaults = _morpho_widget_defaults_from_bender(b)
     _seeded: list[str] = []
     for key, val in defaults.items():
         if force or key not in st.session_state:
@@ -3863,7 +3863,7 @@ def _init_biometrics_session_state(b: Bender, *, force: bool = False):
         # #region agent log
         _agent_debug_log(
             hypothesis_id='C',
-            location='bender_streamlit_gui.py:_init_biometrics_session_state',
+            location='bender_streamlit_gui.py:_init_morphometrics_session_state',
             message='seeded_from_bender',
             data={
                 'force': force,
@@ -3871,21 +3871,21 @@ def _init_biometrics_session_state(b: Bender, *, force: bool = False):
                 'seeded_count': len(_seeded),
                 'route': _nav_route(),
                 'step': _stepwise_step() if _nav_route() == 'stepwise' else None,
-                'dclamp_after': st.session_state.get('bio_dclamp'),
+                'dclamp_after': st.session_state.get('morpho_dclamp'),
             },
         )
         # #endregion
 
 
-def _rehydrate_missing_biometrics_from_bender(b: Bender) -> None:
-    """Restore dropped or stale-empty ``bio_*`` / identity keys from ``B`` when measurements were applied.
+def _rehydrate_missing_morphometrics_from_bender(b: Bender) -> None:
+    """Restore dropped or stale-empty ``morpho_*`` / identity keys from ``B`` when measurements were applied.
 
     Streamlit may omit widget keys between runs; keys can also stay as ``''``/0 while ``Bender`` still holds
-    values from **Apply all biometrics** (``setdefault`` keeps empty keys from being overwritten by ``_init``).
+    values from **Apply all morphometrics** (``setdefault`` keeps empty keys from being overwritten by ``_init``).
     """
     if not bool(st.session_state.get('gui_measurements_confirmed')):
         return
-    defaults = _bio_widget_defaults_from_bender(b)
+    defaults = _morpho_widget_defaults_from_bender(b)
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
@@ -3895,8 +3895,8 @@ def _rehydrate_missing_biometrics_from_bender(b: Bender) -> None:
                 if str(val or '').strip():
                     st.session_state[key] = val
             continue
-        if key == 'bio_fishmass':
-            m = _session_float('bio_fishmass')
+        if key == 'morpho_fishmass':
+            m = _session_float('morpho_fishmass')
             if m is None or m <= 0:
                 fm = getattr(b, 'fishmass', None)
                 if fm is not None:
@@ -3907,8 +3907,8 @@ def _rehydrate_missing_biometrics_from_bender(b: Bender) -> None:
                     if math.isfinite(fmf) and fmf > 0:
                         st.session_state[key] = fmf
             continue
-        if key == 'bio_dclamp':
-            dc = _session_float('bio_dclamp')
+        if key == 'morpho_dclamp':
+            dc = _session_float('morpho_dclamp')
             if dc is None or dc <= 0:
                 bd = getattr(b, 'dclamp', None)
                 if bd is None:
@@ -3921,8 +3921,8 @@ def _rehydrate_missing_biometrics_from_bender(b: Bender) -> None:
                     if math.isfinite(bdf) and bdf > 0:
                         st.session_state[key] = bdf
             continue
-        if key == 'bio_xsec':
-            xw = _session_float('bio_xsec')
+        if key == 'morpho_xsec':
+            xw = _session_float('morpho_xsec')
             if xw is None or xw <= 0:
                 bx = getattr(b, 'xsec_width', None)
                 if bx is not None:
@@ -3939,12 +3939,12 @@ def _nav_route() -> str:
     return str(st.session_state.get('gui_app_route') or 'landing')
 
 
-def _clear_pending_bio_nav_warning() -> None:
+def _clear_pending_morpho_nav_warning() -> None:
     for _k in (
-        'gui_pending_bio_nav_route',
-        'gui_pending_bio_nav_stepwise_step',
-        'gui_pending_bio_nav_clear_stepwise',
-        'gui_pending_bio_nav_origin',
+        'gui_pending_morpho_nav_route',
+        'gui_pending_morpho_nav_stepwise_step',
+        'gui_pending_morpho_nav_clear_stepwise',
+        'gui_pending_morpho_nav_origin',
     ):
         st.session_state.pop(_k, None)
 
@@ -3957,49 +3957,49 @@ def _apply_route_switch(*, target_route: str, stepwise_step: Optional[int], clea
         st.session_state['gui_stepwise_step'] = int(stepwise_step)
 
 
-def _attempt_route_switch_with_bio_warning(
+def _attempt_route_switch_with_morpho_warning(
     *,
     target_route: str,
     origin: str,
     stepwise_step: Optional[int] = None,
     clear_stepwise: bool = False,
 ) -> bool:
-    if _bio_apply_dirty():
-        st.session_state['gui_pending_bio_nav_route'] = str(target_route or 'landing')
-        st.session_state['gui_pending_bio_nav_stepwise_step'] = (
+    if _morpho_apply_dirty():
+        st.session_state['gui_pending_morpho_nav_route'] = str(target_route or 'landing')
+        st.session_state['gui_pending_morpho_nav_stepwise_step'] = (
             None if stepwise_step is None else int(stepwise_step)
         )
-        st.session_state['gui_pending_bio_nav_clear_stepwise'] = bool(clear_stepwise)
-        st.session_state['gui_pending_bio_nav_origin'] = str(origin or '')
+        st.session_state['gui_pending_morpho_nav_clear_stepwise'] = bool(clear_stepwise)
+        st.session_state['gui_pending_morpho_nav_origin'] = str(origin or '')
         return False
     _apply_route_switch(target_route=target_route, stepwise_step=stepwise_step, clear_stepwise=clear_stepwise)
-    _clear_pending_bio_nav_warning()
+    _clear_pending_morpho_nav_warning()
     return True
 
 
-def _render_pending_bio_nav_warning(origin: str) -> None:
-    if str(st.session_state.get('gui_pending_bio_nav_origin') or '') != str(origin or ''):
+def _render_pending_morpho_nav_warning(origin: str) -> None:
+    if str(st.session_state.get('gui_pending_morpho_nav_origin') or '') != str(origin or ''):
         return
-    _target = str(st.session_state.get('gui_pending_bio_nav_route') or '').strip()
+    _target = str(st.session_state.get('gui_pending_morpho_nav_route') or '').strip()
     if not _target:
         return
-    _step = st.session_state.get('gui_pending_bio_nav_stepwise_step', None)
-    _clear_step = bool(st.session_state.get('gui_pending_bio_nav_clear_stepwise', False))
+    _step = st.session_state.get('gui_pending_morpho_nav_stepwise_step', None)
+    _clear_step = bool(st.session_state.get('gui_pending_morpho_nav_clear_stepwise', False))
     st.warning(
-        'You have unsaved biometrics form edits. Click Apply in Measurements before switching workflows, '
+        'You have unsaved morphometrics form edits. Click Apply in Measurements before switching workflows, '
         'or continue and keep edits only in this session state.'
     )
     st.caption('- Apply specimen')
-    st.caption('- Apply clamp geometry & inertial correction (or Apply all biometrics)')
+    st.caption('- Apply clamp geometry & inertial correction (or Apply all morphometrics)')
     _w1, _w2 = st.columns(2, gap='small')
     with _w1:
-        if st.button('Switch anyway', key=f'gui_bio_nav_switch_anyway_{origin}', type='primary', use_container_width=True):
+        if st.button('Switch anyway', key=f'gui_morpho_nav_switch_anyway_{origin}', type='primary', use_container_width=True):
             _apply_route_switch(target_route=_target, stepwise_step=_step, clear_stepwise=_clear_step)
-            _clear_pending_bio_nav_warning()
+            _clear_pending_morpho_nav_warning()
             st.rerun()
     with _w2:
-        if st.button('Stay here', key=f'gui_bio_nav_stay_{origin}', use_container_width=True):
-            _clear_pending_bio_nav_warning()
+        if st.button('Stay here', key=f'gui_morpho_nav_stay_{origin}', use_container_width=True):
+            _clear_pending_morpho_nav_warning()
             st.rerun()
 
 
@@ -4022,12 +4022,12 @@ def _template_hide_config_build_new() -> bool:
 
 
 def _tpl_only_procedure() -> bool:
-    """True when user has config + biometrics files but still needs to set the procedure in the app (no protocol JSON yet)."""
+    """True when user has config + morphometrics files but still needs to set the procedure in the app (no protocol JSON yet)."""
     if _nav_route() != 'templates':
         return False
     if not bool(st.session_state.get('gui_tpl_chk_config', True)):
         return False
-    if not bool(st.session_state.get('gui_tpl_chk_biometrics', True)):
+    if not bool(st.session_state.get('gui_tpl_chk_morphometrics', True)):
         return False
     # Third box: "I already have a protocol template" — when checked, use full sections (load protocol from file).
     return not bool(st.session_state.get('gui_tpl_have_protocol_template', False))
@@ -4048,7 +4048,7 @@ def _show_data_path_section() -> bool:
 
 
 def _show_full_sec2() -> bool:
-    """Section 3 · biometrics."""
+    """Section 3 · morphometrics."""
     if _nav_route() == 'templates' and _tpl_only_procedure():
         return False
     return True
@@ -4342,7 +4342,7 @@ def _render_landing_learn_section() -> None:
     _render_landing_equation_of_motion_box()
     st.markdown(
         '<p class="bnd-landing-learn-intro">'
-        'Each run uses one <strong>experiment type</strong> (<code>test_type</code>); configure hardware and biometrics, '
+        'Each run uses one <strong>experiment type</strong> (<code>test_type</code>); configure hardware and morphometrics, '
         'preview commanded motion, then run and save. Curves below are <strong>schematics</strong> — not real specimen '
         'data — to show the idea behind each type.</p>',
         unsafe_allow_html=True,
@@ -4513,11 +4513,11 @@ def _render_landing_page() -> None:
         st.markdown('<div class="bnd-land-workflow-btn-row-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
         if st.button('Run experiment', key='land_scratch', use_container_width=True, type='primary'):
             _autosave_tick(force=True)
-            if _attempt_route_switch_with_bio_warning(
+            if _attempt_route_switch_with_morpho_warning(
                 target_route='scratch', origin='landing', clear_stepwise=True
             ):
                 st.rerun()
-        _render_pending_bio_nav_warning('landing')
+        _render_pending_morpho_nav_warning('landing')
 
         st.markdown(
             '<p class="bnd-landing-sim-cta-sub">Offline exploration (no NI hardware)</p>',
@@ -6451,10 +6451,10 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
 
 
 def _render_template_procedure_strip() -> None:
-    """Compact loaders: config + biometrics from disk, then experiment sections (procedure edited in the app)."""
+    """Compact loaders: config + morphometrics from disk, then experiment sections (procedure edited in the app)."""
     _ensure_hw_config_session_defaults()
     st.subheader('Load saved files')
-    st.caption('Order: hardware `.py` → data path → biometrics file. Reload module after changing the selection.')
+    st.caption('Order: hardware `.py` → data path → morphometrics file. Reload module after changing the selection.')
 
     if st.session_state.pop('gui_tpl_reload_config', False):
         eff = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
@@ -6513,46 +6513,46 @@ def _render_template_procedure_strip() -> None:
             )
 
     st.divider()
-    _bio_tpl_dir = _shared_experiment_dir()
-    _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
-    _bio_opts: list = [None] + _bio_tpl_list
-    if 'gui_biometrics_template_select' not in st.session_state:
-        st.session_state['gui_biometrics_template_select'] = None
+    _morpho_tpl_dir = _shared_experiment_dir()
+    _morpho_tpl_list = list_morphometrics_template_files(_morpho_tpl_dir)
+    _morpho_opts: list = [None] + _morpho_tpl_list
+    if 'gui_morphometrics_template_select' not in st.session_state:
+        st.session_state['gui_morphometrics_template_select'] = None
     st.selectbox(
-        'Biometrics file',
-        _bio_opts,
-        format_func=_biometrics_template_option_label,
-        key='gui_biometrics_template_select',
+        'Morphometrics file',
+        _morpho_opts,
+        format_func=_morphometrics_template_option_label,
+        key='gui_morphometrics_template_select',
         help='Saved specimen/setup files in your data folder (`.json` on disk).',
     )
-    if _load_save_button('Load biometrics into form', key='gui_biometrics_btn_load_tpl'):
-        _bp = st.session_state.get('gui_biometrics_template_select')
+    if _load_save_button('Load morphometrics into form', key='gui_morphometrics_btn_load_tpl'):
+        _bp = st.session_state.get('gui_morphometrics_template_select')
         if not _bp:
-            st.session_state['gui_biometrics_load_feedback'] = (False, 'Choose a biometrics file first.')
+            st.session_state['gui_morphometrics_load_feedback'] = (False, 'Choose a morphometrics file first.')
         else:
-            st.session_state['gui_pending_biometrics_path'] = _bp
+            st.session_state['gui_pending_morphometrics_path'] = _bp
         st.rerun()
-    if bf := st.session_state.pop('gui_biometrics_load_feedback', None):
+    if bf := st.session_state.pop('gui_morphometrics_load_feedback', None):
         ok_bf, txt_bf = bf
         if ok_bf:
             st.success(txt_bf)
-        elif str(txt_bf).strip() == 'Choose a biometrics file first.':
+        elif str(txt_bf).strip() == 'Choose a morphometrics file first.':
             st.warning(txt_bf)
         else:
             _st_error_detail(
-                'Biometrics load failed.',
+                'Morphometrics load failed.',
                 ['Check file format', 'Read Details'],
                 txt_bf,
             )
     if st.session_state.get('bender') is not None:
         if _load_save_button(
-            'Apply loaded biometrics to experiment',
-            key='gui_tpl_apply_bio_to_bender',
-            help='Same as **section 3 · Apply all biometrics**: identity, intrinsic, experimental conditions, clamp, profile, inertial flag.',
+            'Apply loaded morphometrics to experiment',
+            key='gui_tpl_apply_morpho_to_bender',
+            help='Same as **section 3 · Apply all morphometrics**: identity, intrinsic, experimental conditions, clamp, profile, inertial flag.',
         ):
-            _apply_all_biometrics_to_bender(st.session_state['bender'])
-            st.session_state['gui_tpl_bio_done'] = True
-            st.success('Biometrics applied. Procedure sections are below.')
+            _apply_all_morphometrics_to_bender(st.session_state['bender'])
+            st.session_state['gui_tpl_morpho_done'] = True
+            st.success('Morphometrics applied. Procedure sections are below.')
             st.rerun()
 
 
@@ -6563,8 +6563,8 @@ def _template_procedure_gate() -> None:
     if not st.session_state.get('bender'):
         st.info('Load **hardware configuration** above to continue.')
         st.stop()
-    if not st.session_state.get('gui_tpl_bio_done'):
-        st.info('Load a **biometrics** file and click **Apply loaded biometrics to experiment**.')
+    if not st.session_state.get('gui_tpl_morpho_done'):
+        st.info('Load a **morphometrics** file and click **Apply loaded morphometrics to experiment**.')
         st.stop()
 
 
@@ -6578,13 +6578,13 @@ def main():
             'Report a bug': None,
             'About': (
                 'CritterGripper is the browser-based console for Bender bending experiments. It walks operators through '
-                'hardware configuration, where HDF5 files will be written, specimen biometrics, and protocol parameters; '
+                'hardware configuration, where HDF5 files will be written, specimen morphometrics, and protocol parameters; '
                 'offers a no-DAQ preview of commanded motion; validates required fields; and runs acquisition and export '
                 'when you deliberately enable it. A separate H5 data explorer plots saved trials without loading the full '
                 'workflow.\n\n'
                 'Reliable biomechanics depends on consistent metadata, a clear picture of what the rig will do before it '
                 'moves, and separation between “configure / preview” and “run.” This app supports that workflow, surfaces '
-                'common setup gaps (paths, biometrics, calibration), and exposes an NI-DAQ hardware reset for situations '
+                'common setup gaps (paths, morphometrics, calibration), and exposes an NI-DAQ hardware reset for situations '
                 'where outputs should halt immediately — alongside, not instead of, your lab’s normal safety practices.'
             ),
         },
@@ -6595,16 +6595,16 @@ def main():
         location='bender_streamlit_gui.py:main_start',
         message='entry_state',
         data={
-            'sess_fishmass': st.session_state.get('bio_fishmass'),
-            'sess_dclamp': st.session_state.get('bio_dclamp'),
-            'sess_xsec': st.session_state.get('bio_xsec'),
-            'fishmass_in_keys': 'bio_fishmass' in st.session_state,
-            'dclamp_in_keys': 'bio_dclamp' in st.session_state,
+            'sess_fishmass': st.session_state.get('morpho_fishmass'),
+            'sess_dclamp': st.session_state.get('morpho_dclamp'),
+            'sess_xsec': st.session_state.get('morpho_xsec'),
+            'fishmass_in_keys': 'morpho_fishmass' in st.session_state,
+            'dclamp_in_keys': 'morpho_dclamp' in st.session_state,
             'bender_fishmass': getattr(st.session_state.get('bender'), 'fishmass', None) if st.session_state.get('bender') is not None else None,
             'bender_dclamp': getattr(st.session_state.get('bender'), 'dclamp', None) if st.session_state.get('bender') is not None else None,
-            'applied_sig_fm': st.session_state.get('gui_bio_applied_sig')[3] if isinstance(st.session_state.get('gui_bio_applied_sig'), tuple) and len(st.session_state.get('gui_bio_applied_sig')) > 3 else None,
-            'applied_sig_dc': st.session_state.get('gui_bio_applied_sig')[9] if isinstance(st.session_state.get('gui_bio_applied_sig'), tuple) and len(st.session_state.get('gui_bio_applied_sig')) > 9 else None,
-            'invalidated': bool(st.session_state.get('gui_bio_apply_invalidated')),
+            'applied_sig_fm': st.session_state.get('gui_morpho_applied_sig')[3] if isinstance(st.session_state.get('gui_morpho_applied_sig'), tuple) and len(st.session_state.get('gui_morpho_applied_sig')) > 3 else None,
+            'applied_sig_dc': st.session_state.get('gui_morpho_applied_sig')[9] if isinstance(st.session_state.get('gui_morpho_applied_sig'), tuple) and len(st.session_state.get('gui_morpho_applied_sig')) > 9 else None,
+            'invalidated': bool(st.session_state.get('gui_morpho_apply_invalidated')),
             'route': str(st.session_state.get('gui_app_route') or 'landing'),
             'step': int(st.session_state.get('gui_stepwise_step', 0) or 0),
         },
@@ -6627,9 +6627,9 @@ def main():
         st.session_state['gui_genus_species'] = ''
     if 'gui_specimen_id' not in st.session_state:
         st.session_state['gui_specimen_id'] = ''
-    if 'bio_prep_condition' not in st.session_state:
-        st.session_state['bio_prep_condition'] = ''
-    st.session_state.setdefault('bio_prof_rho_preset', 'Custom — edit the number below')
+    if 'morpho_prep_condition' not in st.session_state:
+        st.session_state['morpho_prep_condition'] = ''
+    st.session_state.setdefault('morpho_prof_rho_preset', 'Custom — edit the number below')
     if 'gui_default_state_baseline' not in st.session_state and 'gui_recovered_state_baseline' not in st.session_state:
         st.session_state['gui_default_state_baseline'] = _collect_persistable_state()
     _update_state_origin_summary()
@@ -6639,7 +6639,7 @@ def main():
         return
 
     _flush_pending_load_config_session()
-    _consume_pending_biometrics_template()
+    _consume_pending_morphometrics_template()
     _refresh_confirmation_flags()
     _sanitize_stale_run_state()
     # Repair data-path fields from persisted signatures before any widget binds to
@@ -6665,12 +6665,12 @@ def main():
         if 'gui_tpl_chk_config' not in st.session_state:
             st.session_state['gui_tpl_chk_config'] = False
         st.checkbox('I have a saved hardware **config**', value=True, key='gui_tpl_chk_config')
-        if 'gui_tpl_chk_biometrics' not in st.session_state:
-            st.session_state['gui_tpl_chk_biometrics'] = False
+        if 'gui_tpl_chk_morphometrics' not in st.session_state:
+            st.session_state['gui_tpl_chk_morphometrics'] = False
         st.checkbox(
-            'I have a saved **biometrics** file',
+            'I have a saved **morphometrics** file',
             value=True,
-            key='gui_tpl_chk_biometrics',
+            key='gui_tpl_chk_morphometrics',
             help='Usually a `.json` file in your data folder with lengths, clamp spacing, etc.',
         )
         if 'gui_tpl_have_protocol_template' not in st.session_state:
@@ -6685,7 +6685,7 @@ def main():
             st.info(
                 'All sections below match **Build from scratch**, or use **Load template into form** in **section 4** when you '
                 'already have a protocol file. Uncheck the third box above if you only need to configure the procedure after '
-                'loading config and biometrics.'
+                'loading config and morphometrics.'
             )
 
     st.caption('Sections follow the numbered order on the page.')
@@ -6737,7 +6737,7 @@ def main():
                     ok, msg = _load_manual_snapshot(_path)
                     if ok:
                         st.success(f'Snapshot loaded: `{msg}`')
-                        st.info('Re-apply setup, biometrics, and procedure before running hardware.')
+                        st.info('Re-apply setup, morphometrics, and procedure before running hardware.')
                         st.rerun()
                     elif msg == 'Choose a snapshot file first.':
                         st.warning(msg)
@@ -6766,9 +6766,9 @@ def main():
                     help='Use template workflow instead of continuing with current unsaved setup.',
                 ):
                     _autosave_tick(force=True)
-                    if _attempt_route_switch_with_bio_warning(target_route='templates', origin='setup'):
+                    if _attempt_route_switch_with_morpho_warning(target_route='templates', origin='setup'):
                         st.rerun()
-            _render_pending_bio_nav_warning('setup')
+            _render_pending_morpho_nav_warning('setup')
 
     _show_hw = _show_hw_config_section()
     _show_data = _show_data_path_section()
@@ -7167,21 +7167,21 @@ def main():
 
     b: Bender = st.session_state['bender']
     _ensure_apply_tracking_bender(b)
-    _init_biometrics_session_state(b, force=False)
-    _rehydrate_missing_biometrics_from_bender(b)
-    _sync_biometric_flags_from_session(b)
+    _init_morphometrics_session_state(b, force=False)
+    _rehydrate_missing_morphometrics_from_bender(b)
+    _sync_morphometric_flags_from_session(b)
     # #region agent log
     _agent_debug_log(
         hypothesis_id='D',
-        location='bender_streamlit_gui.py:main_post_bio_sync',
+        location='bender_streamlit_gui.py:main_post_morpho_sync',
         message='session_vs_bender',
         data={
             'route': _nav_route(),
             'step': _stepwise_step() if _nav_route() == 'stepwise' else None,
             'show_sec2': _show_full_sec2(),
-            'sess_dclamp': st.session_state.get('bio_dclamp'),
+            'sess_dclamp': st.session_state.get('morpho_dclamp'),
             'bender_dclamp': getattr(b, 'dclamp', None),
-            'sess_fishmass': st.session_state.get('bio_fishmass'),
+            'sess_fishmass': st.session_state.get('morpho_fishmass'),
             'bender_fishmass': getattr(b, 'fishmass', None),
         },
     )
@@ -7195,103 +7195,103 @@ def main():
 
     if _show_full_sec2():
         st.subheader('3 · Specimen')
-        if _bio_apply_dirty():
+        if _morpho_apply_dirty():
             _soft_apply_reminder()
 
         with st.expander('About the measurements', expanded=False):
             st.markdown(
                 '- Use this section to set specimen identity, morphometrics, experimental conditions, clamp geometry, and profile/inertial settings.\n'
                 '- **Apply specimen** commits identity, morphometrics, and session conditions; **Apply clamp geometry & inertial correction** commits clamp geometry, profile, and the inertial flag.\n'
-                '- Biometrics templates are separate from protocol templates.'
+                '- Morphometrics templates are separate from protocol templates.'
             )
 
-        if bf := st.session_state.pop('gui_biometrics_load_feedback', None):
+        if bf := st.session_state.pop('gui_morphometrics_load_feedback', None):
             ok_bf, txt_bf = bf
             if ok_bf:
                 st.success(txt_bf)
-            elif str(txt_bf).strip() == 'Choose a biometrics file first.':
+            elif str(txt_bf).strip() == 'Choose a morphometrics file first.':
                 st.warning(txt_bf)
             else:
                 _st_error_detail(
-                    'Biometrics load failed.',
+                    'Morphometrics load failed.',
                     ['Check file format', 'Read Details'],
                     txt_bf,
                 )
-        if bfs := st.session_state.pop('gui_biometrics_save_feedback', None):
+        if bfs := st.session_state.pop('gui_morphometrics_save_feedback', None):
             ok_s, txt_s = bfs
             if ok_s:
                 st.success(txt_s)
             else:
                 _st_error_detail(
-                    'Biometrics save failed.',
+                    'Morphometrics save failed.',
                     ['Check name and folder', 'Read Details'],
                     txt_s,
                 )
-        with st.expander('Load / save biometrics templates', expanded=False):
-            st.caption('Optional: reuse biometrics snapshots (`.json`) in your selected data folder.')
+        with st.expander('Load / save morphometrics templates', expanded=False):
+            st.caption('Optional: reuse morphometrics snapshots (`.json`) in your selected data folder.')
             _df_check = str(st.session_state.get('gui_data_folder') or '').strip()
-            _bio_tpl_dir = _shared_experiment_dir()
+            _morpho_tpl_dir = _shared_experiment_dir()
             if not (_df_check and os.path.isdir(os.path.normpath(_df_check))):
                 st.caption(
-                    f'**Data folder** is not set or not found on disk—listing saved template files from `{_bio_tpl_dir}` until '
+                    f'**Data folder** is not set or not found on disk—listing saved template files from `{_morpho_tpl_dir}` until '
                     '**section 2** points to a valid folder.'
                 )
-            _bio_tpl_list = list_biometrics_template_files(_bio_tpl_dir)
-            _bio_opts: list = [None] + _bio_tpl_list
-            if 'gui_biometrics_template_select' not in st.session_state:
-                st.session_state['gui_biometrics_template_select'] = None
-            _bio_pick = st.selectbox(
-                'Biometrics file to load',
-                _bio_opts,
-                format_func=_biometrics_template_option_label,
-                key='gui_biometrics_template_select',
+            _morpho_tpl_list = list_morphometrics_template_files(_morpho_tpl_dir)
+            _morpho_opts: list = [None] + _morpho_tpl_list
+            if 'gui_morphometrics_template_select' not in st.session_state:
+                st.session_state['gui_morphometrics_template_select'] = None
+            _morpho_pick = st.selectbox(
+                'Morphometrics file to load',
+                _morpho_opts,
+                format_func=_morphometrics_template_option_label,
+                key='gui_morphometrics_template_select',
             )
             if _load_save_button(
-                'Load biometrics into form',
-                key='gui_biometrics_btn_load',
-                help='Fills biometrics widgets from the file. Then click **Apply specimen** and **Apply clamp geometry & inertial correction** (or **Apply all biometrics**).',
+                'Load morphometrics into form',
+                key='gui_morphometrics_btn_load',
+                help='Fills morphometrics widgets from the file. Then click **Apply specimen** and **Apply clamp geometry & inertial correction** (or **Apply all morphometrics**).',
             ):
-                if not _bio_pick:
-                    st.session_state['gui_biometrics_load_feedback'] = (False, 'Choose a biometrics file first.')
+                if not _morpho_pick:
+                    st.session_state['gui_morphometrics_load_feedback'] = (False, 'Choose a morphometrics file first.')
                 else:
-                    st.session_state['gui_pending_biometrics_path'] = _bio_pick
+                    st.session_state['gui_pending_morphometrics_path'] = _morpho_pick
                 st.rerun()
 
-            if 'gui_biometrics_new_name' not in st.session_state:
-                st.session_state['gui_biometrics_new_name'] = ''
-            st.text_input('Save biometrics as (name)', key='gui_biometrics_new_name', placeholder='e.g. Zebrafish adult default')
+            if 'gui_morphometrics_new_name' not in st.session_state:
+                st.session_state['gui_morphometrics_new_name'] = ''
+            st.text_input('Save morphometrics as (name)', key='gui_morphometrics_new_name', placeholder='e.g. Zebrafish adult default')
             st.text_area(
                 'Description (optional)',
-                key='gui_biometrics_new_desc',
+                key='gui_morphometrics_new_desc',
                 height=68,
                 placeholder='Optional note saved inside the file.',
                 help='Stored in the file metadata when you save.',
             )
-            if 'gui_biometrics_overwrite' not in st.session_state:
-                st.session_state['gui_biometrics_overwrite'] = False
-            st.checkbox('Overwrite if same file name exists', key='gui_biometrics_overwrite')
-            if _load_save_button('Save biometrics', key='gui_biometrics_btn_save'):
-                _bn = str(st.session_state.get('gui_biometrics_new_name') or '').strip()
-                _bd = str(st.session_state.get('gui_biometrics_new_desc') or '').strip()
-                _bst = sanitize_biometrics_filename_stem(_bn or 'biometrics')
+            if 'gui_morphometrics_overwrite' not in st.session_state:
+                st.session_state['gui_morphometrics_overwrite'] = False
+            st.checkbox('Overwrite if same file name exists', key='gui_morphometrics_overwrite')
+            if _load_save_button('Save morphometrics', key='gui_morphometrics_btn_save'):
+                _bn = str(st.session_state.get('gui_morphometrics_new_name') or '').strip()
+                _bd = str(st.session_state.get('gui_morphometrics_new_desc') or '').strip()
+                _bst = sanitize_morphometrics_filename_stem(_bn or 'morphometrics')
                 _bout = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_bst}.json'))
                 try:
-                    if os.path.isfile(_bout) and not bool(st.session_state.get('gui_biometrics_overwrite')):
-                        st.session_state['gui_biometrics_save_feedback'] = (
+                    if os.path.isfile(_bout) and not bool(st.session_state.get('gui_morphometrics_overwrite')):
+                        st.session_state['gui_morphometrics_save_feedback'] = (
                             False,
                             f'File already exists: `{_bout}`. Enable **Overwrite** or change the name.',
                         )
                     else:
                         os.makedirs(os.path.dirname(_bout) or '.', exist_ok=True)
-                        save_biometrics_template(
+                        save_morphometrics_template(
                             _bout,
                             name=_bn or _bst,
                             description=_bd,
                             session_state=st.session_state,
                         )
-                        st.session_state['gui_biometrics_save_feedback'] = (True, f'Saved `{_bout}`')
+                        st.session_state['gui_morphometrics_save_feedback'] = (True, f'Saved `{_bout}`')
                 except Exception as e:
-                    st.session_state['gui_biometrics_save_feedback'] = (False, f'{type(e).__name__}: {e}')
+                    st.session_state['gui_morphometrics_save_feedback'] = (False, f'{type(e).__name__}: {e}')
                 st.rerun()
 
         st.divider()
@@ -7299,7 +7299,7 @@ def main():
         with st.container():
             # Section 2 (Specimen): identity + morphometrics + session temperature + prep condition.
             # One Apply commits only these fields (per 4-section model, ux_spec §2.1/§3).
-            with st.form('bio_form_specimen', clear_on_submit=False):
+            with st.form('morpho_form_specimen', clear_on_submit=False):
                 id1, id2 = st.columns(2)
                 with id1:
                     st.text_input(
@@ -7315,55 +7315,55 @@ def main():
                         placeholder='e.g. fish-042 or prep code',
                         help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
                     )
-                if 'bio_segment' not in st.session_state:
-                    st.session_state['bio_segment'] = ''
-                st.text_input('Segment / preparation label (`segment`)', key='bio_segment', placeholder='e.g. whole body, hemi')
+                if 'morpho_segment' not in st.session_state:
+                    st.session_state['morpho_segment'] = ''
+                st.text_input('Segment / preparation label (`segment`)', key='morpho_segment', placeholder='e.g. whole body, hemi')
 
                 st.divider()
                 st.markdown('**Morphometrics**')
-                if 'bio_fishlen_TL' not in st.session_state:
-                    st.session_state['bio_fishlen_TL'] = 0.0
+                if 'morpho_fishlen_TL' not in st.session_state:
+                    st.session_state['morpho_fishlen_TL'] = 0.0
                 st.number_input(
                     'Total Length (`fishlen_TL`, mm)',
                     min_value=0.0,
                     format='%.6g',
-                    key='bio_fishlen_TL',
+                    key='morpho_fishlen_TL',
                 )
-                if 'bio_fishlen_SL' not in st.session_state:
-                    st.session_state['bio_fishlen_SL'] = 0.0
+                if 'morpho_fishlen_SL' not in st.session_state:
+                    st.session_state['morpho_fishlen_SL'] = 0.0
                 st.number_input(
                     'Standard Length (`fishlen_SL`, mm)',
                     min_value=0.0,
                     format='%.6g',
-                    key='bio_fishlen_SL',
+                    key='morpho_fishlen_SL',
                 )
-                if 'bio_fishmass' not in st.session_state:
-                    st.session_state['bio_fishmass'] = 0.0
-                st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='bio_fishmass')
+                if 'morpho_fishmass' not in st.session_state:
+                    st.session_state['morpho_fishmass'] = 0.0
+                st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='morpho_fishmass')
 
                 st.divider()
                 st.markdown('**Session conditions**')
-                if 'bio_temp_room' not in st.session_state:
-                    st.session_state['bio_temp_room'] = 0.0
+                if 'morpho_temp_room' not in st.session_state:
+                    st.session_state['morpho_temp_room'] = 0.0
                 st.number_input(
                     'Room temperature (`temp_C_room`, °C)',
                     min_value=-5.0,
                     max_value=60.0,
                     format='%.3f',
-                    key='bio_temp_room',
+                    key='morpho_temp_room',
                 )
-                if 'bio_temp_tank' not in st.session_state:
-                    st.session_state['bio_temp_tank'] = 0.0
+                if 'morpho_temp_tank' not in st.session_state:
+                    st.session_state['morpho_temp_tank'] = 0.0
                 st.number_input(
                     'Tank / bath temperature (`temp_C_tank`, °C)',
                     min_value=-5.0,
                     max_value=60.0,
                     format='%.3f',
-                    key='bio_temp_tank',
+                    key='morpho_temp_tank',
                 )
                 st.text_input(
                     'Prep condition',
-                    key='bio_prep_condition',
+                    key='morpho_prep_condition',
                     placeholder='e.g. anesthetized, recovered 24 h, fasted',
                     help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
                 )
@@ -7378,125 +7378,125 @@ def main():
             st.subheader('4 · Clamp geometry & inertial correction')
             # Section 3: clamp geometry + mounted profile + inertial flag. One merged Apply
             # commits only these fields (replaces the former separate clamp / profile Applies).
-            with st.form('bio_form_clamp_inertial', clear_on_submit=False):
+            with st.form('morpho_form_clamp_inertial', clear_on_submit=False):
                 st.markdown('**Clamp geometry**')
-                if 'bio_dclamp' not in st.session_state:
-                    st.session_state['bio_dclamp'] = 0.0
+                if 'morpho_dclamp' not in st.session_state:
+                    st.session_state['morpho_dclamp'] = 0.0
                 st.number_input(
                     'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
                     min_value=0.001,
                     format='%.6g',
-                    key='bio_dclamp',
+                    key='morpho_dclamp',
                 )
-                if 'bio_dbend' not in st.session_state:
-                    st.session_state['bio_dbend'] = 0.0
+                if 'morpho_dbend' not in st.session_state:
+                    st.session_state['morpho_dbend'] = 0.0
                 st.number_input(
                     'Along-body distance to center of clamped test segment (mm)',
                     min_value=0.0,
                     format='%.6g',
-                    key='bio_dbend',
-                    help=BIO_DBEND_FIELD_HELP,
+                    key='morpho_dbend',
+                    help=MORPHO_DBEND_FIELD_HELP,
                 )
                 cw1, cw2 = st.columns(2)
                 with cw1:
-                    if 'bio_xsec' not in st.session_state:
-                        st.session_state['bio_xsec'] = 0.0
-                    st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='bio_xsec')
-                    if 'bio_muscle_depth' not in st.session_state:
-                        st.session_state['bio_muscle_depth'] = 0.0
+                    if 'morpho_xsec' not in st.session_state:
+                        st.session_state['morpho_xsec'] = 0.0
+                    st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='morpho_xsec')
+                    if 'morpho_muscle_depth' not in st.session_state:
+                        st.session_state['morpho_muscle_depth'] = 0.0
                     st.number_input(
                         'Muscle depth `target_muscle_depth_mm` (mm)',
                         min_value=0.0,
                         format='%.6g',
-                        key='bio_muscle_depth',
+                        key='morpho_muscle_depth',
                         help=(
                             'Distance from the outer surface to the muscle/fiber layer used for strain↔curvature '
                             '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
                         ),
                     )
                 with cw2:
-                    if 'bio_xsec_height' not in st.session_state:
-                        st.session_state['bio_xsec_height'] = 0.0
-                    st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='bio_xsec_height')
+                    if 'morpho_xsec_height' not in st.session_state:
+                        st.session_state['morpho_xsec_height'] = 0.0
+                    st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='morpho_xsec_height')
                 co1, co2 = st.columns(2)
                 with co1:
-                    if 'bio_dvert' not in st.session_state:
-                        st.session_state['bio_dvert'] = 0.0
-                    st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='bio_dvert')
+                    if 'morpho_dvert' not in st.session_state:
+                        st.session_state['morpho_dvert'] = 0.0
+                    st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='morpho_dvert')
                 with co2:
-                    if 'bio_dhoriz' not in st.session_state:
-                        st.session_state['bio_dhoriz'] = 0.0
-                    st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='bio_dhoriz')
+                    if 'morpho_dhoriz' not in st.session_state:
+                        st.session_state['morpho_dhoriz'] = 0.0
+                    st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='morpho_dhoriz')
 
                 st.divider()
                 st.markdown('**Mounted body profile (inertial model)**')
                 st.selectbox(
                     'Typical density (sets g/mm³ on Apply)',
-                    BIO_DENSITY_PRESET_LABELS,
-                    key='bio_prof_rho_preset',
+                    MORPHO_DENSITY_PRESET_LABELS,
+                    key='morpho_prof_rho_preset',
                     help=(
                         'Quick picks from literature-scale values: ~1.00 g/cm³ water-like, ~1.06 g/cm³ muscle/soft tissue, '
                         '~1.9 g/cm³ cortical bone. Values are copied into **Specimen density** when you click **Apply clamp '
                         'geometry & inertial correction** (or choose **Custom** and edit the number).'
                     ),
                 )
-                _flush_pending_bio_prof_rho_sync()
+                _flush_pending_morpho_prof_rho_sync()
                 st.number_input(
                     'Specimen density (g / mm³)',
                     min_value=1e-9,
                     format='%.6g',
-                    key='bio_prof_rho',
+                    key='morpho_prof_rho',
                     help=(
                         'Mass density for the inertial model (`specimen_profile_density_g_per_mm3`). '
                         '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
                     ),
                 )
-                if 'bio_prof_L' not in st.session_state:
-                    st.session_state['bio_prof_L'] = 0.0
+                if 'morpho_prof_L' not in st.session_state:
+                    st.session_state['morpho_prof_L'] = 0.0
                 st.number_input(
                     'Specimen outline length for profile model (mm)',
                     min_value=0.001,
                     format='%.6g',
-                    key='bio_prof_L',
+                    key='morpho_prof_L',
                     help='Length along the specimen used with the tapered outline below (`specimen_profile_length_mm`).',
                 )
                 p1, p2 = st.columns(2)
                 with p1:
-                    if 'bio_prof_ph' not in st.session_state:
-                        st.session_state['bio_prof_ph'] = 0.0
-                    st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_ph')
-                    if 'bio_prof_pw' not in st.session_state:
-                        st.session_state['bio_prof_pw'] = 0.0
-                    st.number_input('Proximal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_pw')
+                    if 'morpho_prof_ph' not in st.session_state:
+                        st.session_state['morpho_prof_ph'] = 0.0
+                    st.number_input('Proximal height (mm)', min_value=0.001, format='%.6g', key='morpho_prof_ph')
+                    if 'morpho_prof_pw' not in st.session_state:
+                        st.session_state['morpho_prof_pw'] = 0.0
+                    st.number_input('Proximal width (mm)', min_value=0.001, format='%.6g', key='morpho_prof_pw')
                 with p2:
-                    if 'bio_prof_dh' not in st.session_state:
-                        st.session_state['bio_prof_dh'] = 0.0
-                    st.number_input('Distal height (mm)', min_value=0.001, format='%.6g', key='bio_prof_dh')
-                    if 'bio_prof_dw' not in st.session_state:
-                        st.session_state['bio_prof_dw'] = 0.0
-                    st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='bio_prof_dw')
+                    if 'morpho_prof_dh' not in st.session_state:
+                        st.session_state['morpho_prof_dh'] = 0.0
+                    st.number_input('Distal height (mm)', min_value=0.001, format='%.6g', key='morpho_prof_dh')
+                    if 'morpho_prof_dw' not in st.session_state:
+                        st.session_state['morpho_prof_dw'] = 0.0
+                    st.number_input('Distal width (mm)', min_value=0.001, format='%.6g', key='morpho_prof_dw')
                 p3, p4 = st.columns(2)
                 with p3:
-                    if 'bio_prof_clamp' not in st.session_state:
-                        st.session_state['bio_prof_clamp'] = 0.0
+                    if 'morpho_prof_clamp' not in st.session_state:
+                        st.session_state['morpho_prof_clamp'] = 0.0
                     st.number_input(
                         'Distance from rotation axis to clamps (mm)',
                         min_value=0.0,
                         format='%.6g',
-                        key='bio_prof_clamp',
-                        help=BIO_PROF_CLAMP_FIELD_HELP,
+                        key='morpho_prof_clamp',
+                        help=MORPHO_PROF_CLAMP_FIELD_HELP,
                     )
                 with p4:
-                    if 'bio_prof_samples' not in st.session_state:
-                        st.session_state['bio_prof_samples'] = 0.0
-                    st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='bio_prof_samples')
+                    if 'morpho_prof_samples' not in st.session_state:
+                        st.session_state['morpho_prof_samples'] = 0.0
+                    st.number_input('Profile integration samples', min_value=20, max_value=400, step=10, key='morpho_prof_samples')
 
                 st.divider()
-                if 'bio_use_theoretical_inertial' not in st.session_state:
-                    st.session_state['bio_use_theoretical_inertial'] = False
+                if 'morpho_use_theoretical_inertial' not in st.session_state:
+                    st.session_state['morpho_use_theoretical_inertial'] = False
                 st.checkbox(
                     'Check here to perform inertial correction',
-                    key='bio_use_theoretical_inertial',
+                    key='morpho_use_theoretical_inertial',
                     help=(
                         'Subtracts model **system** inertia (from calibration, if loaded) and **specimen** inertia from the '
                         'profile above when correcting measured torque.'
@@ -7510,17 +7510,17 @@ def main():
                 )
         if sub_specimen:
             _apply_specimen_identity_to_bender(b)
-            _apply_intrinsic_biometrics_to_bender(b)
+            _apply_intrinsic_morphometrics_to_bender(b)
             _apply_experimental_conditions_to_bender(b)
             st.toast('Specimen applied.')
         if sub_clamp_inertial:
-            _sync_biometric_flags_from_session(b)
+            _sync_morphometric_flags_from_session(b)
             if _apply_clamp_geometry_to_bender(b):
                 _apply_mounted_profile_inertial_to_bender(b)
                 st.session_state['gui_measurements_confirmed'] = True
                 st.toast('Clamp geometry & inertial correction applied.')
 
-        _touch_bio_apply_baseline_if_clean()
+        _touch_morpho_apply_baseline_if_clean()
 
     if _show_sec3_through_6():
 
@@ -7529,7 +7529,7 @@ def main():
 
         with st.expander('Load protocol template (optional)', expanded=False):
             st.caption(
-                'Templates set experiment type + procedure fields only (not biometrics). '
+                'Templates set experiment type + procedure fields only (not morphometrics). '
                 'Use **Apply procedure** after loading.'
             )
             _tpl_folder_top = _shared_experiment_dir()
@@ -7936,7 +7936,7 @@ def main():
                     if _stim_err:
                         st.error(_stim_err)
                     else:
-                        _sync_biometric_flags_from_session(b)
+                        _sync_morphometric_flags_from_session(b)
                         _sync_genus_species_to_bender(b)
                         _apply_form_updates(b, updates, tt)
                         _mark_procedure_applied()
@@ -7959,11 +7959,11 @@ def main():
 
         st.divider()
         st.subheader('8 · Experiment preview')
-        if _procedure_apply_dirty() or _bio_apply_dirty():
+        if _procedure_apply_dirty() or _morpho_apply_dirty():
             _soft_apply_reminder()
 
         def _render_current_settings_table() -> None:
-            _sync_biometric_flags_from_session(b)
+            _sync_morphometric_flags_from_session(b)
             _sync_genus_species_to_bender(b)
             _apply_form_updates(b, updates, tt)
             _mark_procedure_applied()
@@ -7984,12 +7984,12 @@ def main():
                     'name': 'specimen_id',
                     'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_id', ''),
                 },
-                {'group': 'biometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
-                {'group': 'biometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
-                {'group': 'biometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
-                {'group': 'biometric', 'name': 'target_muscle_depth_mm', 'value': getattr(b, 'target_muscle_depth_mm', None)},
-                {'group': 'biometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
-                {'group': 'biometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
+                {'group': 'morphometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
+                {'group': 'morphometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
+                {'group': 'morphometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
+                {'group': 'morphometric', 'name': 'target_muscle_depth_mm', 'value': getattr(b, 'target_muscle_depth_mm', None)},
+                {'group': 'morphometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
+                {'group': 'morphometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
                 {
                     'group': 'conditions',
                     'name': 'temp_C_room',
@@ -8209,7 +8209,7 @@ def main():
         st.markdown('### Run controls')
         if bool(st.session_state.get('gui_simulation_mode', False)):
             st.info('Simulation mode active: run uses numpy only (no NI-DAQ).')
-        if _procedure_apply_dirty() or _bio_apply_dirty():
+        if _procedure_apply_dirty() or _morpho_apply_dirty():
             _soft_apply_reminder()
 
         def _execute_run() -> None:
@@ -8221,7 +8221,7 @@ def main():
                 st.error(_proc_msg)
                 return
             st.session_state['gui_run_in_progress'] = True
-            _rehydrate_missing_biometrics_from_bender(b)
+            _rehydrate_missing_morphometrics_from_bender(b)
             _sync_genus_species_to_bender(b)
             outp = _compose_output_h5_path().strip()
             if outp:
@@ -8355,24 +8355,24 @@ def main():
             if not _proc_ok:
                 st.error(_proc_msg)
             else:
-                _rehydrate_missing_biometrics_from_bender(b)
+                _rehydrate_missing_morphometrics_from_bender(b)
             run_warnings: list[str] = []
-            bio_soft_missing: list[str] = []
+            morpho_soft_missing: list[str] = []
             if not str(st.session_state.get('gui_specimen_id') or '').strip():
-                bio_soft_missing.append('specimen ID')
+                morpho_soft_missing.append('specimen ID')
             if not str(st.session_state.get('gui_genus_species') or '').strip():
-                bio_soft_missing.append('genus-species')
-            if _session_float('bio_dclamp') is None or _session_float('bio_dclamp') <= 0:
-                bio_soft_missing.append('clamp spacing')
-            if _session_float('bio_xsec') is None or _session_float('bio_xsec') <= 0:
-                bio_soft_missing.append('cross-section width')
-            if _session_float('bio_fishmass') is None or _session_float('bio_fishmass') <= 0:
-                bio_soft_missing.append('mass')
-            if bio_soft_missing:
-                _missing_txt = ', '.join(bio_soft_missing[:4])
-                if len(bio_soft_missing) > 4:
+                morpho_soft_missing.append('genus-species')
+            if _session_float('morpho_dclamp') is None or _session_float('morpho_dclamp') <= 0:
+                morpho_soft_missing.append('clamp spacing')
+            if _session_float('morpho_xsec') is None or _session_float('morpho_xsec') <= 0:
+                morpho_soft_missing.append('cross-section width')
+            if _session_float('morpho_fishmass') is None or _session_float('morpho_fishmass') <= 0:
+                morpho_soft_missing.append('mass')
+            if morpho_soft_missing:
+                _missing_txt = ', '.join(morpho_soft_missing[:4])
+                if len(morpho_soft_missing) > 4:
                     _missing_txt += ', ...'
-                run_warnings.append(f'Biometrics look incomplete ({_missing_txt}).')
+                run_warnings.append(f'Morphometrics look incomplete ({_missing_txt}).')
             if _needs_missing_calibration_confirmation(b) and not bool(st.session_state.get('gui_simulation_mode', False)):
                 run_warnings.append('No calibration file detected.')
             if _section2_destination_incomplete():

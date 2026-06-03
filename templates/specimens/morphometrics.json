@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "morphometrics",
+  "description": "",
+  "saved_at": "2026-04-10T20:23:58Z",
+  "session": {
+    "morpho_segment": "",
+    "morpho_fishmass": 0.0,
+    "morpho_fishlen_TL": 0.0,
+    "morpho_fishlen_SL": 0.0,
+    "morpho_xsec_height": 8.0,
+    "morpho_dvert": 0.0,
+    "morpho_dhoriz": 0.0,
+    "morpho_dclamp": 10.0,
+    "morpho_dbend": 0.0,
+    "morpho_xsec": 8.0,
+    "morpho_temp_room": 22.0,
+    "morpho_temp_tank": 22.0,
+    "morpho_prof_ph": 4.0,
+    "morpho_prof_pw": 6.0,
+    "morpho_prof_dh": 3.5,
+    "morpho_prof_dw": 5.0,
+    "morpho_prof_L": 25.0,
+    "morpho_prof_rho": 0.00103,
+    "morpho_prof_clamp": 20.0,
+    "morpho_prof_samples": 120,
+    "morpho_use_theoretical_inertial": false,
+    "gui_genus_species": "",
+    "gui_specimen_id": ""
+  }
+}
