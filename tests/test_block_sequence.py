@@ -36,6 +36,11 @@ def test_normalize_stim_sides(b):
     assert b._normalize_stim_sides(None) == 'left'
     assert b._normalize_stim_sides('both') == 'both'
     assert b._normalize_stim_sides('Bilateral') == 'both'
+    # OFF aliases (shared by isometric and isovelocity per-block routing).
+    assert b._normalize_stim_sides('off') == 'off'
+    assert b._normalize_stim_sides('OFF') == 'off'
+    assert b._normalize_stim_sides('none') == 'off'
+    assert b._normalize_stim_sides('no_stim') == 'off'
     with pytest.raises(ValueError, match='left.*right.*both'):
         b._normalize_stim_sides('sequential')
 
@@ -60,6 +65,8 @@ def test_stim_sides_to_recruitment(b):
     assert b._stim_sides_to_recruitment('left') == 'left_unilateral'
     assert b._stim_sides_to_recruitment('right') == 'right_unilateral'
     assert b._stim_sides_to_recruitment('both') == 'bilateral_simultaneous'
+    # OFF deposits no stim, so the recruitment label is moot; falls through to bilateral.
+    assert b._stim_sides_to_recruitment('off') == 'bilateral_simultaneous'
 
 
 def test_validate_block_sequence_voltages(b):
@@ -70,6 +77,32 @@ def test_validate_block_sequence_voltages(b):
     seq_both = [{'direction': 'left', 'stim_sides': 'both'}]
     with pytest.raises(ValueError, match='right_stim_voltage'):
         b._validate_block_sequence_voltages(seq_both, 5.0, -1.0)
+
+
+def test_validate_block_sequence_voltages_off_needs_no_voltage(b):
+    """An OFF block requires no stim voltage (zero/blank voltages are fine)."""
+    seq_off = [{'direction': 'left', 'stim_sides': 'off'}]
+    b._validate_block_sequence_voltages(seq_off, 0.0, 0.0)
+    # OFF mixed with LEFT still requires the LEFT voltage only.
+    seq_mixed = [
+        {'direction': 'left', 'stim_sides': 'off'},
+        {'direction': 'right', 'stim_sides': 'left'},
+    ]
+    b._validate_block_sequence_voltages(seq_mixed, 5.0, 0.0)
+    with pytest.raises(ValueError, match='left_stim_voltage'):
+        b._validate_block_sequence_voltages(seq_mixed, 0.0, 0.0)
+
+
+def test_normalize_block_sequence_with_off(b):
+    """OFF is a valid per-block stim_sides for the shared isometric/isovelocity block sequence."""
+    seq = b._normalize_block_sequence([
+        {'direction': 'left', 'stim_sides': 'off'},
+        {'direction': 'right', 'stim_sides': 'both'},
+    ])
+    assert seq == [
+        {'direction': 'left', 'stim_sides': 'off'},
+        {'direction': 'right', 'stim_sides': 'both'},
+    ]
 
 
 def test_route_stim_sides_volts_left_only(b):
@@ -86,6 +119,21 @@ def test_route_stim_sides_volts_both_different_voltages(b):
     s1, s2 = b._route_stim_sides_volts(t, active, 75.0, 'both', 3.5, 7.0)
     assert np.max(np.abs(s1)) == pytest.approx(3.5)
     assert np.max(np.abs(s2)) == pytest.approx(7.0)
+
+
+def test_route_stim_sides_volts_off_is_zero(b):
+    """OFF yields all-zero S1/S2 even with an active window and nonzero voltages.
+
+    This is the single routing function both isometric (``_run_force_length_steps``) and
+    isovelocity (``_isovelocity_one_block``) call for per-block stim, so OFF behaves identically
+    in both protocols.
+    """
+    t = np.linspace(0, 0.1, 200)
+    active = (t >= 0.02) & (t < 0.08)
+    s1, s2 = b._route_stim_sides_volts(t, active, 75.0, 'off', 5.0, 5.0)
+    assert np.count_nonzero(s1) == 0
+    assert np.count_nonzero(s2) == 0
+    assert s1.shape == t.shape and s2.shape == t.shape
 
 
 def test_preview_append_neutral_reset_skips_noop():

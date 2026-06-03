@@ -2335,7 +2335,11 @@ class Bender:
         raise ValueError(f"block direction must be 'left' or 'right', not {direction!r}.")
 
     def _normalize_stim_sides(self, stim_sides):
-        """Canonical per-block stim routing: ``left``, ``right``, or ``both``."""
+        """Canonical per-block stim routing: ``left``, ``right``, ``both``, or ``off``.
+
+        ``off`` means the block runs the motion with no stimulation: ``_route_stim_sides_volts``
+        returns all-zero S1/S2 for it regardless of the global stim-enable flag.
+        """
         if stim_sides is None:
             return 'left'
         s = str(stim_sides).strip().lower()
@@ -2345,10 +2349,13 @@ class Bender:
             'both': 'both',
             'bilateral': 'both',
             'bilateral_simultaneous': 'both',
+            'off': 'off',
+            'none': 'off',
+            'no_stim': 'off',
         }
         if s in aliases:
             return aliases[s]
-        raise ValueError(f"stim_sides must be 'left', 'right', or 'both', not {stim_sides!r}.")
+        raise ValueError(f"stim_sides must be 'left', 'right', 'both', or 'off', not {stim_sides!r}.")
 
     def _normalize_block_sequence(self, block_sequence):
         """
@@ -2718,6 +2725,10 @@ class Bender:
         s1 = np.zeros(n, dtype=float)
         s2 = np.zeros(n, dtype=float)
         sides = self._normalize_stim_sides(stim_sides)
+        # OFF: this block runs the motion with no stimulation on either channel,
+        # regardless of the global stim-enable flag.
+        if sides == 'off':
+            return s1, s2
         active = np.asarray(active_mask, dtype=bool).reshape(-1)
         if not np.any(active):
             return s1, s2

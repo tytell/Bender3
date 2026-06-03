@@ -1628,12 +1628,13 @@ BILATERAL_MIRROR_LABEL = 'Perform test on both sides (bilateral)'
 LATERAL_MODE_LABEL = 'Stim routing override (optional; experts only)'
 
 BLOCK_DIRECTION_OPTIONS = ('left', 'right')
-BLOCK_STIM_SIDES_OPTIONS = ('left', 'right', 'both')
+BLOCK_STIM_SIDES_OPTIONS = ('left', 'right', 'both', 'off')
 BLOCK_DIRECTION_LABELS = {'left': 'Bend LEFT', 'right': 'Bend RIGHT'}
 BLOCK_STIM_SIDES_LABELS = {
     'left': 'Stim LEFT',
     'right': 'Stim RIGHT',
     'both': 'Stim BOTH',
+    'off': 'Stim OFF',
 }
 
 _BLOCK_SEQUENCE_PROCEDURE_KEYS = frozenset({
