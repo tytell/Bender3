@@ -6131,7 +6131,7 @@ def _render_sidebar() -> None:
 
     The status checklist panel and the in-sidebar emergency stop were removed (Phase 10b).
     Readiness is now shown inline by each Apply section (dirty reminders + applied/selected
-    status) and by the Config+Path run gate; KILL DAQ lives next to the **Run experiment** button.
+    status) and by the Config+Path run gate; KILL DAQ lives directly below the **Run experiment** button.
     """
     with st.sidebar:
         if _nav_route() == 'sim_compare':
@@ -8320,30 +8320,6 @@ def main():
         elif _ready_run['protocol_ok'] and _ready_run['setup_ok'] and _ready_run['measurements_ok']:
             st.caption('Checklist complete — review warnings below if any, then run or click Proceed.')
 
-        # KILL DAQ — relocated next to RUN (Phase 10b). Resets the NI device (stops AI/AO/DO).
-        # LOUD LIMITATION FLAG: a run executes synchronously inside st.spinner, which blocks
-        # Streamlit's single script thread. While a run is in progress this button cannot be
-        # clicked to interrupt it — Streamlit will not process the click until run_experiment
-        # returns. It is functional BEFORE/AFTER a run (or from a second browser session) to
-        # reset the device; it is NOT a mid-run interrupt. Do not rely on it as a live e-stop.
-        with st.container(border=True):
-            if st.button(
-                'KILL DAQ — stop & reset NI device',
-                key='gui_kill_daq',
-                type='primary',
-                use_container_width=True,
-                help='Resets the NI-DAQ device (stops tasks, clears outputs).',
-            ):
-                ok, msg = _trigger_emergency_stop()
-                if ok:
-                    st.success(msg)
-                else:
-                    st.warning(msg)
-            st.caption(
-                '⚠️ Cannot interrupt a run already in progress: acquisition runs synchronously and '
-                'blocks the app thread. Use this before/after a run, or trigger the rig hardware e-stop mid-run.'
-            )
-
         if st.button(
             'Run experiment',
             type='primary',
@@ -8389,6 +8365,31 @@ def main():
                     st.session_state['gui_run_pending_confirm'] = False
                     _execute_run()
             _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
+
+        # KILL DAQ — placed directly below RUN (Phase 10b layout). Resets the NI device
+        # (stops AI/AO/DO). Persistent: always rendered regardless of run state.
+        # LOUD LIMITATION FLAG: a run executes synchronously inside st.spinner, which blocks
+        # Streamlit's single script thread. While a run is in progress this button cannot be
+        # clicked to interrupt it — Streamlit will not process the click until run_experiment
+        # returns. It is functional BEFORE/AFTER a run (or from a second browser session) to
+        # reset the device; it is NOT a mid-run interrupt. Do not rely on it as a live e-stop.
+        with st.container(border=True):
+            if st.button(
+                'KILL DAQ — stop & reset NI device',
+                key='gui_kill_daq',
+                type='primary',
+                use_container_width=True,
+                help='Resets the NI-DAQ device (stops tasks, clears outputs).',
+            ):
+                ok, msg = _trigger_emergency_stop()
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+            st.caption(
+                '⚠️ Cannot interrupt a run already in progress: acquisition runs synchronously and '
+                'blocks the app thread. Use this before/after a run, or trigger the rig hardware e-stop mid-run.'
+            )
 
         if _pending_run_confirm:
             _warns = list(st.session_state.get('gui_run_soft_warnings') or [])
