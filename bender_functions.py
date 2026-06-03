@@ -587,6 +587,8 @@ class Bender:
             self.isometric_randomize = bool(self.randomize)
         if getattr(self, 'isometric_random_seed', None) is None and getattr(self, 'random_seed', None) is not None:
             self.isometric_random_seed = self.random_seed
+        # Dormant: the GUI no longer exposes a stim-routing-overrides field (blocks own routing).
+        # Kept only so older saved templates carrying isometric_stim_overrides still load + merge.
         sp_iso = dict(getattr(self, 'isometric_stim_params', {}) or {})
         ov_iso = dict(getattr(self, 'isometric_stim_overrides', {}) or {})
         if ov_iso:
@@ -606,6 +608,7 @@ class Bender:
             self.isovelocity_randomize = bool(self.randomize)
         if getattr(self, 'isovelocity_random_seed', None) is None and getattr(self, 'random_seed', None) is not None:
             self.isovelocity_random_seed = self.random_seed
+        # Dormant: see isometric note above (template back-compat only; no GUI field).
         sp_iv = dict(getattr(self, 'isovelocity_stim_params', {}) or {})
         ov_iv = dict(getattr(self, 'isovelocity_stim_overrides', {}) or {})
         if ov_iv:
@@ -4568,7 +4571,7 @@ class Bender:
             'isometric_optional': [
                 'isometric_mode', 'isometric_randomize', 'isometric_random_seed',
                 'isometric_inter_step_interval_s',
-                'isometric_stim_params', 'isometric_stim_overrides',
+                'isometric_stim_params',
             ],
             'isovelocity_required': [
                 'isovelocity_min_vel', 'isovelocity_max_vel',
@@ -4581,7 +4584,6 @@ class Bender:
                 'isovelocity_randomize',
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
                 'isovelocity_pre_hold_s', 'isovelocity_stim_params',
-                'isovelocity_stim_overrides',
             ],
             'calibration_required': ['calibration_base_test_type'],
             'calibration_optional': ['inertial_calibration_file'],

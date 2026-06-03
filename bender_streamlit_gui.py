@@ -1472,18 +1472,12 @@ ISOMETRIC_STIM_JSON_HELP = (
     '**is_stim**, **stim_pulse_rate** (Hz), **device_name** (null = NI config). '
     'Example: `{"ramp_duration_s": 2, "hold_duration_s": 5, "stim_onset_s": 0.5, "stim_duration_s": 4, "stim_pulse_rate": 75}`'
 )
-ISOMETRIC_STIM_OVERRIDES_HELP = (
-    '**Rare.** Overrides stim **routing** (not timing). **Leave `{}`** unless directed.\n\n'
-    '**Advanced (JSON text):** keys like **recruitment**, **lateral_mode**, **bilateral_mirror_motor**, '
-    '**bilateral_sequential_left_frac**.'
-)
 ISOVELOCITY_STIM_JSON_HELP = (
     'Optional segment timing and stimulation. **Leave `{}`** unless you need overrides.\n\n'
     '**Advanced (JSON text):** **stim_onset_s** (signed, relative to constant-velocity start), **stim_duration_s**, '
     '**is_stim**, **stim_pulse_rate**, **device_name**; '
     'optionally **iso_duration_s** / **pre_hold_s** to override the main fields.'
 )
-ISOVELOCITY_STIM_OVERRIDES_HELP = ISOMETRIC_STIM_OVERRIDES_HELP
 
 RANDOM_SEED_HELP = (
     'Only used when **randomize order** is checked. Enter an integer for a **reproducible** shuffle (same order '
@@ -2010,15 +2004,6 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     return params
 
 
-def _merge_stim_overrides(sp: dict, overrides_key: str, updates: dict) -> dict:
-    """Merge optional JSON stim overrides into assembled stim params for validation."""
-    merged = dict(sp)
-    ov = updates.get(overrides_key)
-    if isinstance(ov, dict):
-        merged.update(ov)
-    return merged
-
-
 def _validate_procedure_stim_timing(b: Bender, updates: dict, tt: str) -> Optional[str]:
     """Return an error message when stim timing would bleed outside segment bounds."""
     try:
@@ -2026,7 +2011,6 @@ def _validate_procedure_stim_timing(b: Bender, updates: dict, tt: str) -> Option
             sp = updates.get('isometric_stim_params')
             if not isinstance(sp, dict) or not sp.get('is_stim'):
                 return None
-            sp = _merge_stim_overrides(sp, 'isometric_stim_overrides', updates)
             num_steps = updates.get('isometric_num_steps', getattr(b, 'isometric_num_steps', 1))
             hold_s = float(sp.get('hold_duration_s', 5.0))
             b._validate_stim_timing_for_steps(
@@ -2040,7 +2024,6 @@ def _validate_procedure_stim_timing(b: Bender, updates: dict, tt: str) -> Option
             sp = updates.get('isovelocity_stim_params')
             if not isinstance(sp, dict) or not sp.get('is_stim'):
                 return None
-            sp = _merge_stim_overrides(sp, 'isovelocity_stim_overrides', updates)
             num_steps = updates.get('isovelocity_num_steps', getattr(b, 'isovelocity_num_steps', 1))
             pre_hold_s = float(
                 updates.get('isovelocity_pre_hold_s', getattr(b, 'isovelocity_pre_hold_s', 0.3)) or 0.3
@@ -7782,14 +7765,6 @@ def main():
                             st.markdown('**Stimulation**')
                             assembled = _render_isometric_stim_fields(b)
                             updates[key] = assembled
-                        elif key == 'isometric_stim_overrides':
-                            updates[key] = _render_field(
-                                b,
-                                key,
-                                'json_dict',
-                                'Stim routing overrides (advanced)',
-                                help_text=ISOMETRIC_STIM_OVERRIDES_HELP,
-                            )
                         elif key == 'isometric_mode':
                             modes = list(ALL_AMPS_MODE_OPTIONS)
                             skm = _widget_key('isometric_mode')
@@ -7894,14 +7869,6 @@ def main():
                             st.markdown('**Stimulation**')
                             assembled = _render_isovelocity_stim_fields(b)
                             updates[key] = assembled
-                        elif key == 'isovelocity_stim_overrides':
-                            updates[key] = _render_field(
-                                b,
-                                key,
-                                'json_dict',
-                                'Stim routing overrides (advanced)',
-                                help_text=ISOVELOCITY_STIM_OVERRIDES_HELP,
-                            )
                         elif key == 'isovelocity_velocity_mode':
                             pass  # required-only; rendered in Required section
                         elif 'random_seed' in key:
