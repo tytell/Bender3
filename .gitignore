@@ -10,6 +10,14 @@ SessionSnapshots/
 TestData/
 /GUITest*.png
 *.h5
+# Auto-generated QC figures (Run / export); paired with acquisition HDF5
+*_qc.png
+*_qc_*.png
+*_qc.html
+*_qc_*.html
+# Standard naming: same stem as .h5, .png / .html only
+*_bender_*.png
+*_bender_*.html
 .Rproj.user
 .Rhistory
 *.nb.html
