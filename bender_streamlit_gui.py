@@ -7332,10 +7332,14 @@ def main():
                     )
                 with g3:
                     st.text_input(
-                        'Position vs AoR (mm, comma-separated)',
+                        'Position vs AoR (mm, comma-separated; 0 = AoR, positive = toward sensor)',
                         key='morpho_geom_pos',
                         placeholder='e.g. -10, 0, 10',
-                        help='Station position relative to the axis of rotation (center between clamps = 0; may be negative).',
+                        help=(
+                            'Station position relative to the axis of rotation (AoR). '
+                            '0 = AoR (center between clamps); positive distances are toward the sensor. '
+                            'Enter positive values.'
+                        ),
                     )
                 if 'morpho_prof_clamp' not in st.session_state:
                     st.session_state['morpho_prof_clamp'] = 0.0
