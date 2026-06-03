@@ -141,3 +141,67 @@ def test_isometric_preview_errors_without_clamp():
     out = pv.build_protocol_preview(b, requested_test_type='isometric')
     assert out.get('ok') is False
     assert out.get('error')
+
+
+def _dynamic_stim_bender():
+    b = _RealBender('jimenez_bender_config_A')
+    b.dclamp = 10.0
+    b.xsec_width = 2.0
+    b.all_freqs = [1.0]
+    b.all_amps = [0.05]
+    b.all_amps_mode = 'strain'
+    b.cycles_per_step = 3
+    b.n_end_cycles = 0
+    b.randomize = False
+    b.stim_cycles_in_step = []
+    b.stim_pulse_rate = 75.0
+    b.is_stim = True
+    # Deterministic conditioning-pulse timing for the assertions below.
+    b.prestim_time = -2.0
+    b.poststim_time = 2.0
+    b.prepoststim_dur = 0.06
+    b.prepoststim_sep = 1.0
+    return b
+
+
+def _pulse_window_starts(t, sig):
+    t = np.asarray(t, dtype=float)
+    on = np.asarray(sig, dtype=float) > 0
+    idx = np.where(on)[0]
+    starts = []
+    for i in idx:
+        if i == 0 or not on[i - 1]:
+            starts.append(float(t[i]))
+    return starts
+
+
+def test_dynamic_preview_post_stim_relative_to_active_window():
+    """Post-conditioning pulses must land after the active motion ends, not at a fixed
+    absolute time inside it (regression: make_stimuli movedur not passed in preview)."""
+    b = _dynamic_stim_bender()
+    out = pv.build_protocol_preview(b, requested_test_type='dynamic', max_plot_points=100000)
+    assert out.get('ok') is True
+    t = np.asarray(out['t'], dtype=float)
+    s1 = np.asarray(out['stim_s1'], dtype=float)
+    s2 = np.asarray(out['stim_s2'], dtype=float)
+    movedur = float(np.sum(np.asarray(b.period_by_cycle, dtype=float)))
+
+    s1_starts = _pulse_window_starts(t, s1)
+    s2_starts = _pulse_window_starts(t, s2)
+    assert s1_starts and s2_starts
+
+    # Each conditioning burst is a train of carrier pulses spanning prepoststim_dur; the burst
+    # ONSET is the first pulse of the relevant group. Pre-stim fires before motion (explicit
+    # negative onset); post-stim fires after the active motion window ends.
+    s1_pre = [s for s in s1_starts if s < 0.0]
+    s1_post = [s for s in s1_starts if s >= movedur - 1e-6]
+    s2_post = [s for s in s2_starts if s >= movedur - 1e-6]
+    assert s1_pre and s1_post and s2_post
+
+    assert min(s1_pre) == pytest.approx(b.prestim_time, abs=2e-2)
+    assert min(s1_post) == pytest.approx(movedur + b.poststim_time, abs=2e-2)
+    assert min(s2_post) == pytest.approx(movedur + b.poststim_time + b.prepoststim_sep, abs=2e-2)
+
+    # With no in-cycle stim configured, nothing should fire strictly inside the motion window.
+    in_motion = [s for s in (s1_starts + s2_starts) if 1e-6 < s < movedur - 1e-6]
+    assert in_motion == []

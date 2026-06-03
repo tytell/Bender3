@@ -900,7 +900,19 @@ def _preview_dynamic(b: Any, max_plot_points: int) -> PreviewResult:
         {'metric': 'time samples', 'value': int(r['t'].size)},
     ]
     if bool(getattr(b, 'is_stim', False)):
-        s1, s2 = b.make_stimuli(is_stim=True, t_basis=r['t'], tnorm_basis=tnorm, stim_pulse_rate=spr)
+        # Post-conditioning pulses land at ``movedur + poststim_time`` (relative to the END of
+        # the active motion), matching ``run_experiment`` which passes ``movedur=duration``.
+        # Without it, ``make_stimuli`` falls back to ``self.movedur`` (never set -> 0.0) and the
+        # post pulses collapse to fixed absolute times inside the active window. In-cycle stim
+        # is already per-active-cycle via ``tnorm``; pre-stim is relative to motion start (t=0).
+        movedur = float(np.sum(np.asarray(b.period_by_cycle, dtype=float)))
+        s1, s2 = b.make_stimuli(
+            is_stim=True,
+            t_basis=r['t'],
+            tnorm_basis=tnorm,
+            stim_pulse_rate=spr,
+            movedur=movedur,
+        )
         r['stim_s1'] = np.asarray(s1, dtype=float).reshape(-1)
         r['stim_s2'] = np.asarray(s2, dtype=float).reshape(-1)
         r['table'].extend(
