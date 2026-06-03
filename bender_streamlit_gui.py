@@ -4016,41 +4016,18 @@ def _stepwise_on_data_file_path_step() -> bool:
     return False
 
 
-def _template_hide_config_build_new() -> bool:
-    """In template mode, user said they have a saved config — skip the *Build new* path in section 1."""
-    return _nav_route() == 'templates' and bool(st.session_state.get('gui_tpl_chk_config', True))
-
-
-def _tpl_only_procedure() -> bool:
-    """True when user has config + morphometrics files but still needs to set the procedure in the app (no protocol JSON yet)."""
-    if _nav_route() != 'templates':
-        return False
-    if not bool(st.session_state.get('gui_tpl_chk_config', True)):
-        return False
-    if not bool(st.session_state.get('gui_tpl_chk_morphometrics', True)):
-        return False
-    # Third box: "I already have a protocol template" — when checked, use full sections (load protocol from file).
-    return not bool(st.session_state.get('gui_tpl_have_protocol_template', False))
-
-
 def _show_hw_config_section() -> bool:
-    """Section 1 · hardware configuration (no data-folder block)."""
-    if _nav_route() == 'templates' and _tpl_only_procedure():
-        return False
+    """Section 1 · hardware configuration (always shown in the single-page engine)."""
     return True
 
 
 def _show_data_path_section() -> bool:
-    """Section 2 · data folder & file name (+ **Load hardware configuration and data path** for load-existing)."""
-    if _nav_route() == 'templates' and _tpl_only_procedure():
-        return False
+    """Section 2 · data folder & file name (always shown in the single-page engine)."""
     return True
 
 
 def _show_full_sec2() -> bool:
-    """Section 3 · morphometrics."""
-    if _nav_route() == 'templates' and _tpl_only_procedure():
-        return False
+    """Section 3 · morphometrics (always shown in the single-page engine)."""
     return True
 
 
@@ -6102,7 +6079,8 @@ def _render_app_chrome() -> None:
         if _mode == 'scratch':
             st.caption('Full workflow — all sections below are visible.')
         elif _mode == 'templates':
-            st.caption('Template mode — checklist at top controls which sections appear.')
+            # Deferred route (ux_spec §2.2): no longer exposed; renders the standard single-page engine.
+            st.caption('Full workflow — all sections below are visible.')
         elif _mode == 'sim_compare':
             st.caption('Simulation & Comparison — numpy cantilever mechanics only; no NI-DAQ.')
         elif _mode == 'h5_explorer':
@@ -6225,10 +6203,6 @@ def _render_stepwise_rail() -> None:
                 st.rerun()
 
     # Prerequisite reminders are centralized in the sidebar checklist + fix panel.
-
-
-def _cb_tpl_config_module_changed() -> None:
-    st.session_state['gui_tpl_reload_config'] = True
 
 
 def _pick_folder_with_dialog(initial_dir: str) -> tuple[Optional[str], Optional[str]]:
@@ -6450,124 +6424,6 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
     st.caption(f'{label}: `{_display_mod or "(none selected)"}`')
 
 
-def _render_template_procedure_strip() -> None:
-    """Compact loaders: config + morphometrics from disk, then experiment sections (procedure edited in the app)."""
-    _ensure_hw_config_session_defaults()
-    st.subheader('Load saved files')
-    st.caption('Order: hardware `.py` → data path → morphometrics file. Reload module after changing the selection.')
-
-    if st.session_state.pop('gui_tpl_reload_config', False):
-        eff = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-        if not eff:
-            st.session_state['gui_tpl_config_load_err'] = 'Choose a config module with Browse.'
-        else:
-            err = _apply_loaded_config_module(_raw_mod_for_hardware_config_load(module_stem=eff))
-            if err:
-                st.session_state['gui_tpl_config_load_err'] = err
-            else:
-                st.rerun()
-    if err_msg := st.session_state.pop('gui_tpl_config_load_err', None):
-        _st_error_detail(
-            'Hardware config load failed.',
-            ['Check module name', 'Fix errors in Details'],
-            err_msg,
-        )
-
-    st.subheader('1 · Hardware configuration')
-    with st.container(border=True):
-        _cfg_mods = discover_config_modules(_ROOT)
-        _default_pick = str(st.session_state.get('cfg_mod') or '')
-        if _default_pick not in _cfg_mods:
-            _default_pick = _cfg_mods[0]
-        st.session_state.setdefault('gui_load_cfg_select', _default_pick)
-        _render_config_module_navigator(key_prefix='tpl', label='Hardware configuration module')
-        if _load_save_button(
-            'Load hardware configuration',
-            key='gui_btn_load_config_tpl',
-            help='Reload the selected hardware `.py` module from disk.',
-        ):
-            st.session_state['gui_tpl_reload_config'] = True
-            st.rerun()
-        if st.session_state.get('bender') is not None:
-            st.success(f"Hardware configuration active: `{getattr(st.session_state['bender'], 'config_name', '?')}`")
-
-    st.divider()
-    st.subheader('2 · Data file path')
-    with st.container(border=True):
-        _dfc, _fnc = st.columns(2)
-        with _dfc:
-            _render_data_folder_dropdown(key_suffix='tpl')
-            _preview_out = _compose_output_h5_path().strip()
-            _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
-            if _preview_out:
-                st.caption(f'Save path: `{_preview_out}`')
-            elif _preview_folder:
-                st.caption(f'Save path: `{_preview_folder}`')
-        with _fnc:
-            st.text_input(
-                ' ',
-                key='gui_data_filename',
-                placeholder='datafilename.h5',
-                help=DATA_FILE_NAME_HELP,
-                label_visibility='collapsed',
-            )
-
-    st.divider()
-    _morpho_tpl_dir = _shared_experiment_dir()
-    _morpho_tpl_list = list_morphometrics_template_files(_morpho_tpl_dir)
-    _morpho_opts: list = [None] + _morpho_tpl_list
-    if 'gui_morphometrics_template_select' not in st.session_state:
-        st.session_state['gui_morphometrics_template_select'] = None
-    st.selectbox(
-        'Morphometrics file',
-        _morpho_opts,
-        format_func=_morphometrics_template_option_label,
-        key='gui_morphometrics_template_select',
-        help='Saved specimen/setup files in your data folder (`.json` on disk).',
-    )
-    if _load_save_button('Load morphometrics into form', key='gui_morphometrics_btn_load_tpl'):
-        _bp = st.session_state.get('gui_morphometrics_template_select')
-        if not _bp:
-            st.session_state['gui_morphometrics_load_feedback'] = (False, 'Choose a morphometrics file first.')
-        else:
-            st.session_state['gui_pending_morphometrics_path'] = _bp
-        st.rerun()
-    if bf := st.session_state.pop('gui_morphometrics_load_feedback', None):
-        ok_bf, txt_bf = bf
-        if ok_bf:
-            st.success(txt_bf)
-        elif str(txt_bf).strip() == 'Choose a morphometrics file first.':
-            st.warning(txt_bf)
-        else:
-            _st_error_detail(
-                'Morphometrics load failed.',
-                ['Check file format', 'Read Details'],
-                txt_bf,
-            )
-    if st.session_state.get('bender') is not None:
-        if _load_save_button(
-            'Apply loaded morphometrics to experiment',
-            key='gui_tpl_apply_morpho_to_bender',
-            help='Same as **section 3 · Apply all morphometrics**: identity, intrinsic, experimental conditions, clamp, profile, inertial flag.',
-        ):
-            _apply_all_morphometrics_to_bender(st.session_state['bender'])
-            st.session_state['gui_tpl_morpho_done'] = True
-            st.success('Morphometrics applied. Procedure sections are below.')
-            st.rerun()
-
-
-def _template_procedure_gate() -> None:
-    if _nav_route() != 'templates' or not _tpl_only_procedure():
-        return
-    _render_template_procedure_strip()
-    if not st.session_state.get('bender'):
-        st.info('Load **hardware configuration** above to continue.')
-        st.stop()
-    if not st.session_state.get('gui_tpl_morpho_done'):
-        st.info('Load a **morphometrics** file and click **Apply loaded morphometrics to experiment**.')
-        st.stop()
-
-
 def main():
     st.set_page_config(
         page_title='CritterGripper',
@@ -6659,39 +6515,9 @@ def main():
         _autosave_tick()
         return
 
-    if _nav_route() == 'templates':
-        st.session_state.pop('gui_tpl_need_procedure', None)
-        st.markdown('**Template mode** — check what you already have on disk.')
-        if 'gui_tpl_chk_config' not in st.session_state:
-            st.session_state['gui_tpl_chk_config'] = False
-        st.checkbox('I have a saved hardware **config**', value=True, key='gui_tpl_chk_config')
-        if 'gui_tpl_chk_morphometrics' not in st.session_state:
-            st.session_state['gui_tpl_chk_morphometrics'] = False
-        st.checkbox(
-            'I have a saved **morphometrics** file',
-            value=True,
-            key='gui_tpl_chk_morphometrics',
-            help='Usually a `.json` file in your data folder with lengths, clamp spacing, etc.',
-        )
-        if 'gui_tpl_have_protocol_template' not in st.session_state:
-            st.session_state['gui_tpl_have_protocol_template'] = False
-        st.checkbox(
-            'I already have a **protocol** template',
-            value=False,
-            key='gui_tpl_have_protocol_template',
-            help='A saved procedure file (`.json`) listing experiment type and parameters.',
-        )
-        if not _tpl_only_procedure():
-            st.info(
-                'All sections below match **Build from scratch**, or use **Load template into form** in **section 4** when you '
-                'already have a protocol file. Uncheck the third box above if you only need to configure the procedure after '
-                'loading config and morphometrics.'
-            )
-
     st.caption('Sections follow the numbered order on the page.')
 
     _cfg_mods = discover_config_modules(_ROOT)
-    _template_procedure_gate()
 
     if _show_hw_config_section() or _show_data_path_section():
         st.session_state.setdefault('gui_setup_actions_show', False)
@@ -6704,7 +6530,7 @@ def main():
             st.session_state['gui_setup_actions_show'] = not bool(st.session_state.get('gui_setup_actions_show', False))
         if st.session_state.get('gui_setup_actions_show'):
             st.caption('Choose what to do with your current form state before starting over.')
-            _a_save, _a_home, _a_tpl = st.columns(3, gap='small')
+            _a_save, _a_home = st.columns(2, gap='small')
             with _a_save:
                 if st.button('Save progress snapshot', key='gui_save_progress_snapshot', use_container_width=True):
                     ok, msg = _save_progress_snapshot()
@@ -6758,17 +6584,6 @@ def main():
                     _autosave_tick(force=True)
                     _reset_workflow_session_to_home(clear_autosave=True)
                     st.rerun()
-            with _a_tpl:
-                if st.button(
-                    'Go to Templates',
-                    key='gui_go_templates_from_setup',
-                    use_container_width=True,
-                    help='Use template workflow instead of continuing with current unsaved setup.',
-                ):
-                    _autosave_tick(force=True)
-                    if _attempt_route_switch_with_morpho_warning(target_route='templates', origin='setup'):
-                        st.rerun()
-            _render_pending_morpho_nav_warning('setup')
 
     _show_hw = _show_hw_config_section()
     _show_data = _show_data_path_section()
@@ -6864,12 +6679,7 @@ def main():
             st.session_state.setdefault('gui_cfg_build_out', '')
             st.session_state.setdefault('gui_cfg_build_overwrite', False)
 
-            if _template_hide_config_build_new():
-                st.caption('Template mode: load-only here. Uncheck "I have a saved config" above to use **Build new**.')
-                st.session_state['gui_config_setup_mode'] = 'Load existing'
-                mode = 'Load existing'
-            else:
-                mode = _hardware_configuration_mode_toggle()
+            mode = _hardware_configuration_mode_toggle()
 
             if mode == 'Load existing':
                 _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
