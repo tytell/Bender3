@@ -1249,17 +1249,15 @@ def _render_recovery_status_ui() -> None:
             st.warning(msg)
         else:
             st.success(msg)
-        c1, c2, c3 = st.columns(3, gap='small')
+        # Recovery is preserved here as a status banner; the single start-fresh / save-progress
+        # control lives in the setup "Start fresh / save progress" panel (no duplicate button).
+        c1, c2 = st.columns(2, gap='small')
         with c1:
-            if st.button('Start fresh', key='gui_recovery_start_fresh', type='secondary', use_container_width=True):
-                _reset_workflow_session_to_home(clear_autosave=True, target_route=_nav_route())
-                st.rerun()
-        with c2:
             with st.expander('Recovery details', expanded=False):
                 info = dict(st.session_state.get('gui_recovery_summary') or {})
                 st.caption(f"Saved at: `{info.get('saved_at', '(unknown)')}`")
                 st.caption(f"Route: `{info.get('app_route', '(unknown)')}`")
-        with c3:
+        with c2:
             if st.button('Dismiss', key='gui_recovery_dismiss', use_container_width=True):
                 st.session_state['gui_recovery_banner_message'] = ''
 
@@ -4631,54 +4629,21 @@ def _render_landing_page() -> None:
 
     with st.container(border=True):
         st.markdown(
-            '<h3 class="bnd-landing-section-title">Choose Workflow</h3>',
+            '<h3 class="bnd-landing-section-title">Run experiment</h3>',
             unsafe_allow_html=True,
         )
         st.markdown(
-            '<p class="bnd-landing-section-sub">The same experiment engine under each path — layouts differ in what is '
-            'shown at once, training-style steps, and optional checklist loading from disk.</p>',
+            '<p class="bnd-landing-section-sub">The single-page experiment engine: hardware, data path, specimen, clamp '
+            'geometry &amp; inertial correction, protocol, preview, run, save, and notes — all on one scrolling page.</p>',
             unsafe_allow_html=True,
         )
-        st.markdown('<div class="bnd-land-workflow-cards-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
-        a, b, c = st.columns(3)
-        with a:
-            st.markdown('**Build from scratch**')
-            st.caption(
-                'All sections visible: hardware, data path, biometrics, experiment, preview, run, save, plots, notes.'
-            )
-        with b:
-            st.markdown('**Templates**')
-            st.caption('Load hardware `.py` and saved biometrics from disk; optional protocol template checklist.')
-        with c:
-            st.markdown('**Step-by-step**')
-            st.caption('One focus per step with a progress bar; good for training or checklist-style sessions.')
-
-        st.markdown('<div style="height:0.5rem"></div>', unsafe_allow_html=True)
         st.markdown('<div class="bnd-land-workflow-btn-row-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
-        ba, bb, bc = st.columns(3)
-        with ba:
-            if st.button('Start full workflow', key='land_scratch', use_container_width=True, type='primary'):
-                _autosave_tick(force=True)
-                if _attempt_route_switch_with_bio_warning(
-                    target_route='scratch', origin='landing', clear_stepwise=True
-                ):
-                    st.rerun()
-        with bb:
-            if st.button('Template workflow', key='land_templates', use_container_width=True, type='primary'):
-                _autosave_tick(force=True)
-                if _attempt_route_switch_with_bio_warning(
-                    target_route='templates', origin='landing', clear_stepwise=True
-                ):
-                    st.session_state.pop('gui_tpl_bio_done', None)
-                    st.session_state.pop('gui_tpl_cfg_autoloaded', None)
-                    st.rerun()
-        with bc:
-            if st.button('Step-by-step', key='land_stepwise', use_container_width=True, type='primary'):
-                _autosave_tick(force=True)
-                if _attempt_route_switch_with_bio_warning(
-                    target_route='stepwise', origin='landing', stepwise_step=0
-                ):
-                    st.rerun()
+        if st.button('Run experiment', key='land_scratch', use_container_width=True, type='primary'):
+            _autosave_tick(force=True)
+            if _attempt_route_switch_with_bio_warning(
+                target_route='scratch', origin='landing', clear_stepwise=True
+            ):
+                st.rerun()
         _render_pending_bio_nav_warning('landing')
 
         st.markdown(
@@ -6932,25 +6897,14 @@ def main():
     _template_procedure_gate()
 
     if _show_hw_config_section() or _show_data_path_section():
-        st.session_state.setdefault('gui_setup_about_show', False)
         st.session_state.setdefault('gui_setup_actions_show', False)
-        _setup_ctl_left, _setup_ctl_right = st.columns(2, gap='small')
-        with _setup_ctl_left:
-            if st.button('About setup', key='gui_setup_about_btn', type='secondary', use_container_width=True):
-                st.session_state['gui_setup_about_show'] = not bool(st.session_state.get('gui_setup_about_show', False))
-        with _setup_ctl_right:
-            if st.button(
-                'Start fresh / save progress',
-                key='gui_setup_actions_btn',
-                type='secondary',
-                use_container_width=True,
-            ):
-                st.session_state['gui_setup_actions_show'] = not bool(st.session_state.get('gui_setup_actions_show', False))
-        if st.session_state.get('gui_setup_about_show'):
-            st.info(
-                'Setup order: select/load hardware config, choose data folder, set data file name, then apply path. '
-                'Hardware `.py` defines rig channels/settings; it does not define output `.h5` save location.'
-            )
+        if st.button(
+            'Start fresh / save progress',
+            key='gui_setup_actions_btn',
+            type='secondary',
+            use_container_width=True,
+        ):
+            st.session_state['gui_setup_actions_show'] = not bool(st.session_state.get('gui_setup_actions_show', False))
         if st.session_state.get('gui_setup_actions_show'):
             st.caption('Choose what to do with your current form state before starting over.')
             _a_save, _a_home, _a_tpl = st.columns(3, gap='small')
@@ -6998,7 +6952,7 @@ def main():
                         )
             with _a_home:
                 if st.button(
-                    'Go to Home Page',
+                    'Start fresh (discard & go to Home)',
                     key='gui_go_home_discard',
                     type='primary',
                     use_container_width=True,
@@ -7544,24 +7498,8 @@ def main():
                 st.rerun()
 
         st.divider()
-        st.session_state.setdefault('gui_bio_hide', False)
-        _bio_section_collapsed = bool(st.session_state.get('gui_bio_hide')) and _nav_route() != 'stepwise'
         sub_specimen = sub_clamp_inertial = False
-        if _bio_section_collapsed:
-            st.caption(
-                'Section body hidden. Uncheck **Hide section** at the bottom to edit specimen and clamp inputs.'
-            )
-            if st.button(
-                'Apply all biometrics',
-                key='bio_btn_apply_all_collapsed',
-                help=(
-                    'Runs all applies in order: identity, morphometrics, experimental conditions, clamp geometry '
-                    '(incl. offsets), mounted profile / density / inertia model, and the inertial-correction checkbox.'
-                ),
-            ):
-                _apply_all_biometrics_to_bender(b)
-                st.toast('Biometrics applied.')
-        else:
+        with st.container():
             # Section 2 (Specimen): identity + morphometrics + session temperature + prep condition.
             # One Apply commits only these fields (per 4-section model, ux_spec §2.1/§3).
             with st.form('bio_form_specimen', clear_on_submit=False):
@@ -7785,12 +7723,6 @@ def main():
                 st.session_state['gui_measurements_confirmed'] = True
                 st.toast('Clamp geometry & inertial correction applied.')
 
-        if _nav_route() != 'stepwise':
-            st.checkbox(
-                'Hide section (values stay; unhide to edit)',
-                key='gui_bio_hide',
-                help='Collapse biometrics fields after you are done editing or applying.',
-            )
         _touch_bio_apply_baseline_if_clean()
 
     if _show_sec3_through_6():
