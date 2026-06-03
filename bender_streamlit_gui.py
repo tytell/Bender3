@@ -1298,7 +1298,7 @@ def _biometrics_template_option_label(p: Optional[str]):
     if p is None:
         return '— Choose a biometrics file —'
     return biometrics_template_display_label(p)
-from bender_h5_export import export_primary_h5, save_universal_qc_figure  # noqa: E402
+from bender_h5_export import build_universal_qc_figure, export_primary_h5, save_universal_qc_figure  # noqa: E402
 from bender_h5_plot_helpers import (  # noqa: E402
     align_xy,
     h5_custom_plot_summary,
@@ -3310,6 +3310,56 @@ def _refresh_confirmation_flags() -> None:
 
 def _mark_review_data_used() -> None:
     st.session_state['gui_review_data_used'] = True
+
+
+def _arm_acquired_trial_review(h5_path, qc_path) -> None:
+    """Flag a just-acquired trial for the inline keep/delete review.
+
+    The raw ``.h5`` is already persisted on disk by the run; this only stores the paths so
+    the review plot + Keep/Delete controls render. The save is never gated on this review.
+    """
+    st.session_state['gui_review_pending'] = True
+    st.session_state['gui_review_h5_path'] = str(h5_path or '')
+    st.session_state['gui_review_qc_path'] = str(qc_path or '')
+
+
+def _render_acquired_trial_review(b: Bender) -> None:
+    """Inline review of the last acquired trial: raw (and corrected, when present) torque, then Keep/Delete."""
+    if not bool(st.session_state.get('gui_review_pending', False)):
+        return
+    st.divider()
+    st.subheader('Review acquired trial')
+    rev_h5 = str(st.session_state.get('gui_review_h5_path') or '')
+    if rev_h5:
+        st.caption(f'Saved data file (already on disk): `{rev_h5}`')
+    try:
+        rev_fig, _ = build_universal_qc_figure(b)
+        st.plotly_chart(rev_fig, use_container_width=True)
+        st.caption('Raw torque shown; inertia-corrected torque appears when available.')
+    except Exception as rev_exc:
+        st.warning(f'Could not build review plot: {type(rev_exc).__name__}: {rev_exc}')
+    keep_col, del_col = st.columns(2)
+    with keep_col:
+        if st.button('Keep data', key='gui_review_keep', type='primary', use_container_width=True):
+            st.session_state['gui_review_pending'] = False
+            st.toast('Kept acquired data.')
+            st.rerun()
+    with del_col:
+        if st.button('Delete data', key='gui_review_delete', type='secondary', use_container_width=True):
+            deleted = []
+            for p in (rev_h5, str(st.session_state.get('gui_review_qc_path') or '')):
+                try:
+                    if p and os.path.isfile(p):
+                        os.remove(p)
+                        deleted.append(p)
+                except OSError as del_exc:
+                    st.warning(f'Could not delete `{p}`: {del_exc}')
+            st.session_state['gui_review_pending'] = False
+            if deleted:
+                st.warning('Deleted: ' + ', '.join(f'`{os.path.basename(p)}`' for p in deleted))
+            else:
+                st.info('Nothing to delete (file already removed).')
+            st.rerun()
 
 
 def _build_checklist_fix_lines(
@@ -8482,6 +8532,7 @@ def main():
                             _st_done(label='Run finished', state='complete')
                         st.success('Data has been saved! Check data folder to confirm before proceeding.')
                         st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                        _arm_acquired_trial_review(rep.get('outputfile'), qc_path)
                         if bool(st.session_state.get('gui_qc_notes_append', True)):
                             st.session_state['gui_post_notes'] = ''
                         else:
@@ -8504,6 +8555,7 @@ def main():
                         qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
                     st.success('Data has been saved! Check data folder to confirm before proceeding.')
                     st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                    _arm_acquired_trial_review(rep.get('outputfile'), qc_path)
                     if bool(st.session_state.get('gui_qc_notes_append', True)):
                         st.session_state['gui_post_notes'] = ''
                     else:
@@ -8604,6 +8656,10 @@ def main():
                     st.session_state['gui_run_pending_confirm'] = False
                     st.session_state['gui_run_soft_warnings'] = []
                     st.info('Run aborted.')
+
+        # Persist-then-review: the raw .h5 is already written by the run above. Show the
+        # acquired trial now and let the operator keep or delete it (save is not gated on this).
+        _render_acquired_trial_review(b)
 
         st.divider()
         st.session_state.setdefault('gui_sec6_hide', False)
