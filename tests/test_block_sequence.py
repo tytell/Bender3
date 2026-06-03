@@ -193,6 +193,30 @@ def test_isometric_negative_onset_budget_is_ramp_duration(b):
         )
 
 
+def test_isometric_segment_duration_is_hold_duration_s(b):
+    """The isometric active segment used for anti-bleed is hold_duration_s from the stim params."""
+    ramp_s = 2.0
+    # Stim window onset 0 + duration 4 s fits inside a 5 s hold: must pass.
+    sp_ok = {'is_stim': True, 'stim_onset_s': 0.0, 'stim_duration_s': 4.0, 'hold_duration_s': 5.0}
+    b._validate_stim_timing_for_steps(
+        sp_ok,
+        test_type='isometric',
+        num_steps=2,
+        pre_hold_at_start_s=ramp_s,
+        segment_duration_s=float(sp_ok.get('hold_duration_s', 5.0)),
+    )
+    # Same window with a shorter 3 s hold now bleeds past the segment end: must raise.
+    sp_bad = {'is_stim': True, 'stim_onset_s': 0.0, 'stim_duration_s': 4.0, 'hold_duration_s': 3.0}
+    with pytest.raises(ValueError, match='past the active segment'):
+        b._validate_stim_timing_for_steps(
+            sp_bad,
+            test_type='isometric',
+            num_steps=2,
+            pre_hold_at_start_s=ramp_s,
+            segment_duration_s=float(sp_bad.get('hold_duration_s', 5.0)),
+        )
+
+
 def test_validate_stim_timing_bounds_rejects_pre_hold_bleed(b):
     with pytest.raises(ValueError, match='before the allowed pre-hold'):
         b._validate_stim_timing_bounds(

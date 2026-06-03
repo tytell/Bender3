@@ -1926,6 +1926,7 @@ def _seed_isometric_stim_widget_state(b: Bender) -> None:
         'isometric_stim_pulse_rate': spr_default,
         'isometric_stim_onset_s': onset,
         'isometric_stim_duration_s': duration,
+        'isometric_hold_duration_s': float(sp.get('hold_duration_s', 5.0)),
     }
     for name, val in defaults.items():
         sk = _widget_key(name)
@@ -1949,6 +1950,20 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     onset = float(st.session_state[onset_sk])
     duration = float(st.session_state[duration_sk])
     pulse_rate = float(st.session_state[_widget_key('isometric_stim_pulse_rate')])
+
+    hold_sk = _widget_key('isometric_hold_duration_s')
+    hold_duration = float(
+        st.number_input(
+            'Hold duration (s)',
+            key=hold_sk,
+            format='%.6g',
+            min_value=0.0,
+            help=(
+                'How long (seconds) the motor holds at each target angle (the active segment). '
+                'Stim onset and duration are measured relative to the start of this hold.'
+            ),
+        )
+    )
 
     if enable:
         pr_sk = _widget_key('isometric_stim_pulse_rate')
@@ -1994,11 +2009,15 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     if not np.isfinite(onset):
         _st_error_actions('Stim onset invalid.', ['Enter a finite value in seconds'])
         return None
+    if not (np.isfinite(hold_duration) and hold_duration > 0):
+        _st_error_actions('Hold duration invalid.', ['Enter a value > 0 s'])
+        return None
 
     params: dict = {
         'is_stim': enable,
         'stim_onset_s': onset,
         'stim_duration_s': duration if enable else None,
+        'hold_duration_s': hold_duration,
     }
     if enable:
         params['stim_pulse_rate'] = pulse_rate
