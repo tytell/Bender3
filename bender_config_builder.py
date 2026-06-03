@@ -7,7 +7,11 @@ from __future__ import annotations
 import importlib
 import os
 import re
+import sys
 from typing import Any, Dict, List, Optional
+
+# Hardware config modules live here (relative to the project root) after the templates reorg.
+_CONFIG_TEMPLATE_DIR = os.path.join('templates', 'configs')
 
 # Skip framework / app modules when scanning the project folder.
 _SKIP_NAME_PREFIXES = (
@@ -22,9 +26,25 @@ _SKIP_EXACT = frozenset(
 )
 
 
+def default_configs_dir(project_root: str) -> str:
+    """Canonical folder for hardware config modules: ``<project_root>/templates/configs``."""
+    return os.path.normpath(os.path.join(str(project_root or ''), _CONFIG_TEMPLATE_DIR))
+
+
 def discover_config_modules(project_root: str) -> List[str]:
-    """Return importable module stems for likely hardware config files in ``project_root``."""
-    root = os.path.abspath(str(project_root or ''))
+    """Return importable module stems for likely hardware config files.
+
+    Scans ``<project_root>/templates/configs`` (the canonical location after the templates
+    reorg) and ensures that folder is on ``sys.path`` so the stems import by bare name.
+    Falls back to scanning ``project_root`` itself for older flat layouts.
+    """
+    configs_dir = default_configs_dir(project_root)
+    if os.path.isdir(configs_dir):
+        if configs_dir not in sys.path:
+            sys.path.insert(0, configs_dir)
+        root = configs_dir
+    else:
+        root = os.path.abspath(str(project_root or ''))
     if not os.path.isdir(root):
         return ['jimenez_bender_config_A']
     out: List[str] = []

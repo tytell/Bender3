@@ -82,6 +82,7 @@ def _img_data_uri(path: str) -> str:
 from bender_json_persistent import JsonPersistTypeError, to_json_persistent  # noqa: E402
 from bender_daq_kill import daq_emergency_stop  # noqa: E402
 from bender_config_builder import (  # noqa: E402
+    default_configs_dir,
     discover_config_modules,
     parse_comma_list,
     parse_n_floats,
@@ -2507,11 +2508,22 @@ def _normalize_config_module_name(raw: str) -> str:
 
 
 def _project_config_py_path_for_stem(stem: str) -> str:
-    """Absolute path to ``<stem>.py`` under the app folder when that layout applies."""
+    """Absolute path to ``<stem>.py`` under the app folder when that layout applies.
+
+    Checks the project root first (legacy flat layout, also what the resolver tests use),
+    then ``templates/configs/`` where config modules live after the templates reorg.
+    """
     mod = _normalize_config_module_name(stem)
     if not mod:
         return ''
-    return os.path.normpath(os.path.join(_ROOT, mod.replace('.', os.sep) + '.py'))
+    rel = mod.replace('.', os.sep) + '.py'
+    root_path = os.path.normpath(os.path.join(_ROOT, rel))
+    if os.path.isfile(root_path):
+        return root_path
+    configs_path = os.path.normpath(os.path.join(default_configs_dir(_ROOT), rel))
+    if os.path.isfile(configs_path):
+        return configs_path
+    return root_path
 
 
 def _resolve_hardware_config_import_target(raw: str) -> tuple[str, str]:
@@ -6424,9 +6436,9 @@ def _data_folder_dropdown_choice_list(current_folder: str) -> list[str]:
         _ROOT,
         os.path.join(_ROOT, 'TestData'),
         os.path.join(_ROOT, 'SessionSnapshots'),
-        os.path.join(_ROOT, 'ProtocolTemplates'),
-        os.path.join(_ROOT, 'TemplateProtocols'),
-        os.path.join(_ROOT, 'TemplateBiometrics'),
+        os.path.join(_ROOT, 'templates', 'protocols'),
+        os.path.join(_ROOT, 'templates', 'specimens'),
+        os.path.join(_ROOT, 'templates', 'configs'),
     ]
     seen: set[str] = set()
     ordered: list[str] = []
@@ -7189,7 +7201,11 @@ def main():
                             if use_sono and (not sono_ch or not sono_nm or len(sono_ch) != len(sono_nm)):
                                 _st_error_actions('Sono lists mismatch.', ['Match sono name count', 'Or disable sonomicrometry'])
                             else:
-                                path = os.path.join(_ROOT, out_stem + '.py')
+                                _configs_dir = default_configs_dir(_ROOT)
+                                os.makedirs(_configs_dir, exist_ok=True)
+                                if _configs_dir not in sys.path:
+                                    sys.path.insert(0, _configs_dir)
+                                path = os.path.join(_configs_dir, out_stem + '.py')
                                 if os.path.isfile(path) and not st.session_state.get('gui_cfg_build_overwrite'):
                                     _st_error_actions('Config file exists.', ['Enable overwrite checkbox', 'Or pick new name'])
                                 else:

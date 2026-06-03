@@ -22,8 +22,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from bender_json_persistent import JsonPersistTypeError, to_json_persistent
 
 PROTOCOL_TEMPLATE_VERSION = 2
-_PROTOCOL_TEMPLATE_DIR = 'TemplateProtocols'
-_LEGACY_PROTOCOL_TEMPLATE_DIR = 'ProtocolTemplates'
+_PROTOCOL_TEMPLATE_DIR = os.path.join('templates', 'protocols')
+# Older flat layouts read for backward compatibility (newest first).
+_LEGACY_PROTOCOL_TEMPLATE_DIRS = ('TemplateProtocols', 'ProtocolTemplates')
 
 # Motion-series keys per test_type (must match ``_motion_parameter_rows`` in ``bender_streamlit_gui``).
 _MOTION_STIM = (
@@ -111,6 +112,20 @@ def default_templates_dir(project_root: str) -> str:
     return os.path.normpath(os.path.join(project_root, _PROTOCOL_TEMPLATE_DIR))
 
 
+def _legacy_protocol_dir_for(canonical_dir: str) -> Optional[str]:
+    """If ``canonical_dir`` is the templates/protocols dir, return an existing legacy dir (or None)."""
+    norm = os.path.normpath(canonical_dir)
+    suffix = os.path.normpath(_PROTOCOL_TEMPLATE_DIR)
+    if not (norm == suffix or norm.endswith(os.sep + suffix)):
+        return None
+    project_root = norm[: len(norm) - len(suffix)].rstrip(os.sep) or os.sep
+    for legacy_name in _LEGACY_PROTOCOL_TEMPLATE_DIRS:
+        legacy = os.path.join(project_root, legacy_name)
+        if os.path.isdir(legacy):
+            return legacy
+    return None
+
+
 def sanitize_template_filename_stem(name: str) -> str:
     raw = (name or '').strip()
     if not raw:
@@ -127,13 +142,10 @@ def list_template_files(folder: str) -> List[str]:
     if not d:
         return []
     if not os.path.isdir(d):
-        # Backward-compatible read path for repos still using the old folder name.
-        if os.path.basename(os.path.normpath(d)) == _PROTOCOL_TEMPLATE_DIR:
-            legacy = os.path.join(os.path.dirname(os.path.normpath(d)), _LEGACY_PROTOCOL_TEMPLATE_DIR)
-            if os.path.isdir(legacy):
-                d = legacy
-            else:
-                return []
+        # Backward-compatible read path for repos still using an old folder layout.
+        legacy = _legacy_protocol_dir_for(d)
+        if legacy is not None:
+            d = legacy
         else:
             return []
     out = []

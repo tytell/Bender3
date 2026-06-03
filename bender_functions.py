@@ -6,10 +6,19 @@ from copy import copy
 import time
 import re
 import os
+import sys
 import xml.etree.ElementTree as ElementTree
 import json
 print(f"DEBUG: Loading bender_functions.py from: {os.path.abspath(__file__)}")
 import logging
+
+# Hardware config modules live in ``templates/configs/`` and are imported by bare module
+# name (e.g. ``importlib.import_module('jimenez_bender_config_A')``). Put that folder on
+# ``sys.path`` at import time so both the app and the test suite resolve them after the
+# templates reorg, without changing how callers reference configs by stem.
+_CONFIGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates', 'configs')
+if os.path.isdir(_CONFIGS_DIR) and _CONFIGS_DIR not in sys.path:
+    sys.path.insert(0, _CONFIGS_DIR)
 
 try:
     import nidaqmx.constants as daq

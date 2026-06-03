@@ -15,8 +15,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from bender_json_persistent import JsonPersistTypeError, to_json_persistent
 
 BIOMETRICS_TEMPLATE_VERSION = 1
-_BIOMETRICS_TEMPLATE_DIR = 'TemplateBiometrics'
-_LEGACY_BIOMETRICS_TEMPLATE_DIR = 'BiometricsTemplates'
+_BIOMETRICS_TEMPLATE_DIR = os.path.join('templates', 'specimens')
+# Older flat layouts read for backward compatibility (newest first).
+_LEGACY_BIOMETRICS_TEMPLATE_DIRS = ('TemplateBiometrics', 'BiometricsTemplates')
 
 # Protocol templates (section 4) use this version and a ``procedure`` block — not biometrics.
 _PROTOCOL_TEMPLATE_VERSION = 2
@@ -102,6 +103,20 @@ def default_biometrics_templates_dir(project_root: str) -> str:
     return os.path.normpath(os.path.join(project_root, _BIOMETRICS_TEMPLATE_DIR))
 
 
+def _legacy_biometrics_dir_for(canonical_dir: str) -> Optional[str]:
+    """If ``canonical_dir`` is the templates/specimens dir, return an existing legacy dir (or None)."""
+    norm = os.path.normpath(canonical_dir)
+    suffix = os.path.normpath(_BIOMETRICS_TEMPLATE_DIR)
+    if not (norm == suffix or norm.endswith(os.sep + suffix)):
+        return None
+    project_root = norm[: len(norm) - len(suffix)].rstrip(os.sep) or os.sep
+    for legacy_name in _LEGACY_BIOMETRICS_TEMPLATE_DIRS:
+        legacy = os.path.join(project_root, legacy_name)
+        if os.path.isdir(legacy):
+            return legacy
+    return None
+
+
 def sanitize_biometrics_filename_stem(name: str) -> str:
     raw = (name or '').strip()
     if not raw:
@@ -127,13 +142,10 @@ def list_biometrics_template_files(folder: str) -> List[str]:
     if not d:
         return []
     if not os.path.isdir(d):
-        # Backward-compatible read path for repos still using the old folder name.
-        if os.path.basename(os.path.normpath(d)) == _BIOMETRICS_TEMPLATE_DIR:
-            legacy = os.path.join(os.path.dirname(os.path.normpath(d)), _LEGACY_BIOMETRICS_TEMPLATE_DIR)
-            if os.path.isdir(legacy):
-                d = legacy
-            else:
-                return []
+        # Backward-compatible read path for repos still using an old folder layout.
+        legacy = _legacy_biometrics_dir_for(d)
+        if legacy is not None:
+            d = legacy
         else:
             return []
     out = []
