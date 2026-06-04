@@ -2297,6 +2297,26 @@ def _render_field(b: Bender, name: str, kind: str, label: str, *, help_text: Opt
     return None
 
 
+def _render_randomize_step_order_field(b: Bender) -> bool:
+    """Render the canonical 'Randomize step order' checkbox for stepped protocols (FL/FV)."""
+    sk = _widget_key('randomize_step_order')
+    if sk not in st.session_state:
+        v0 = _get_session_value(b, 'randomize_step_order', False)
+        st.session_state[sk] = bool(v0)
+    return bool(
+        st.checkbox(
+            'Randomize step order',
+            key=sk,
+            help=(
+                'Shuffle the order of the steps (curvature levels for force-length, velocity '
+                'levels for force-velocity) before running. When a block sequence is used, each '
+                'block is shuffled independently. The executed order is logged to HDF5 as '
+                '`step_order`.'
+            ),
+        )
+    )
+
+
 def _render_rest_between_steps_field(b: Bender) -> float:
     """Render the canonical 'Rest between steps (s)' field for stepped protocols (FL/FV)."""
     sk = _widget_key('rest_between_steps_s')
@@ -7659,6 +7679,8 @@ def main():
                             )
                         elif key == 'rest_between_steps_s':
                             updates[key] = _render_rest_between_steps_field(b)
+                        elif key == 'randomize_step_order':
+                            updates[key] = _render_randomize_step_order_field(b)
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:
@@ -7737,6 +7759,8 @@ def main():
                             pass  # required-only; rendered in Required section
                         elif key == 'rest_between_steps_s':
                             updates[key] = _render_rest_between_steps_field(b)
+                        elif key == 'randomize_step_order':
+                            updates[key] = _render_randomize_step_order_field(b)
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:

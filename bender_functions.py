@@ -395,6 +395,10 @@ class Bender:
         # Canonical rest (s) the motor holds position after each step finishes before the next
         # step begins, for the stepped protocols (FL = isometric, FV = isovelocity). 0 = back-to-back.
         self.rest_between_steps_s = 2.0
+        # Canonical toggle: shuffle the step sequence (curvature levels for FL, velocity levels
+        # for FV) before running. OFF = run in the generated linspace order. When a block
+        # sequence is used, each block is shuffled independently.
+        self.randomize_step_order = False
         # Legacy isometric-only alias for rest_between_steps_s. None = not set; mirrored onto
         # rest_between_steps_s in _normalize_dispatch_aliases so old saved templates still apply.
         self.isometric_inter_step_interval_s = None
@@ -632,6 +636,11 @@ class Bender:
             sp_iv.update(ov_iv)
             self.isovelocity_stim_params = sp_iv
 
+        # Mirror legacy per-protocol randomize flags onto the canonical randomize_step_order so
+        # older saved templates that carry isometric_randomize / isovelocity_randomize still shuffle.
+        if getattr(self, 'isometric_randomize', None) or getattr(self, 'isovelocity_randomize', None):
+            self.randomize_step_order = True
+
     def _sync_dclamp_test_segment_aliases(self):
         """
         Keep ``dclamp`` and ``test_segment_length_mm`` in sync when only one is set.
@@ -774,7 +783,7 @@ class Bender:
                     "on the Bender instance (legacy names initial/final/num_steps are copied automatically)."
                 )
             mode = getattr(self, 'isometric_mode', None) or 'strain'
-            randomize = bool(getattr(self, 'isometric_randomize', False))
+            randomize = bool(getattr(self, 'randomize_step_order', False)) or bool(getattr(self, 'isometric_randomize', False))
             random_seed = getattr(self, 'isometric_random_seed', None)
             stim_params = self._stim_params_with_lateral(getattr(self, 'isometric_stim_params', {}) or {})
             out = self.isometric(
@@ -802,7 +811,7 @@ class Bender:
                     "(legacy names min_vel/max_vel/starting_strain/num_steps are copied automatically)."
                 )
             starting_strain_mode = getattr(self, 'isovelocity_starting_strain_mode', None) or 'strain'
-            randomize = bool(getattr(self, 'isovelocity_randomize', False))
+            randomize = bool(getattr(self, 'randomize_step_order', False)) or bool(getattr(self, 'isovelocity_randomize', False))
             random_seed = getattr(self, 'isovelocity_random_seed', None)
             stim_params = self._stim_params_with_lateral(getattr(self, 'isovelocity_stim_params', {}) or {})
             out = self.isovelocity(
@@ -3217,6 +3226,23 @@ class Bender:
             device_name=device_name,
         )
 
+    def _shuffled_step_order(self, n, randomize, random_seed=None, block_index=0):
+        """Return a permutation of ``range(n)`` for step-order randomization (1.2).
+
+        When ``randomize`` is False (or n < 2) the identity order is returned. With no
+        ``random_seed`` the shuffle is non-deterministic (``seed=None``) and independent on each
+        call (so block sequences get an independent order per block); a ``random_seed`` makes it
+        reproducible while still differing per ``block_index``.
+        """
+        order = np.arange(int(n), dtype=int)
+        if bool(randomize) and int(n) > 1:
+            if random_seed is None:
+                np.random.shuffle(order)
+            else:
+                rng = np.random.default_rng(int(random_seed) + int(block_index))
+                rng.shuffle(order)
+        return order
+
     def isometric(
         self,
         initial,
@@ -3299,12 +3325,10 @@ class Bender:
             pre_hold_at_start_s=float(sp.get('ramp_duration_s', 2.0)),
             segment_duration_s=float(sp.get('hold_duration_s', 5.0)),
         )
+        # Base linspace in generated (un-shuffled) order. The non-block path below shuffles once
+        # and the block path shuffles each block independently (1.2 step-order randomization).
         vals = np.linspace(float(initial), float(final), int(num_steps))
         seq_idx = np.arange(vals.size, dtype=int)
-        if bool(randomize) and vals.size > 1:
-            rng = np.random.default_rng(None if random_seed is None else int(random_seed))
-            rng.shuffle(seq_idx)
-            vals = vals[seq_idx]
         dc = self._effective_dclamp_mm()
         xw = getattr(self, 'xsec_width', None)
         md = float(getattr(self, 'target_muscle_depth_mm', 0.0) or 0.0)
@@ -3343,11 +3367,15 @@ class Bender:
             all_out = []
             last_deg = 0.0
             global_step = 0
+            step_order_blocks = []
+            base_targets = np.abs(targets_deg_raw)
             for bi, block in enumerate(block_seq):
                 last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
                 dir_idx = self._lateral_index_for_block_direction(block['direction'])
                 ms = self.motor_command_sign_for_bend_toward_index(dir_idx)
-                targets_block = np.abs(targets_deg_raw) * ms
+                order = self._shuffled_step_order(base_targets.size, randomize, random_seed, block_index=bi)
+                step_order_blocks.append([int(x) for x in order])
+                targets_block = base_targets[order] * ms
                 block_out = self._run_force_length_steps(
                     targets_block,
                     ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
@@ -3371,9 +3399,10 @@ class Bender:
                     bilateral_mirror_motor=False,
                 )
                 for j, e in enumerate(block_out):
-                    e['target_value_native'] = float(vals[j])
-                    e['curvature_1_per_m'] = float(kappa[j])
-                    e['sequence_index'] = int(seq_idx[j])
+                    orig = int(order[j])
+                    e['target_value_native'] = float(vals[orig])
+                    e['curvature_1_per_m'] = float(kappa[orig])
+                    e['sequence_index'] = orig
                     e['step_index'] = global_step
                     e['trial_index'] = global_step
                     e['cycle_index'] = global_step
@@ -3394,6 +3423,8 @@ class Bender:
                 'bilateral_mirror_motor': False,
                 'bilateral_sequential_left_frac': seq_frac,
                 'block_sequence': block_seq,
+                'randomize_step_order': bool(randomize),
+                'step_order': step_order_blocks,
                 'left_stim_voltage': left_v,
                 'right_stim_voltage': right_v,
                 'block_reset_ramp_duration_s': reset_ramp,
@@ -3411,6 +3442,12 @@ class Bender:
             self.test_type = 'isometric'
             self.trial_records = list(all_out)
             return all_out
+        # Single (non-block) path: shuffle the step order once if requested (1.2).
+        order = self._shuffled_step_order(vals.size, randomize, random_seed)
+        seq_idx = order
+        vals = vals[order]
+        kappa = kappa[order]
+        targets_deg_raw = targets_deg_raw[order]
         targets_deg = targets_deg_raw.copy()
         rec = self._recruitment_with_bilateral_mirror_motor(rec, mirror_bm)
         uidx = self.recruitment_unilateral_lateral_index(rec)
@@ -3484,6 +3521,8 @@ class Bender:
             'recruitment': rec,
             'bilateral_mirror_motor': mirror_bm,
             'bilateral_sequential_left_frac': seq_frac,
+            'randomize_step_order': bool(randomize),
+            'step_order': [int(x) for x in seq_idx],
             'specimen_side_index_left': int(self.specimen_side_index_left),
             'specimen_side_index_right': int(self.specimen_side_index_right),
             'specimen_lateral_index_on_positive_motor_side': int(
@@ -4031,12 +4070,10 @@ class Bender:
             xsec_width_mm=xw,
             target_muscle_depth_mm=md,
         )
+        # Base velocity steps in generated (un-shuffled) order. The non-block path below shuffles
+        # once and the block path shuffles each block independently (1.2 step-order randomization).
         vels = np.rad2deg(np.asarray(kdot, dtype=float) * (float(dc) / 1000.0))
         seq_idx = np.arange(vels.size, dtype=int)
-        if bool(randomize) and vels.size > 1:
-            rng = np.random.default_rng(None if random_seed is None else int(random_seed))
-            rng.shuffle(seq_idx)
-            vels = vels[seq_idx]
         seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5)))
 
         if block_seq:
@@ -4058,12 +4095,16 @@ class Bender:
             all_out = []
             last_deg = 0.0
             global_step = 0
-            vels_mag = np.abs(vels)
+            step_order_blocks = []
+            vels_mag_base = np.abs(vels)
             for bi, block in enumerate(block_seq):
                 last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
                 dir_idx = self._lateral_index_for_block_direction(block['direction'])
                 ms = self.motor_command_sign_for_bend_toward_index(dir_idx)
                 theta0_block = abs(theta0_raw) * ms
+                order = self._shuffled_step_order(vels_mag_base.size, randomize, random_seed, block_index=bi)
+                step_order_blocks.append([int(x) for x in order])
+                vels_mag = vels_mag_base[order]
                 block_out = self._run_isovelocity_steps(
                     theta0_block,
                     vels_mag,
@@ -4090,7 +4131,7 @@ class Bender:
                     e['starting_strain'] = float(starting_strain)
                     e['starting_strain_mode'] = starting_strain_mode
                     e['curvature_1_per_m'] = k0
-                    e['sequence_index'] = int(seq_idx[j])
+                    e['sequence_index'] = int(order[j])
                     e['step_index'] = global_step
                     e['trial_index'] = global_step
                     e['cycle_index'] = global_step
@@ -4103,6 +4144,8 @@ class Bender:
                 'bilateral_mirror_motor': False,
                 'bilateral_sequential_left_frac': seq_frac,
                 'block_sequence': block_seq,
+                'randomize_step_order': bool(randomize),
+                'step_order': step_order_blocks,
                 'left_stim_voltage': left_v,
                 'right_stim_voltage': right_v,
                 'block_reset_ramp_duration_s': reset_ramp,
@@ -4120,6 +4163,10 @@ class Bender:
             self.trial_records = list(all_out)
             return all_out
 
+        # Single (non-block) path: shuffle the velocity-step order once if requested (1.2).
+        order = self._shuffled_step_order(vels.size, randomize, random_seed)
+        seq_idx = order
+        vels = vels[order]
         theta0 = theta0_raw
         rec_iso = self._recruitment_with_bilateral_mirror_motor(rec_iso, mirror_bm)
         uidx0 = self.recruitment_unilateral_lateral_index(rec_iso)
@@ -4155,6 +4202,8 @@ class Bender:
             'recruitment': rec_iso,
             'bilateral_mirror_motor': mirror_bm,
             'bilateral_sequential_left_frac': seq_frac,
+            'randomize_step_order': bool(randomize),
+            'step_order': [int(x) for x in seq_idx],
             'specimen_side_index_left': int(self.specimen_side_index_left),
             'specimen_side_index_right': int(self.specimen_side_index_right),
             'specimen_lateral_index_on_positive_motor_side': int(
@@ -4954,7 +5003,7 @@ class Bender:
                 'block_reset_ramp_duration_s',
             ],
             'isometric_optional': [
-                'isometric_mode', 'isometric_randomize', 'isometric_random_seed',
+                'isometric_mode', 'randomize_step_order', 'isometric_random_seed',
                 'rest_between_steps_s',
                 'isometric_stim_params',
             ],
@@ -4966,7 +5015,7 @@ class Bender:
                 'block_reset_ramp_duration_s',
             ],
             'isovelocity_optional': [
-                'isovelocity_randomize',
+                'randomize_step_order',
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
                 'isovelocity_pre_hold_s', 'rest_between_steps_s',
                 'isovelocity_stim_params',
