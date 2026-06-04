@@ -2545,16 +2545,23 @@ def _ensure_review_file_selection(files: list) -> None:
         st.session_state['gui_review_selected'] = files[0]
 
 
-def _read_qc_trial_index(b: Bender) -> int:
-    """Which in-memory `trial_records` entry the QC figure uses (after Run / export)."""
+def _read_qc_trial_index(b: Bender):
+    """Which in-memory `trial_records` entry the QC figure uses (after Run / export).
+
+    Returns the string ``'all'`` (the default for multi-step runs) so the saved QC figure shows
+    every discrete step concatenated, matching the preview. Returns an int to plot a single step.
+    """
     tr = list(getattr(b, 'trial_records', []) or [])
     n = len(tr)
     if n <= 1:
         return 0
+    val = st.session_state.get('gui_qc_trial_index')
+    if isinstance(val, str) and val.lower() == 'all':
+        return 'all'
     try:
-        ix = int(st.session_state.get('gui_qc_trial_index'))
+        ix = int(val)
     except (TypeError, ValueError):
-        ix = n - 1
+        return 'all'
     return int(max(0, min(ix, n - 1)))
 
 
@@ -8813,12 +8820,14 @@ def main():
             tr_qc = list(getattr(b, 'trial_records', []) or [])
             n_tr = len(tr_qc)
             if n_tr > 1:
-                opts_ix = list(range(n_tr))
+                opts_ix = ['all'] + list(range(n_tr))
                 _cur_ix = st.session_state.get('gui_qc_trial_index')
                 if _cur_ix not in opts_ix:
-                    st.session_state['gui_qc_trial_index'] = opts_ix[-1]
+                    st.session_state['gui_qc_trial_index'] = 'all'
 
-                def _qc_trial_label(i: int) -> str:
+                def _qc_trial_label(i) -> str:
+                    if i == 'all':
+                        return 'All steps (matches preview)'
                     r = tr_qc[i]
                     stp = r.get('step_index', r.get('trial_index', r.get('cycle_index')))
                     ttp = str(r.get('test_type', '') or '')
@@ -8836,7 +8845,8 @@ def main():
                     key='gui_qc_trial_index',
                     help=(
                         'QC plot uses **trial_records** in memory after Run or save. '
-                        'Pick which segment when the protocol produced several (e.g. multiple isometric steps).'
+                        '**All steps** concatenates every segment (matches the preview); pick a number '
+                        'to inspect one segment in detail (e.g. a single isometric step).'
                     ),
                 )
             else:

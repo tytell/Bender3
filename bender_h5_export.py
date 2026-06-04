@@ -441,9 +441,57 @@ def export_primary_h5(
     }
 
 
-def build_universal_qc_figure(bender: Any, qc_trial_index: Optional[int] = None):
+def _concat_trial_records(records):
+    """Concatenate per-step trial records into one continuous timeline for the QC figure.
+
+    Each step's ``t`` restarts near 0; we offset each segment by the cumulative duration so the
+    saved figure shows every discrete step (matching the live preview), instead of collapsing to a
+    single step. Missing per-segment arrays are filled with NaN so trace lengths stay aligned.
     """
-    Build the multi-row QC Plotly figure for one trial (same traces as the notebook QC cell).
+    t_parts = []
+    keys_1d = ['angle_cmd', 'anglevel_cmd', 'angle_measured', 'S1stimcmd', 'S2stimcmd',
+               'inertial_torque_total_primary']
+    parts_1d = {k: [] for k in keys_1d}
+    ft_raw_parts = []
+    ft_corr_parts = []
+    t_offset = 0.0
+    for r in records:
+        tr = np.asarray(r.get('t', np.array([])), dtype=float).reshape(-1)
+        if tr.size == 0:
+            continue
+        n = tr.size
+        tr0 = tr - tr[0] + t_offset
+        t_parts.append(tr0)
+        for k in keys_1d:
+            a = np.asarray(r.get(k, np.array([])), dtype=float).reshape(-1)
+            parts_1d[k].append(a if a.size == n else np.full(n, np.nan, dtype=float))
+        raw = r.get('forcetorque_raw', r.get('forcetorque', None))
+        raw = np.asarray(raw, dtype=float) if raw is not None else np.array([])
+        ft_raw_parts.append(raw if (raw.ndim == 2 and raw.shape[1] == n and raw.shape[0] >= 6)
+                            else np.full((6, n), np.nan, dtype=float))
+        corr = r.get('forcetorque_corrected', None)
+        corr = np.asarray(corr, dtype=float) if corr is not None else np.array([])
+        ft_corr_parts.append(corr if (corr.ndim == 2 and corr.shape[1] == n and corr.shape[0] >= 6)
+                             else np.full((6, n), np.nan, dtype=float))
+        dt = (tr[-1] - tr[0]) / max(1, n - 1)
+        t_offset = float(tr0[-1] + dt)
+    combined: dict = {'t': np.concatenate(t_parts) if t_parts else np.array([])}
+    for k in keys_1d:
+        combined[k] = np.concatenate(parts_1d[k]) if parts_1d[k] else np.array([])
+    combined['forcetorque_raw'] = np.concatenate(ft_raw_parts, axis=1) if ft_raw_parts else np.array([])
+    combined['forcetorque_corrected'] = (
+        np.concatenate(ft_corr_parts, axis=1) if ft_corr_parts else np.array([])
+    )
+    return combined
+
+
+def build_universal_qc_figure(bender: Any, qc_trial_index=None):
+    """
+    Build the multi-row QC Plotly figure.
+
+    With multiple per-step ``trial_records`` and no specific ``qc_trial_index`` (``None`` or the
+    string ``'all'``), all steps are concatenated into one timeline so the saved figure shows the
+    discrete steps just like the preview. Pass an integer to plot a single step in detail.
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -465,10 +513,17 @@ def build_universal_qc_figure(bender: Any, qc_trial_index: Optional[int] = None)
             ),
         }]
 
-    if qc_trial_index is None:
-        qc_trial_index = len(trial_records) - 1
-    qc_trial_index = int(max(0, min(qc_trial_index, len(trial_records) - 1)))
-    rec = trial_records[qc_trial_index]
+    combine_all = (qc_trial_index is None) or (
+        isinstance(qc_trial_index, str) and qc_trial_index.lower() == 'all'
+    )
+    if combine_all and len(trial_records) > 1:
+        rec = _concat_trial_records(trial_records)
+        qc_trial_index = 'all'
+    else:
+        if not isinstance(qc_trial_index, (int, np.integer)):
+            qc_trial_index = len(trial_records) - 1
+        qc_trial_index = int(max(0, min(int(qc_trial_index), len(trial_records) - 1)))
+        rec = trial_records[qc_trial_index]
 
     t = np.asarray(rec.get('t', np.array([])))
     angle_cmd = np.asarray(rec.get('angle_cmd', np.array([])))
@@ -577,7 +632,7 @@ def build_universal_qc_figure(bender: Any, qc_trial_index: Optional[int] = None)
     fig.update_yaxes(title_text=f'{off_axes[1]} (N-m)', row=4, col=1)
     fig.update_yaxes(title_text='Stim (V)', row=5, col=1)
     fig.update_xaxes(title_text='Time (s)', row=5, col=1)
-    qc_cap = f'QC: {proc} | trial {qc_trial_index}'
+    qc_cap = f'QC: {proc} | ' + ('all steps' if qc_trial_index == 'all' else f'trial {qc_trial_index}')
     if proc in ('isometric', 'isovelocity'):
         qc_cap = qc_cap + "<br><sup style='font-size:11px'>" + bender.strain_geometry_plot_context() + '</sup>'
     fig.update_layout(height=1400, width=1100, title_text=qc_cap, showlegend=True, hovermode='x unified')
@@ -600,12 +655,13 @@ def save_universal_qc_figure(
     fig, idx = build_universal_qc_figure(bender, qc_trial_index=qc_trial_index)
     proc = str(getattr(bender, 'test_type', 'unknown'))
     h5p = str(getattr(bender, 'outputfile', 'bender_output.h5'))
+    idx_tag = 'all' if idx == 'all' else f'trial{int(idx):03d}'
     if base_path:
         base = base_path
     elif h5p.lower().endswith('.h5'):
-        base = h5p[:-3] + f'_{proc}_trial{idx:03d}_qc'
+        base = h5p[:-3] + f'_{proc}_{idx_tag}_qc'
     else:
-        base = h5p + f'_{proc}_trial{idx:03d}_qc'
+        base = h5p + f'_{proc}_{idx_tag}_qc'
     png_path = unique_filepath(f'{base}.png')
     html_path = unique_filepath(f'{base}.html')
     try:
