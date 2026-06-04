@@ -341,6 +341,11 @@ class Bender:
         self.simulation_mode = False
         self.simulation_material = 'polyurethane'
 
+        # Last commanded motor angle (deg). Updated whenever a motion timeline is recorded; used by
+        # command_start_position_zero() so the start-of-protocol re-zero ramps from the real last
+        # commanded position rather than blindly assuming the motor is already at 0 (1.5).
+        self._last_commanded_angle_deg = 0.0
+
         # 5. Placeholders (to prevent NoneType/0-channel errors)
         self.t = np.array([0.0, 1.0/self.daq_ai_sample_rate_hz])
         self.S1stimcmd = np.zeros(len(self.t))
@@ -774,6 +779,10 @@ class Bender:
         # Set input and output names/channels
         self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
         self.set_stim_channels(*self.stim_channels)
+
+        # Starting position is zero: explicitly drive the motor to angle = 0° (and confirm via the
+        # encoder) before any protocol runs. Never assume the motor is already at neutral (1.5).
+        self.command_start_position_zero(device_name=self.device_name)
 
         if requested_test_type in ('isometric', 'isovelocity'):
             self._normalize_dispatch_aliases()
@@ -1504,6 +1513,8 @@ class Bender:
         self.t = t_arr
         self.angle = np.asarray(angle, dtype=float)
         self.anglevel = np.asarray(anglevel, dtype=float)
+        if self.angle.size:
+            self._last_commanded_angle_deg = float(self.angle[-1])
 
         if tnorm is None:
             self.tnorm = copy(t_arr)
@@ -2963,6 +2974,27 @@ class Bender:
             motor_full_steps_per_rev=self.motor_full_steps_per_rev,
         )
         self.aidata = self.run(device_name=dev)
+        return 0.0
+
+    def command_start_position_zero(self, device_name=None, ramp_duration_s=None):
+        """Explicitly drive the commanded motor angle to 0° (resting/start) and wait for the move.
+
+        Call at apparatus initialization and at the start of every protocol. The motor's position
+        at software start is never assumed to be 0: we ramp from the last commanded angle tracked on
+        the instance to 0° using the existing move-to-position routine, and the encoder read during
+        that acquisition confirms the position before the protocol proceeds (1.5).
+        """
+        dev = device_name if device_name is not None else getattr(self, 'device_name', None)
+        if dev is None:
+            # No DAQ device configured yet (e.g. early init): nothing to command safely.
+            return 0.0
+        ramp = float(
+            ramp_duration_s if ramp_duration_s is not None
+            else getattr(self, 'block_reset_ramp_duration_s', 2.0) or 2.0
+        )
+        from_deg = float(getattr(self, '_last_commanded_angle_deg', 0.0) or 0.0)
+        self._run_neutral_reset_segment(from_deg, ramp, dev)
+        self._last_commanded_angle_deg = 0.0
         return 0.0
 
     def _tag_block_trial_metadata(self, entry, *, block_index, block_direction, block_stim_sides,
