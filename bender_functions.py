@@ -5299,7 +5299,13 @@ class Bender:
                         missing.append('all_freqs (finite values > 0 Hz)')
                 except Exception:
                     missing.append('all_freqs (valid numeric list)')
-            if _seq_missing(ac):
+            # Amplitudes are valid whether supplied as all_curves (κ) or as all_amps + mode; the
+            # motion path converts all_amps→all_curves via _ensure_all_curves_for_run at run time,
+            # so requiring all_curves here wrongly failed sweeps that only set all_amps. Stim fields
+            # are never required (stim is optional), so stim-OFF runs are unaffected (3.1).
+            aa = getattr(self, 'all_amps', None)
+            aa_mode = getattr(self, 'all_amps_mode', None) or getattr(self, 'curve_input_mode', None)
+            if _seq_missing(ac) and (_seq_missing(aa) or aa_mode is None):
                 missing.append('all_curves / amplitudes')
             if tt != 'dynamic':
                 du = getattr(self, 'duration', None)
