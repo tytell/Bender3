@@ -402,6 +402,9 @@ class Bender:
         # Canonical toggle: after each step's rest, drive the motor back to angle = 0° (resting
         # length) before the next step. OFF = motor stays at its current position. FL + FV only.
         self.reset_between_steps = False
+        # Width (ms) of each stimulation pulse (the high time of every carrier pulse), applied to
+        # all stimulated protocols. Combined with stim_pulse_rate this sets the pulse high fraction.
+        self.pulse_width_ms = 2.0
         # Legacy isometric-only alias for rest_between_steps_s. None = not set; mirrored onto
         # rest_between_steps_s in _normalize_dispatch_aliases so old saved templates still apply.
         self.isometric_inter_step_interval_s = None
@@ -966,6 +969,10 @@ class Bender:
 
         self.master_logger.record(test_type=requested_test_type, motion_test_type=motion_test_type)
         self.h5_protocol_metadata = self.master_logger.as_dict()
+        # Pulse width applies only when stim fires; log null otherwise (1.4).
+        self.h5_protocol_metadata['pulse_width_ms'] = (
+            float(getattr(self, 'pulse_width_ms', 2.0)) if bool(self.is_stim) else None
+        )
 
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
         ang_cmd = np.asarray(self.angle, dtype=float).reshape(-1)
@@ -2731,11 +2738,30 @@ class Bender:
             f'ε_geom = κ·(w/2−muscle_depth) from θ/L; opposite surfaces ± same |ε| (shorten vs lengthen).{flip_note}'
         )
 
+    def _pulse_high_fraction(self, stim_pulse_rate_hz, pulse_width_ms=None):
+        """Fraction (0..1) of each carrier period the stim pulse is high, from ``pulse_width_ms``.
+
+        Falls back to 50% duty when no pulse width is configured (legacy behaviour). The fraction
+        is clamped to (0, 1]: the high time can never exceed one carrier period.
+        """
+        pw_ms = pulse_width_ms if pulse_width_ms is not None else getattr(self, 'pulse_width_ms', None)
+        pr = float(stim_pulse_rate_hz)
+        if pw_ms is None or not np.isfinite(pr) or pr <= 0:
+            return 0.5
+        try:
+            pw_s = float(pw_ms) / 1000.0
+        except (TypeError, ValueError):
+            return 0.5
+        if not np.isfinite(pw_s) or pw_s <= 0:
+            return 0.5
+        return float(min(max(pw_s * pr, 0.0), 1.0))
+
     def _pulse_carrier_volts(self, t, active_mask, stim_pulse_rate_hz, stim_voltage):
-        """50% duty square carrier at stim_pulse_rate_hz, gated by active_mask (same as legacy isometric stim)."""
+        """Square carrier at stim_pulse_rate_hz with pulse_width_ms high time, gated by active_mask."""
         pr = float(stim_pulse_rate_hz)
         v = float(stim_voltage)
-        pulse = (np.mod(t * pr, 1.0) <= 0.5).astype(np.float64) * v
+        frac = self._pulse_high_fraction(pr)
+        pulse = (np.mod(t * pr, 1.0) < frac).astype(np.float64) * v
         m = active_mask & np.isfinite(t)
         return np.where(m, pulse, 0.0)
 
@@ -2819,10 +2845,11 @@ class Bender:
         return s1, s2
 
     def _isometric_pulse_stim(self, t, active_mask, stim_pulse_rate_hz, stim_voltage):
-        """Same carrier shape as make_stimuli (50% duty square at stim_pulse_rate_hz)."""
+        """Same carrier shape as make_stimuli (square at stim_pulse_rate_hz, pulse_width_ms high)."""
         pr = float(stim_pulse_rate_hz)
         v = float(stim_voltage)
-        pulse = (np.mod(t * pr, 1.0) <= 0.5).astype(np.float64) * v
+        frac = self._pulse_high_fraction(pr)
+        pulse = (np.mod(t * pr, 1.0) < frac).astype(np.float64) * v
         m = active_mask & np.isfinite(t)
         s = np.where(m, pulse, 0.0)
         return s, s.copy()
@@ -3192,6 +3219,7 @@ class Bender:
             'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),
+            'pulse_width_ms': float(getattr(self, 'pulse_width_ms', 2.0)) if bool(is_stim) else None,
             'isometric_inter_step_interval_s': float(gap_s),
         })
         return results
@@ -3330,6 +3358,9 @@ class Bender:
             sp['inter_step_interval_s'] = float(getattr(self, 'rest_between_steps_s', 2.0) or 0.0)
         if sp.get('reset_between_steps', None) is None:
             sp['reset_between_steps'] = bool(getattr(self, 'reset_between_steps', False))
+        # Pulse width comes from the stim panel; mirror onto self so the pulse carrier uses it (1.4).
+        if sp.get('pulse_width_ms', None) is not None:
+            self.pulse_width_ms = float(sp['pulse_width_ms'])
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
             if k not in sp and getattr(self, k, None) is not None:
                 sp[k] = getattr(self, k)
@@ -3981,6 +4012,7 @@ class Bender:
             'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),
+            'pulse_width_ms': float(getattr(self, 'pulse_width_ms', 2.0)) if bool(is_stim) else None,
         })
         return results
 
@@ -4063,6 +4095,9 @@ class Bender:
             sp['inter_step_interval_s'] = float(getattr(self, 'rest_between_steps_s', 2.0) or 0.0)
         if sp.get('reset_between_steps', None) is None:
             sp['reset_between_steps'] = bool(getattr(self, 'reset_between_steps', False))
+        # Pulse width comes from the stim panel; mirror onto self so the pulse carrier uses it (1.4).
+        if sp.get('pulse_width_ms', None) is not None:
+            self.pulse_width_ms = float(sp['pulse_width_ms'])
 
         self._validate_stim_timing_for_steps(
             sp,
@@ -4720,8 +4755,9 @@ class Bender:
         Lonoff, Ronoff = [], []
         
         # Calculate the pulse wave once
-        # Using 5.0 for the stimulator 'On' voltage
-        pulse_wave = (np.mod(t * stim_pulse_rate, 1) <= 0.5).astype(float) * 5.0
+        # Using 5.0 for the stimulator 'On' voltage; pulse high time from pulse_width_ms.
+        _pw_frac = self._pulse_high_fraction(stim_pulse_rate)
+        pulse_wave = (np.mod(t * stim_pulse_rate, 1) < _pw_frac).astype(float) * 5.0
         bendphase = tnorm - 0.25
     
         # 4. Optimized Cycle Loop

@@ -1324,6 +1324,7 @@ MOTION_GUI_FIELDS = [
     ('stim_cycles_in_step', 'list_int', 'Stim cycles per step (e.g., 2, 3)'),
     ('is_stim', 'bool', 'Enable stimulation'),
     ('stim_pulse_rate', 'float', 'Stim pulse rate (Hz)'),
+    ('pulse_width_ms', 'float', 'Pulse width (ms)'),
     ('S1volts', 'float', 'S1 voltage (V)'),
     ('S2volts', 'float', 'S2 voltage (V)'),
     (
@@ -1377,6 +1378,7 @@ def _motion_parameter_rows(test_type: str):
     stim_block = [
         _MOTION_ROW_BY_NAME['is_stim'],
         _MOTION_ROW_BY_NAME['stim_pulse_rate'],
+        _MOTION_ROW_BY_NAME['pulse_width_ms'],
         _MOTION_ROW_BY_NAME['S1volts'],
         _MOTION_ROW_BY_NAME['S2volts'],
         _MOTION_ROW_BY_NAME['all_stimduties'],
@@ -1871,6 +1873,7 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
             help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
         )
     )
+    pulse_width = _render_pulse_width_field(b)
     onset = float(
         st.number_input(
             'Stim onset (s, relative to active-segment start)',
@@ -1931,6 +1934,7 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
         'stim_duration_s': duration,
         'post_baseline_s': post_baseline,
         'stim_pulse_rate': pulse_rate,
+        'pulse_width_ms': pulse_width,
     }
     return params
 
@@ -2028,6 +2032,7 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
             help=MOTION_FIELD_HELP.get('stim_pulse_rate'),
         )
     )
+    pulse_width = _render_pulse_width_field(b)
     onset = float(
         st.number_input(
             'Stim onset (s, relative to active-segment start)',
@@ -2083,6 +2088,7 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
         'pre_baseline_s': pre_baseline,
         'post_baseline_s': post_baseline,
         'stim_pulse_rate': pulse_rate,
+        'pulse_width_ms': pulse_width,
     }
     return params
 
@@ -2312,6 +2318,32 @@ def _render_randomize_step_order_field(b: Bender) -> bool:
                 'levels for force-velocity) before running. When a block sequence is used, each '
                 'block is shuffled independently. The executed order is logged to HDF5 as '
                 '`step_order`.'
+            ),
+        )
+    )
+
+
+def _render_pulse_width_field(b: Bender) -> float:
+    """Render the 'Pulse width (ms)' field for stimulated protocols (default 2.0, range 0.1-10.0)."""
+    sk = _widget_key('pulse_width_ms')
+    if sk not in st.session_state:
+        v0 = _get_session_value(b, 'pulse_width_ms', 2.0)
+        try:
+            st.session_state[sk] = float(v0) if v0 is not None else 2.0
+        except (TypeError, ValueError):
+            st.session_state[sk] = 2.0
+    return float(
+        st.number_input(
+            'Pulse width (ms)',
+            min_value=0.1,
+            max_value=10.0,
+            step=0.1,
+            format='%.6g',
+            key=sk,
+            help=(
+                'Width (ms) of each stimulation pulse — the high time of every carrier pulse. '
+                'Sent to the stimulation controller on every triggered pulse. Logged to HDF5 as '
+                '`pulse_width_ms` (null when stimulation is off).'
             ),
         )
     )
@@ -7851,6 +7883,7 @@ def main():
                         'stim_cycles_in_step',
                         'is_stim',
                         'stim_pulse_rate',
+                        'pulse_width_ms',
                         'S1volts',
                         'S2volts',
                         'all_stimduties',
@@ -7868,9 +7901,12 @@ def main():
                     with scol:
                         st.markdown('**Stimulation**')
                         for name, kind, label in _stim_fields:
-                            updates[name] = _render_field(
-                                b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
-                            )
+                            if name == 'pulse_width_ms':
+                                updates[name] = _render_pulse_width_field(b)
+                            else:
+                                updates[name] = _render_field(
+                                    b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
+                                )
 
                 else:
                     st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
