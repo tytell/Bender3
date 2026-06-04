@@ -1103,6 +1103,9 @@ class Bender:
             'motion_test_type': str(motion_test_type),
         })
 
+        # Return to resting length: command angle = 0° and confirm before the trial completes (1.7).
+        self.return_to_resting_length(device_name=self.device_name)
+
    
     def get_data_by_name(self, name):
         """Returns the data row for a specific channel name."""
@@ -2976,13 +2979,12 @@ class Bender:
         self.aidata = self.run(device_name=dev)
         return 0.0
 
-    def command_start_position_zero(self, device_name=None, ramp_duration_s=None):
-        """Explicitly drive the commanded motor angle to 0° (resting/start) and wait for the move.
+    def _drive_to_zero_and_confirm(self, device_name=None, ramp_duration_s=None):
+        """Ramp the commanded motor angle to 0° from the last commanded angle and confirm the move.
 
-        Call at apparatus initialization and at the start of every protocol. The motor's position
-        at software start is never assumed to be 0: we ramp from the last commanded angle tracked on
-        the instance to 0° using the existing move-to-position routine, and the encoder read during
-        that acquisition confirms the position before the protocol proceeds (1.5).
+        Shared by :meth:`command_start_position_zero` (1.5) and :meth:`return_to_resting_length`
+        (1.7). Ramps from ``_last_commanded_angle_deg`` to 0° via the existing move-to-position
+        routine; the encoder read during that acquisition confirms position before returning.
         """
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
@@ -2996,6 +2998,24 @@ class Bender:
         self._run_neutral_reset_segment(from_deg, ramp, dev)
         self._last_commanded_angle_deg = 0.0
         return 0.0
+
+    def command_start_position_zero(self, device_name=None, ramp_duration_s=None):
+        """Explicitly drive the commanded motor angle to 0° (resting/start) and wait for the move.
+
+        Call at apparatus initialization and at the start of every protocol. The motor's position
+        at software start is never assumed to be 0: we ramp from the last commanded angle tracked on
+        the instance to 0° using the existing move-to-position routine, and the encoder read during
+        that acquisition confirms the position before the protocol proceeds (1.5).
+        """
+        return self._drive_to_zero_and_confirm(device_name, ramp_duration_s)
+
+    def return_to_resting_length(self, device_name=None, ramp_duration_s=None):
+        """Drive the motor back to angle = 0° (resting length) at the end of a protocol and confirm.
+
+        Called after the final step (and any post-trial rest) of every protocol so the preparation
+        is returned to neutral before the trial is marked complete (1.7).
+        """
+        return self._drive_to_zero_and_confirm(device_name, ramp_duration_s)
 
     def _tag_block_trial_metadata(self, entry, *, block_index, block_direction, block_stim_sides,
                                   left_stim_voltage, right_stim_voltage):
@@ -4266,6 +4286,9 @@ class Bender:
             self.isovelocity_results = all_out
             self.test_type = 'isovelocity'
             self.trial_records = list(all_out)
+            # Return to resting length: per-block resets fire only BEFORE each block, so drive the
+            # motor to angle = 0° once after the final block before completing (1.7).
+            self.return_to_resting_length(device_name=dev)
             return all_out
 
         # Single (non-block) path: shuffle the velocity-step order once if requested (1.2).
@@ -4318,6 +4341,8 @@ class Bender:
             'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
             'unilateral_posture_lateral_index': uidx_meta,
         })
+        # Return to resting length: drive the motor to angle = 0° before the trial completes (1.7).
+        self.return_to_resting_length(device_name=sp.get('device_name', None))
         return out
 
     def test_isovelocity(
