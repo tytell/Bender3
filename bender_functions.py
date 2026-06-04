@@ -4469,7 +4469,9 @@ class Bender:
             )
         amp_deg = np.rad2deg(c0 * dclamp / 1000.0)
         period_by_cycle, freq_by_cycle, amp_by_cycle = self._uniform_cycles_from_duration(duration, f0, amp_deg)
-        saved_degs, saved_freqs = self.all_degs, self.all_freqs
+        # frequency_step never runs organize_cycles, so all_degs/all_freqs may be unset; read with
+        # getattr so saving them for make_cycles_dynamic does not raise AttributeError (3.2B).
+        saved_degs, saved_freqs = getattr(self, 'all_degs', None), getattr(self, 'all_freqs', None)
         self.all_degs = np.array([amp_deg, amp_deg], dtype=float)
         self.all_freqs = np.array([f0, f0], dtype=float)
         try:
