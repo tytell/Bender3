@@ -78,7 +78,7 @@ def test_organize_cycles_for_dynamic_run_requires_dclamp():
 
 def test_run_experiment_dynamic_invokes_organize_at_start():
     b = _minimal_dynamic_bender()
-    with patch.object(
+    with patch.object(b, '_announce_pre_run_max_rotation'), patch.object(
         b,
         '_organize_cycles_for_dynamic_run',
         side_effect=RuntimeError('stop-after-organize'),
