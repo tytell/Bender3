@@ -4770,9 +4770,11 @@ class Bender:
         dc = float(dclamp) if dclamp is not None else getattr(self, 'dclamp', None)
         if dc is None:
             raise ValueError("make_cycles_step_change requires dclamp (argument or self.dclamp).")
-        freqs = np.asarray(frequencies, dtype=float).reshape(-1)
-        curv = np.asarray(curves, dtype=float).reshape(-1)
-        cps = np.asarray(cycles_per_step, dtype=int).reshape(-1)
+        # Wrap bare scalars in a 1-element array before the length check so a single-step schedule
+        # (one frequency, one curvature, one cycle count) always has matching lengths (3.4B).
+        freqs = np.atleast_1d(np.asarray(frequencies, dtype=float)).reshape(-1)
+        curv = np.atleast_1d(np.asarray(curves, dtype=float)).reshape(-1)
+        cps = np.atleast_1d(np.asarray(cycles_per_step, dtype=int)).reshape(-1)
         if not (len(freqs) == len(curv) == len(cps)):
             raise ValueError("frequencies, curves, and cycles_per_step must have the same length.")
         allfreqs = np.concatenate([np.full((int(c),), f, dtype=float) for c, f in zip(cps, freqs)])
@@ -4785,9 +4787,11 @@ class Bender:
         self.freq_by_cycle = freq_by_cycle
         self.amp_by_cycle = amp_by_cycle
 
-        saved_degs = self.all_degs
-        saved_freqs = self.all_freqs
-        saved_v = self.amp_step_vel
+        # step_change never runs organize_cycles, so all_degs/all_freqs may be unset; read with
+        # getattr so saving them for make_cycles_dynamic does not raise AttributeError (3.4C/3.2B).
+        saved_degs = getattr(self, 'all_degs', None)
+        saved_freqs = getattr(self, 'all_freqs', None)
+        saved_v = getattr(self, 'amp_step_vel', None)
         try:
             self.all_degs = np.array([amp_by_cycle[0], amp_by_cycle[-1]], dtype=float)
             self.all_freqs = np.array([freq_by_cycle[0], freq_by_cycle[-1]], dtype=float)
@@ -4804,12 +4808,16 @@ class Bender:
         if record_protocol:
             f_lo, f_hi = float(np.min(allfreqs)), float(np.max(allfreqs))
             c_lo, c_hi = float(np.min(allcurves)), float(np.max(allcurves))
+            # Log the per-step bend amplitude(s) in curvature units (1/m): scalar for a single-step
+            # schedule, else the list of per-step curvatures (3.4A).
+            step_amp = float(curv[0]) if curv.size == 1 else [float(x) for x in curv]
             self._protocol_log(
                 'step_change', f_lo, f_hi, c_lo, c_hi,
                 motion_duration_s=movedur,
                 step_change_blocks=int(len(freqs)),
                 step_change_total_cycles=int(len(allfreqs)),
                 dclamp_mm=float(dc),
+                step_amplitude_inv_m=step_amp,
             )
         return angle, anglevel, tnorm, t, movedur
 
