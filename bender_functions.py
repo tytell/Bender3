@@ -1626,7 +1626,11 @@ class Bender:
         if np.any(np.abs(self.anglevel) > maxspeed):
             raise ValueError('Motion is too fast!')
 
-        stepnum = np.floor(poshi / stepsize)
+        # np.round gives symmetric step counts for equal-magnitude positive and
+        # negative displacements. np.floor would yield one extra step on every
+        # negative ramp because it rounds toward −∞ (e.g. floor(−111.11)=−112
+        # but floor(+111.11)=+111), causing a 1-step-per-trial systematic bias.
+        stepnum = np.round(poshi / stepsize)
         dstep = np.diff(stepnum)
         motorstep = np.concatenate((np.array([0], dtype='uint8'), (dstep != 0).astype('uint8')))
         motordirection = (velhi <= 0).astype('uint8')
@@ -3667,15 +3671,21 @@ class Bender:
             raise ValueError("iso_duration_s must be finite and > 0.")
         if ph < 0:
             raise ValueError("pre_hold_s must be non-negative.")
+        # Use a sub-threshold velocity during the pre-hold so the direction bit is
+        # pre-set to match the upcoming ramp. An exact zero would always encode as
+        # REVERSE (velhi <= 0), causing 300 ms of wrong coil energisation before
+        # every rightward ramp. 1e-10 deg/s is numerically zero for position but
+        # gives the sign needed by make_motor_stepper_pulses.
+        prehold_vel = np.copysign(1e-10, v) if v != 0.0 else 0.0
         if ph > 0:
             n1 = max(2, int(round(ph * daq_hz)) + 1)
             t1 = np.linspace(0.0, ph, n1)
             a1 = np.full(n1, th0)
-            w1 = np.zeros(n1)
+            w1 = np.full(n1, prehold_vel)
         else:
             t1 = np.array([0.0])
             a1 = np.array([th0])
-            w1 = np.array([0.0])
+            w1 = np.array([prehold_vel])
         n2 = max(2, int(round(iso * daq_hz)) + 1)
         t_edge = ph
         t2 = np.linspace(t_edge, t_edge + iso, n2)[1:]
