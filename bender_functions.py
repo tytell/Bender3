@@ -399,6 +399,9 @@ class Bender:
         # for FV) before running. OFF = run in the generated linspace order. When a block
         # sequence is used, each block is shuffled independently.
         self.randomize_step_order = False
+        # Canonical toggle: after each step's rest, drive the motor back to angle = 0° (resting
+        # length) before the next step. OFF = motor stays at its current position. FL + FV only.
+        self.reset_between_steps = False
         # Legacy isometric-only alias for rest_between_steps_s. None = not set; mirrored onto
         # rest_between_steps_s in _normalize_dispatch_aliases so old saved templates still apply.
         self.isometric_inter_step_interval_s = None
@@ -2955,6 +2958,8 @@ class Bender:
         settle_before_stim_s=0.5,
         stim_duration_s=None,
         inter_step_interval_s=0.0,
+        reset_between_steps=False,
+        reset_ramp_duration_s=None,
         is_stim=False,
         stim_pulse_rate=None,
         stim_voltage=5.0,
@@ -3013,13 +3018,22 @@ class Bender:
         gap_s = float(inter_step_interval_s)
         if not np.isfinite(gap_s) or gap_s < 0:
             raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
+        reset_steps = bool(reset_between_steps)
+        reset_ramp = float(
+            reset_ramp_duration_s if reset_ramp_duration_s is not None
+            else getattr(self, 'block_reset_ramp_duration_s', 2.0)
+        )
 
         for i in range(num_steps):
             if i > 0 and gap_s > 0:
                 time.sleep(gap_s)
+            if i > 0 and reset_steps:
+                # Reset to resting length: drive the motor back to 0° from the previous hold
+                # angle and wait for the move to complete before the next step.
+                self._run_neutral_reset_segment(float(targets_deg[i - 1]), reset_ramp, dev)
             target = float(targets_deg[i])
             if i > 0:
-                prev = float(targets_deg[i - 1])
+                prev = 0.0 if reset_steps else float(targets_deg[i - 1])
             elif ramp_from_deg is not None:
                 prev = float(ramp_from_deg)
             else:
@@ -3177,6 +3191,7 @@ class Bender:
             'test_type': 'isometric',
             'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
+            'reset_between_steps': bool(reset_steps),
             'isometric_inter_step_interval_s': float(gap_s),
         })
         return results
@@ -3299,6 +3314,7 @@ class Bender:
             'settle_before_stim_s': 0.5,
             'stim_duration_s': None,
             'inter_step_interval_s': None,
+            'reset_between_steps': None,
             'is_stim': False,
             'stim_pulse_rate': None,
             'stim_voltage': 5.0,
@@ -3312,6 +3328,8 @@ class Bender:
                 sp[_bk] = getattr(self, _bk)
         if sp.get('inter_step_interval_s', None) is None:
             sp['inter_step_interval_s'] = float(getattr(self, 'rest_between_steps_s', 2.0) or 0.0)
+        if sp.get('reset_between_steps', None) is None:
+            sp['reset_between_steps'] = bool(getattr(self, 'reset_between_steps', False))
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
             if k not in sp and getattr(self, k, None) is not None:
                 sp[k] = getattr(self, k)
@@ -3386,6 +3404,7 @@ class Bender:
                     settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
                     stim_duration_s=sp.get('stim_duration_s'),
                     inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
+                    reset_between_steps=bool(sp.get('reset_between_steps', False)),
                     is_stim=bool(sp.get('is_stim', False)),
                     stim_pulse_rate=sp.get('stim_pulse_rate', None),
                     stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -3487,6 +3506,7 @@ class Bender:
             settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
             stim_duration_s=sp.get('stim_duration_s'),
             inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
+            reset_between_steps=bool(sp.get('reset_between_steps', False)),
             is_stim=bool(sp.get('is_stim', False)),
             stim_pulse_rate=sp.get('stim_pulse_rate', None),
             stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -3707,6 +3727,8 @@ class Bender:
         pre_iso_stim_duration_s=0.0,
         stim_duration_s=None,
         inter_step_interval_s=0.0,
+        reset_between_steps=False,
+        reset_ramp_duration_s=None,
         is_stim=False,
         stim_pulse_rate=None,
         stim_voltage=5.0,
@@ -3790,11 +3812,21 @@ class Bender:
         gap_s = float(inter_step_interval_s)
         if not np.isfinite(gap_s) or gap_s < 0:
             raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
+        reset_steps = bool(reset_between_steps)
+        reset_ramp = float(
+            reset_ramp_duration_s if reset_ramp_duration_s is not None
+            else getattr(self, 'block_reset_ramp_duration_s', 2.0)
+        )
+        prev_end_deg = float(theta_start_deg)
 
         for i in range(n):
             if i > 0 and gap_s > 0:
                 # Hold the motor at its current position and rest before the next velocity step.
                 time.sleep(gap_s)
+            if i > 0 and reset_steps:
+                # Reset to resting length: drive the motor back to 0° from the previous step's
+                # end angle and wait for the move to complete before the next step.
+                self._run_neutral_reset_segment(prev_end_deg, reset_ramp, dev)
             v_mag = abs(float(vels[i]))
             th0 = th0_fixed
             if mirror:
@@ -3857,6 +3889,7 @@ class Bender:
                 t_post0 = d0['t_post0']
                 t_post1 = d0['t_post1']
 
+            prev_end_deg = float(angle[-1])
             self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
             self.record_stim_signal(s1, s2)
             self.make_motor_stepper_pulses(
@@ -3947,6 +3980,7 @@ class Bender:
             'test_type': 'isovelocity',
             'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
+            'reset_between_steps': bool(reset_steps),
         })
         return results
 
@@ -4014,6 +4048,7 @@ class Bender:
             'pre_iso_stim_duration_s': 0.0,
             'stim_duration_s': None,
             'inter_step_interval_s': None,
+            'reset_between_steps': None,
             'is_stim': False,
             'stim_pulse_rate': None,
             'stim_voltage': 5.0,
@@ -4026,6 +4061,8 @@ class Bender:
             sp['post_baseline_s'] = getattr(self, 'post_baseline_s')
         if sp.get('inter_step_interval_s', None) is None:
             sp['inter_step_interval_s'] = float(getattr(self, 'rest_between_steps_s', 2.0) or 0.0)
+        if sp.get('reset_between_steps', None) is None:
+            sp['reset_between_steps'] = bool(getattr(self, 'reset_between_steps', False))
 
         self._validate_stim_timing_for_steps(
             sp,
@@ -4116,6 +4153,7 @@ class Bender:
                     pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
                     stim_duration_s=sp.get('stim_duration_s'),
                     inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
+                    reset_between_steps=bool(sp.get('reset_between_steps', False)),
                     is_stim=bool(sp.get('is_stim', False)),
                     stim_pulse_rate=sp.get('stim_pulse_rate', None),
                     stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -4183,6 +4221,7 @@ class Bender:
             pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
             stim_duration_s=sp.get('stim_duration_s'),
             inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
+            reset_between_steps=bool(sp.get('reset_between_steps', False)),
             is_stim=bool(sp.get('is_stim', False)),
             stim_pulse_rate=sp.get('stim_pulse_rate', None),
             stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -5004,7 +5043,7 @@ class Bender:
             ],
             'isometric_optional': [
                 'isometric_mode', 'randomize_step_order', 'isometric_random_seed',
-                'rest_between_steps_s',
+                'rest_between_steps_s', 'reset_between_steps',
                 'isometric_stim_params',
             ],
             'isovelocity_required': [
@@ -5017,7 +5056,7 @@ class Bender:
             'isovelocity_optional': [
                 'randomize_step_order',
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
-                'isovelocity_pre_hold_s', 'rest_between_steps_s',
+                'isovelocity_pre_hold_s', 'rest_between_steps_s', 'reset_between_steps',
                 'isovelocity_stim_params',
             ],
             'calibration_required': ['calibration_base_test_type'],

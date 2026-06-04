@@ -2317,6 +2317,26 @@ def _render_randomize_step_order_field(b: Bender) -> bool:
     )
 
 
+def _render_reset_between_steps_field(b: Bender) -> bool:
+    """Render the canonical 'Reset to resting length between steps' checkbox (FL/FV)."""
+    sk = _widget_key('reset_between_steps')
+    if sk not in st.session_state:
+        v0 = _get_session_value(b, 'reset_between_steps', False)
+        st.session_state[sk] = bool(v0)
+    return bool(
+        st.checkbox(
+            'Reset to resting length between steps',
+            key=sk,
+            help=(
+                'After each step finishes (and after the rest between steps), drive the motor '
+                'back to angle = 0° (resting length) and wait for the move to complete before the '
+                'next step. When off, the motor stays at its current position. Logged to HDF5 as '
+                '`reset_between_steps`.'
+            ),
+        )
+    )
+
+
 def _render_rest_between_steps_field(b: Bender) -> float:
     """Render the canonical 'Rest between steps (s)' field for stepped protocols (FL/FV)."""
     sk = _widget_key('rest_between_steps_s')
@@ -7679,6 +7699,8 @@ def main():
                             )
                         elif key == 'rest_between_steps_s':
                             updates[key] = _render_rest_between_steps_field(b)
+                        elif key == 'reset_between_steps':
+                            updates[key] = _render_reset_between_steps_field(b)
                         elif key == 'randomize_step_order':
                             updates[key] = _render_randomize_step_order_field(b)
                         elif 'random_seed' in key:
@@ -7759,6 +7781,8 @@ def main():
                             pass  # required-only; rendered in Required section
                         elif key == 'rest_between_steps_s':
                             updates[key] = _render_rest_between_steps_field(b)
+                        elif key == 'reset_between_steps':
+                            updates[key] = _render_reset_between_steps_field(b)
                         elif key == 'randomize_step_order':
                             updates[key] = _render_randomize_step_order_field(b)
                         elif 'random_seed' in key:
