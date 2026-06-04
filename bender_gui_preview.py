@@ -504,7 +504,10 @@ def _isometric_stim_params_from_b(b: Any) -> dict:
     if isinstance(user, dict):
         sp.update(user)
     if sp.get('inter_step_interval_s', None) is None:
-        sp['inter_step_interval_s'] = float(getattr(b, 'isometric_inter_step_interval_s', 0.0) or 0.0)
+        gap = getattr(b, 'rest_between_steps_s', None)
+        if gap is None:
+            gap = getattr(b, 'isometric_inter_step_interval_s', 0.0)
+        sp['inter_step_interval_s'] = float(gap or 0.0)
     return sp
 
 

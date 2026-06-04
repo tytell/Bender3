@@ -2297,6 +2297,31 @@ def _render_field(b: Bender, name: str, kind: str, label: str, *, help_text: Opt
     return None
 
 
+def _render_rest_between_steps_field(b: Bender) -> float:
+    """Render the canonical 'Rest between steps (s)' field for stepped protocols (FL/FV)."""
+    sk = _widget_key('rest_between_steps_s')
+    if sk not in st.session_state:
+        v0 = _get_session_value(b, 'rest_between_steps_s', 2.0)
+        try:
+            st.session_state[sk] = float(v0) if v0 is not None else 2.0
+        except (TypeError, ValueError):
+            st.session_state[sk] = 2.0
+    return float(
+        st.number_input(
+            'Rest between steps (s)',
+            min_value=0.0,
+            max_value=30.0,
+            step=0.5,
+            format='%.6g',
+            key=sk,
+            help=(
+                'Seconds the motor holds position after each step finishes (after acquisition) '
+                'before the next step begins. Use **0** for back-to-back steps.'
+            ),
+        )
+    )
+
+
 def _clear_fld_session_keys():
     """Drop procedure widget keys so the next render re-seeds from ``Bender`` (e.g. new config)."""
     for k in list(st.session_state.keys()):
@@ -7632,23 +7657,8 @@ def main():
                                 format_func=_format_strain_or_amp_mode,
                                 help=ISOMETRIC_FIELD_HELP.get(key),
                             )
-                        elif key == 'isometric_inter_step_interval_s':
-                            skg = _widget_key('isometric_inter_step_interval_s')
-                            if skg not in st.session_state:
-                                v0 = _get_session_value(b, key, 0.0)
-                                st.session_state[skg] = float(v0) if v0 is not None else 0.0
-                            updates[key] = float(
-                                st.number_input(
-                                    'Time between steps (s)',
-                                    min_value=0.0,
-                                    format='%.6g',
-                                    key=skg,
-                                    help=(
-                                        'Seconds to wait after each step finishes (after acquisition) before the next '
-                                        'ramp/stimulus period. Use **0** for back-to-back steps.'
-                                    ),
-                                )
-                            )
+                        elif key == 'rest_between_steps_s':
+                            updates[key] = _render_rest_between_steps_field(b)
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:
@@ -7725,6 +7735,8 @@ def main():
                             updates[key] = assembled
                         elif key == 'isovelocity_velocity_mode':
                             pass  # required-only; rendered in Required section
+                        elif key == 'rest_between_steps_s':
+                            updates[key] = _render_rest_between_steps_field(b)
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:

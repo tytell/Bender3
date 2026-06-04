@@ -392,8 +392,12 @@ class Bender:
         # Multiply geometric strain (κ·w/2) in plots/post-hoc by this after sono validation if
         # you want “positive = shortening on the recruited side” (typically ±1).
         self.strain_shortening_positive_display_sign = 1.0
-        # Pause (s) after each isometric step finishes before the next ramp/stim (0 = back-to-back).
-        self.isometric_inter_step_interval_s = 0.0
+        # Canonical rest (s) the motor holds position after each step finishes before the next
+        # step begins, for the stepped protocols (FL = isometric, FV = isovelocity). 0 = back-to-back.
+        self.rest_between_steps_s = 2.0
+        # Legacy isometric-only alias for rest_between_steps_s. None = not set; mirrored onto
+        # rest_between_steps_s in _normalize_dispatch_aliases so old saved templates still apply.
+        self.isometric_inter_step_interval_s = None
         # Block sequence (default: one block, bend LEFT / stim LEFT).
         self.block_sequence = [{'direction': 'left', 'stim_sides': 'left'}]
         self.left_stim_voltage = 5.0
@@ -596,6 +600,10 @@ class Bender:
             self.isometric_randomize = bool(self.randomize)
         if getattr(self, 'isometric_random_seed', None) is None and getattr(self, 'random_seed', None) is not None:
             self.isometric_random_seed = self.random_seed
+        # Mirror the legacy isometric-only inter-step pause onto the canonical rest_between_steps_s
+        # so older saved templates that carry isometric_inter_step_interval_s keep their pause.
+        if getattr(self, 'isometric_inter_step_interval_s', None) is not None:
+            self.rest_between_steps_s = float(self.isometric_inter_step_interval_s)
         # Dormant: the GUI no longer exposes a stim-routing-overrides field (blocks own routing).
         # Kept only so older saved templates carrying isometric_stim_overrides still load + merge.
         sp_iso = dict(getattr(self, 'isometric_stim_params', {}) or {})
@@ -3159,6 +3167,7 @@ class Bender:
         self.h5_protocol_metadata.update({
             'test_type': 'isometric',
             'n_trials': int(len(results)),
+            'rest_between_steps_s': float(gap_s),
             'isometric_inter_step_interval_s': float(gap_s),
         })
         return results
@@ -3276,7 +3285,7 @@ class Bender:
             if sp.get(_bk, None) is None and getattr(self, _bk, None) is not None:
                 sp[_bk] = getattr(self, _bk)
         if sp.get('inter_step_interval_s', None) is None:
-            sp['inter_step_interval_s'] = float(getattr(self, 'isometric_inter_step_interval_s', 0.0) or 0.0)
+            sp['inter_step_interval_s'] = float(getattr(self, 'rest_between_steps_s', 2.0) or 0.0)
         for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
             if k not in sp and getattr(self, k, None) is not None:
                 sp[k] = getattr(self, k)
@@ -3658,6 +3667,7 @@ class Bender:
         settle_before_stim_s=0.02,
         pre_iso_stim_duration_s=0.0,
         stim_duration_s=None,
+        inter_step_interval_s=0.0,
         is_stim=False,
         stim_pulse_rate=None,
         stim_voltage=5.0,
@@ -3738,7 +3748,14 @@ class Bender:
                 right_stim_voltage=rv,
             )
 
+        gap_s = float(inter_step_interval_s)
+        if not np.isfinite(gap_s) or gap_s < 0:
+            raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
+
         for i in range(n):
+            if i > 0 and gap_s > 0:
+                # Hold the motor at its current position and rest before the next velocity step.
+                time.sleep(gap_s)
             v_mag = abs(float(vels[i]))
             th0 = th0_fixed
             if mirror:
@@ -3890,6 +3907,7 @@ class Bender:
         self.h5_protocol_metadata.update({
             'test_type': 'isovelocity',
             'n_trials': int(len(results)),
+            'rest_between_steps_s': float(gap_s),
         })
         return results
 
@@ -3956,6 +3974,7 @@ class Bender:
             'settle_before_stim_s': 0.02,
             'pre_iso_stim_duration_s': 0.0,
             'stim_duration_s': None,
+            'inter_step_interval_s': None,
             'is_stim': False,
             'stim_pulse_rate': None,
             'stim_voltage': 5.0,
@@ -3966,6 +3985,8 @@ class Bender:
         sp.update(kwargs)
         if sp.get('post_baseline_s', None) is None and getattr(self, 'post_baseline_s', None) is not None:
             sp['post_baseline_s'] = getattr(self, 'post_baseline_s')
+        if sp.get('inter_step_interval_s', None) is None:
+            sp['inter_step_interval_s'] = float(getattr(self, 'rest_between_steps_s', 2.0) or 0.0)
 
         self._validate_stim_timing_for_steps(
             sp,
@@ -4053,6 +4074,7 @@ class Bender:
                     settle_before_stim_s=float(sp['settle_before_stim_s']),
                     pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
                     stim_duration_s=sp.get('stim_duration_s'),
+                    inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
                     is_stim=bool(sp.get('is_stim', False)),
                     stim_pulse_rate=sp.get('stim_pulse_rate', None),
                     stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -4113,6 +4135,7 @@ class Bender:
             settle_before_stim_s=float(sp['settle_before_stim_s']),
             pre_iso_stim_duration_s=float(sp.get('pre_iso_stim_duration_s', 0.0)),
             stim_duration_s=sp.get('stim_duration_s'),
+            inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
             is_stim=bool(sp.get('is_stim', False)),
             stim_pulse_rate=sp.get('stim_pulse_rate', None),
             stim_voltage=float(sp.get('stim_voltage', 5.0)),
@@ -4932,7 +4955,7 @@ class Bender:
             ],
             'isometric_optional': [
                 'isometric_mode', 'isometric_randomize', 'isometric_random_seed',
-                'isometric_inter_step_interval_s',
+                'rest_between_steps_s',
                 'isometric_stim_params',
             ],
             'isovelocity_required': [
@@ -4945,7 +4968,8 @@ class Bender:
             'isovelocity_optional': [
                 'isovelocity_randomize',
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
-                'isovelocity_pre_hold_s', 'isovelocity_stim_params',
+                'isovelocity_pre_hold_s', 'rest_between_steps_s',
+                'isovelocity_stim_params',
             ],
             'calibration_required': ['calibration_base_test_type'],
             'calibration_optional': ['inertial_calibration_file'],
