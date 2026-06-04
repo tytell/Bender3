@@ -7390,7 +7390,7 @@ def main():
         st.divider()
         sub_specimen = sub_clamp_inertial = False
         with st.container():
-            # Section 2 (Specimen): identity + morphometrics + session temperature + prep condition.
+            # Section 3 (Specimen): identity + morphometrics + session temperature + prep condition.
             # One Apply commits only these fields (per 4-section model, ux_spec §2.1/§3).
             with st.form('morpho_form_specimen', clear_on_submit=False):
                 id1, id2 = st.columns(2)
@@ -7469,7 +7469,7 @@ def main():
 
             st.divider()
             st.subheader('4 · Clamp geometry & inertial correction')
-            # Section 3: clamp geometry + mounted profile + inertial flag. One merged Apply
+            # Section 4: clamp geometry + mounted profile + inertial flag. One merged Apply
             # commits only these fields (replaces the former separate clamp / profile Applies).
             with st.form('morpho_form_clamp_inertial', clear_on_submit=False):
                 st.markdown('**Clamp geometry**')
@@ -7627,7 +7627,7 @@ def main():
     if _show_sec3_through_6():
 
         st.divider()
-        st.subheader('7 · Protocol / Run')
+        st.subheader('5 · Protocol / Run')
 
         with st.expander('Load protocol template (optional)', expanded=False):
             st.caption(
@@ -7700,8 +7700,8 @@ def main():
                 if tt == 'isometric':
                     st.caption(
                         '**Isometric** turns strain or curvature targets into motor angles using **test segment length** '
-                        'and **cross-section width** from **section 3** (same as clamp spacing `dclamp`). '
-                        'Those values are copied when you use **Apply** in **section 3** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
+                        'and **cross-section width** from **section 4** (same as clamp spacing `dclamp`). '
+                        'Those values are copied when you use **Apply** in **section 4** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
                     )
                     st.markdown('**Required**')
                     for key in schema['isometric_required']:
@@ -7869,7 +7869,7 @@ def main():
                     )
                     st.info(
                         'Calibration runs the **base** motion protocol. Set **test_type** to that base '
-                        '(e.g. dynamic), click **Apply** in **section 4** or **6** (and **Refresh experiment preview** in **Procedure fields** if you use preview), '
+                        '(e.g. dynamic), click **Apply** in **section 5 · Protocol / Run** (and **Refresh experiment preview** in **Procedure fields** if you use preview), '
                         'then switch back to **calibration** before running.'
                     )
                     st.markdown('**Optional**')
@@ -8065,7 +8065,7 @@ def main():
         )
 
         st.divider()
-        st.subheader('8 · Experiment preview')
+        st.subheader('6 · Experiment preview')
         if _procedure_apply_dirty() or _morpho_apply_dirty():
             _soft_apply_reminder()
 
@@ -8634,7 +8634,7 @@ def main():
 
         st.divider()
         st.session_state.setdefault('gui_sec7_hide', False)
-        st.subheader('9 · Review data')
+        st.subheader('8 · Review data')
         if st.session_state.get('gui_sec7_hide'):
             st.caption('Visualization panel hidden. Uncheck **Hide section** below.')
         if not st.session_state.get('gui_sec7_hide'):
