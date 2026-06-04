@@ -8455,6 +8455,17 @@ def main():
         elif _ready_run['protocol_ok'] and _ready_run['setup_ok'] and _ready_run['measurements_ok']:
             st.caption('Checklist complete — review warnings below if any, then run or click Proceed.')
 
+        if _ready_run['protocol_ok'] and b is not None:
+            _max_rot = getattr(b, 'max_commanded_rotation_deg', None)
+            if _max_rot is None:
+                try:
+                    _vrep = b.validate_dispatch_setup(test_type=tt)
+                    _max_rot = _vrep.get('max_rotation_deg')
+                except Exception:
+                    _max_rot = None
+            if _max_rot is not None and math.isfinite(float(_max_rot)):
+                st.text(f'This run will move a maximum of {float(_max_rot):.1f}°')
+
         if st.button(
             'Run experiment',
             type='primary',

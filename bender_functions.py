@@ -785,6 +785,8 @@ class Bender:
         self.set_input_channels(input_channels=self.input_channels, input_channel_names=self.input_channel_names)
         self.set_stim_channels(*self.stim_channels)
 
+        self._announce_pre_run_max_rotation(requested_test_type)
+
         # Starting position is zero: explicitly drive the motor to angle = 0° (and confirm via the
         # encoder) before any protocol runs. Never assume the motor is already at neutral (1.5).
         self.command_start_position_zero(device_name=self.device_name)
@@ -989,12 +991,6 @@ class Bender:
         )
 
         # Create motor stepper pulses based on the generated angle/anglevel signals (MOTION ONLY)
-        ang_cmd = np.asarray(self.angle, dtype=float).reshape(-1)
-        if ang_cmd.size:
-            print(
-                f"Motor command preview: max|angle|={float(np.max(np.abs(ang_cmd))):.4g} deg, "
-                f"gear_ratio={self.motor_gear_ratio}, motor_full_steps_per_rev={self.motor_full_steps_per_rev}"
-            )
         self.make_motor_stepper_pulses(
                         daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
                         motor_gear_ratio=self.motor_gear_ratio,
@@ -5229,10 +5225,25 @@ class Bender:
             },
         }
 
+    def _announce_pre_run_max_rotation(self, test_type=None):
+        """Print peak commanded |angle| (deg) before protocol motor motion (from validation cache when set)."""
+        from shared.utilities import compute_max_rotation_deg, format_max_rotation_message
+
+        tt = str(test_type or getattr(self, 'test_type', 'dynamic'))
+        deg = getattr(self, 'max_commanded_rotation_deg', None)
+        if deg is None:
+            try:
+                deg = float(compute_max_rotation_deg({'bender': self, 'test_type': tt}))
+                self.max_commanded_rotation_deg = deg
+            except Exception as exc:
+                logging.warning('Pre-run max rotation not computed for %s: %s', tt, exc)
+                return
+        print(format_max_rotation_message(float(deg)))
+
     def validate_dispatch_setup(self, test_type=None):
         """
         Validate whether required dispatcher fields are present for `test_type`.
-        Returns dict: {'ok': bool, 'missing': [..], 'test_type': str}.
+        Returns dict: {'ok': bool, 'missing': [..], 'test_type': str, 'max_rotation_deg': float|None}.
         """
         tt = str(test_type or getattr(self, 'test_type', 'dynamic'))
         if tt in ('isometric', 'isovelocity'):
@@ -5367,7 +5378,25 @@ class Bender:
                 missing.append('dclamp (mm)')
             if not self._xsec_width_mm_valid():
                 missing.append('xsec_width (mm)')
-        return {'ok': len(missing) == 0, 'missing': missing, 'test_type': tt}
+        ok = len(missing) == 0
+        max_rotation_deg = None
+        if ok:
+            try:
+                from shared.utilities import compute_max_rotation_deg
+
+                max_rotation_deg = float(compute_max_rotation_deg({'bender': self, 'test_type': tt}))
+                self.max_commanded_rotation_deg = max_rotation_deg
+            except Exception as exc:
+                logging.warning('validate_dispatch_setup: max rotation not computed for %s: %s', tt, exc)
+                self.max_commanded_rotation_deg = None
+        else:
+            self.max_commanded_rotation_deg = None
+        return {
+            'ok': ok,
+            'missing': missing,
+            'test_type': tt,
+            'max_rotation_deg': max_rotation_deg,
+        }
 
     def make_cycle_tags(self):
         aidata = getattr(self, 'aidata', None)
