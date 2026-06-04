@@ -37,6 +37,11 @@ import xml.etree.ElementTree as ElementTree
 import h5py
 
 
+# --- Isovelocity safety limit ------------------------------------------------
+# Hard limit on commanded/encoder motor angle during an isovelocity ramp. If the ramp would carry
+# the angle to or past this magnitude, the ramp is stopped and the motor is returned to 0° (2.1).
+ISOVELOCITY_ANGLE_LIMIT_DEG = 45.0
+
 # --- Specimen lateral frame (signed indices) ---------------------------------
 # Live values come from config ``specimen_lateral_index_on_positive_motor_side`` (non-zero)
 # paired with ``positive_motor_direction``; assigned on :class:`Bender` construction.
@@ -3682,12 +3687,33 @@ class Bender:
             t2 = np.array([t_edge + iso])
         a2 = th0 + v * (t2 - t_edge)
         w2 = np.full(t2.size, v)
+        # Velocity-angle guard (2.1): stop the constant-velocity ramp the moment the commanded
+        # angle reaches the hard limit. Open-loop stepper ⇒ commanded angle is the encoder angle.
+        # The caller's post-baseline ramp then returns the motor to 0° (controlled deceleration).
+        guard_triggered = False
+        guard_angle_deg = float('nan')
+        limit = float(ISOVELOCITY_ANGLE_LIMIT_DEG)
+        over = np.nonzero(np.abs(a2) >= limit)[0]
+        if over.size:
+            k = int(over[0])
+            guard_triggered = True
+            guard_angle_deg = float(a2[k])
+            t2 = t2[:k + 1]
+            a2 = a2[:k + 1]
+            w2 = w2[:k + 1]
+            import warnings
+            warnings.warn(
+                f"Isovelocity angle guard: |angle|={abs(guard_angle_deg):.3g}° reached the "
+                f"{limit:.3g}° limit; ramp stopped and motor will return to 0°.",
+                UserWarning,
+                stacklevel=2,
+            )
         t = np.concatenate([t1, t2])
         angle = np.concatenate([a1, a2])
         anglevel = np.concatenate([w1, w2])
         if t.size < 2:
             raise ValueError("_timeline_prehold_isovelocity: timeline too short; increase durations or daq rate.")
-        return t, angle, anglevel, float(t_edge)
+        return t, angle, anglevel, float(t_edge), guard_triggered, guard_angle_deg
 
     def _isovelocity_one_block(
         self,
@@ -3730,7 +3756,7 @@ class Bender:
             },
             segment_duration_s=iso_duration_s,
         )
-        t, angle, anglevel, t_iso0 = self._timeline_prehold_isovelocity(
+        t, angle, anglevel, t_iso0, guard_triggered, guard_angle_deg = self._timeline_prehold_isovelocity(
             float(theta_start_deg), float(vel_deg_per_s), float(pre_hold_s), float(iso_duration_s), daq_hz
         )
         t_seg_end = t_iso0 + float(iso_duration_s)
@@ -3795,6 +3821,8 @@ class Bender:
             's1': s1,
             's2': s2,
             'active': active,
+            'guard_triggered': bool(guard_triggered),
+            'guard_angle_deg': float(guard_angle_deg),
         }
 
     def _run_isovelocity_steps(
@@ -3944,6 +3972,10 @@ class Bender:
                 iso_t1_end = d2['iso_t1'] + off
                 t_post0 = d2['t_post0'] + off
                 t_post1 = d2['t_post1'] + off
+                step_guard_triggered = bool(d1['guard_triggered'] or d2['guard_triggered'])
+                step_guard_angle = (
+                    d1['guard_angle_deg'] if d1['guard_triggered'] else d2['guard_angle_deg']
+                )
             else:
                 if block_dir_sign is not None:
                     v_sign = v_mag * block_dir_sign
@@ -3971,6 +4003,8 @@ class Bender:
                 iso_t1_end = d0['iso_t1']
                 t_post0 = d0['t_post0']
                 t_post1 = d0['t_post1']
+                step_guard_triggered = bool(d0['guard_triggered'])
+                step_guard_angle = d0['guard_angle_deg']
 
             prev_end_deg = float(angle[-1])
             self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
@@ -4015,6 +4049,8 @@ class Bender:
                 't_post_baseline_end': float(t_post1),
                 'forcetorque': None,
                 'mean_xforce_stim': None,
+                'guard_triggered': bool(step_guard_triggered),
+                'guard_angle_deg': float(step_guard_angle),
             }
             if use_block_stim:
                 self._tag_block_trial_metadata(
@@ -4282,6 +4318,11 @@ class Bender:
                 'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
                 'unilateral_posture_lateral_index': uidx_meta,
                 'n_trials': int(len(all_out)),
+                'guard_triggered': bool(any(e.get('guard_triggered') for e in all_out)),
+                'guard_angle_deg': next(
+                    (float(e['guard_angle_deg']) for e in all_out if e.get('guard_triggered')),
+                    float('nan'),
+                ),
             })
             self.isovelocity_results = all_out
             self.test_type = 'isovelocity'
@@ -4340,6 +4381,10 @@ class Bender:
             ),
             'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
             'unilateral_posture_lateral_index': uidx_meta,
+            'guard_triggered': bool(any(e.get('guard_triggered') for e in out)),
+            'guard_angle_deg': next(
+                (float(e['guard_angle_deg']) for e in out if e.get('guard_triggered')), float('nan')
+            ),
         })
         # Return to resting length: drive the motor to angle = 0° before the trial completes (1.7).
         self.return_to_resting_length(device_name=sp.get('device_name', None))
