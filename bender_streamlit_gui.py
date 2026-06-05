@@ -87,7 +87,7 @@ from bender_config_builder import (  # noqa: E402
     default_configs_dir,
     discover_config_modules,
     parse_comma_list,
-    parse_n_floats,
+    parse_sono_calibration,
     read_base_defaults,
     render_generated_config,
     sanitize_config_module_stem,
@@ -7114,13 +7114,22 @@ def main():
                             help='One value per crystal pair; stored as a string and parsed downstream.',
                         )
                         st.text_input(
-                            'Sono cal left [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
+                            'Sono cal left (volts then mm, comma-separated)',
                             key='gui_cfg_bld_sono_cal_left',
-                            help='Four numbers, same order as the config file.',
+                            help=(
+                                'Grouped list: all voltages first, then all mm. '
+                                'Even count >= 4 (>= 2 calibration points). '
+                                '2 points: V_lo,V_hi,mm_lo,mm_hi. '
+                                'N points: V_1,..,V_N,mm_1,..,mm_N.'
+                            ),
                         )
                         st.text_input(
-                            'Sono cal right [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
+                            'Sono cal right (volts then mm, comma-separated)',
                             key='gui_cfg_bld_sono_cal_right',
+                            help=(
+                                'Grouped list: all voltages first, then all mm. '
+                                'Even count >= 4 (>= 2 calibration points).'
+                            ),
                         )
                 with c_cfg_r:
                     with st.expander('DAQ rates & device', expanded=True):
@@ -7173,13 +7182,13 @@ def main():
                         sono_lf: list[float] = []
                         sono_rf: list[float] = []
                         try:
-                            sono_lf = parse_n_floats(str(st.session_state.get('gui_cfg_bld_sono_cal_left') or ''), 4)
-                            sono_rf = parse_n_floats(str(st.session_state.get('gui_cfg_bld_sono_cal_right') or ''), 4)
+                            sono_lf = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_left') or ''))
+                            sono_rf = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_right') or ''))
                         except ValueError as e:
                             sono_cal_ok = False
                             _st_error_detail(
                                 'Sono calibration invalid.',
-                                ['Enter four comma-separated numbers', 'Match V and mm pairs'],
+                                ['Enter an even count of >= 4 numbers', 'All volts first, then all mm'],
                                 str(e),
                             )
                         if not stim_ch:

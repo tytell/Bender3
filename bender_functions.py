@@ -481,14 +481,30 @@ class Bender:
         return self.forcetorque
     
     def apply_calibration_sono(self, raw_volts, cal_list):
-        """Unpacks [v_low, v_high, mm_low, mm_high] and returns mm."""
+        """Convert raw sono volts to mm via a least-squares linear fit.
+
+        ``cal_list`` is grouped: the first half are voltage values and the
+        second half are the matching mm values, i.e.
+        ``[v_1, ..., v_N, mm_1, ..., mm_N]`` for N >= 2 calibration points.
+        A least-squares line (np.polyfit degree 1) is fit across all points;
+        for exactly 2 points this is identical to the previous two-point
+        slope/intercept calculation.
+        """
         if raw_volts is None or cal_list is None:
             return None
-            
-        v_low, v_high, mm_low, mm_high = cal_list
-        
-        slope = (mm_high - mm_low) / (v_high - v_low)
-        intercept = mm_low - (slope * v_low)
+
+        cal = np.asarray(cal_list, dtype=float).reshape(-1)
+        if cal.size < 4 or cal.size % 2 != 0:
+            raise ValueError(
+                'Sono calibration needs an even number of values >= 4 '
+                '(first half volts, second half mm; i.e. at least 2 '
+                f'calibration points); got {cal.size}.'
+            )
+
+        n = cal.size // 2
+        volts = cal[:n]
+        mm = cal[n:]
+        slope, intercept = np.polyfit(volts, mm, 1)
         return (raw_volts * slope) + intercept
 
     def _primary_torque_index(self):

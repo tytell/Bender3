@@ -168,6 +168,25 @@ def parse_n_floats(s: str, n: int) -> List[float]:
     return [float(x) for x in parts]
 
 
+def parse_sono_calibration(s: str) -> List[float]:
+    """Parse a sonomicrometer calibration list.
+
+    The list is grouped: the first half are voltage values and the second
+    half are the matching mm values, i.e. ``[v_1, ..., v_N, mm_1, ..., mm_N]``
+    for N >= 2 calibration points. Any even count of at least 4 numbers is
+    accepted (>= 2 points). The 2-point case ``[v_lo, v_hi, mm_lo, mm_hi]``
+    is unchanged. Fewer than 2 points is rejected.
+    """
+    parts = parse_comma_list(s)
+    if len(parts) < 4 or len(parts) % 2 != 0:
+        raise ValueError(
+            'need an even count of at least 4 comma-separated numbers '
+            '(>= 2 calibration points: all volts first, then all mm), '
+            f'got {len(parts)}'
+        )
+    return [float(x) for x in parts]
+
+
 def effective_load_module_name(*, typed: str, selected: str) -> Optional[str]:
     t = (typed or '').strip()
     if t:
