@@ -2797,14 +2797,21 @@ def _section2_destination_incomplete() -> bool:
 
 
 def _output_path_anchor_for_review(b: Optional[Bender] = None) -> str:
-    """Path used to locate the data directory (composed section 2 path, else ``b.outputfile``)."""
-    p = _compose_output_h5_path().strip()
-    if p:
-        return p
+    """Path used to locate the data directory for review (section 8/9 file browser).
+
+    Prefers the **applied** experiment output path (``b.outputfile``), which is written only when
+    the user clicks **Apply setup** (``_sec1_apply_composed_path_to_bender``) or after a run/export
+    sets the real saved path. That is the "currently applied output directory", so the browser
+    reflects where data is actually written and stays stable across auto-name ``NN`` increments.
+
+    Falls back to the composed (live, not-yet-applied) section-2 path only when nothing has been
+    applied yet, so the browser still previews the intended folder before the first Apply.
+    """
     inst = b if b is not None else st.session_state.get('bender')
-    if inst is not None:
-        return str(getattr(inst, 'outputfile', '') or '').strip()
-    return ''
+    applied = str(getattr(inst, 'outputfile', '') or '').strip() if inst is not None else ''
+    if applied:
+        return applied
+    return _compose_output_h5_path().strip()
 
 
 def _normalize_config_module_name(raw: str) -> str:
@@ -8745,9 +8752,14 @@ def main():
             st.caption('Visualization panel hidden. Uncheck **Hide section** below.')
         if not st.session_state.get('gui_sec7_hide'):
             data_path = _output_path_anchor_for_review(b)
+            review_dir = os.path.dirname(data_path) if data_path else ''
             review_files = _candidate_review_files(data_path) if data_path else []
-            if not review_files:
-                st.info('No matching files in the data folder yet. Set **Data folder** and **Data file name** in Step 2, then run or export.')
+            if not data_path:
+                st.info('No output path set yet. Set **Data folder** and **Data file name** in Step 2 and click **Apply setup**, then run or export.')
+            elif review_dir and not os.path.isdir(review_dir):
+                st.error(f'❌ Output folder not found: `{review_dir}` — check the **Data folder** path in Step 2 and click **Apply setup**.')
+            elif not review_files:
+                st.info('Output folder found, but it has no data files yet. Run or export to create one.')
             else:
                 selected_file = st.session_state.get('gui_review_selected')
                 if selected_file not in review_files:
@@ -8916,9 +8928,14 @@ def main():
             st.caption('Note controls hidden. Uncheck **Hide section** below.')
         if not st.session_state.get('gui_sec8_hide'):
             data_path_qc = _output_path_anchor_for_review(b)
+            review_dir_qc = os.path.dirname(data_path_qc) if data_path_qc else ''
             review_files_qc = _candidate_review_files(data_path_qc) if data_path_qc else []
-            if not review_files_qc:
-                st.info('Set **Data folder** and **Data file name** in Step 2 (or save once) so files appear here.')
+            if not data_path_qc:
+                st.info('No output path set yet. Set **Data folder** and **Data file name** in Step 2 and click **Apply setup** (or save once) so files appear here.')
+            elif review_dir_qc and not os.path.isdir(review_dir_qc):
+                st.error(f'❌ Output folder not found: `{review_dir_qc}` — check the **Data folder** path in Step 2 and click **Apply setup**.')
+            elif not review_files_qc:
+                st.info('Output folder found, but it has no data files yet. Run or export to create one.')
             else:
                 _ensure_review_file_selection(review_files_qc)
                 st.selectbox(
