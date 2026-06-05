@@ -112,6 +112,11 @@ def read_base_defaults(base_module: str) -> Dict[str, Any]:
         'sono_internal_samplefreq': int(getattr(m, 'sono_internal_samplefreq', 241)),
         'sono_cal_left': sono_l,
         'sono_cal_right': sono_r,
+        # Sono acquisition parameters. ``sono_distance`` is a comma-separated string (one value per
+        # crystal pair, e.g. '12.5,14.2'), parsed downstream. Defaults keep old configs loadable.
+        'sono_transmit_pulse': float(getattr(m, 'sono_transmit_pulse', 0.0)),
+        'sono_inhibit_delay': float(getattr(m, 'sono_inhibit_delay', 0.0)),
+        'sono_distance': str(getattr(m, 'sono_distance', '') or ''),
         'encoder_pulses_per_rev': int(getattr(m, 'encoder_pulses_per_rev', 10000)),
         'amp_step_vel': int(getattr(m, 'amp_step_vel', 10)),
         'ramp_mode_default': getattr(m, 'ramp_mode_default', 'linear'),

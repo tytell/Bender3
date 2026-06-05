@@ -3724,6 +3724,9 @@ def _seed_cfg_build_from_source_config(source_config: str) -> None:
     st.session_state['gui_cfg_bld_sono_internal_samplefreq'] = int(d['sono_internal_samplefreq'])
     st.session_state['gui_cfg_bld_sono_cal_left'] = ', '.join(str(x) for x in d['sono_cal_left'])
     st.session_state['gui_cfg_bld_sono_cal_right'] = ', '.join(str(x) for x in d['sono_cal_right'])
+    st.session_state['gui_cfg_bld_sono_transmit_pulse'] = float(d['sono_transmit_pulse'])
+    st.session_state['gui_cfg_bld_sono_inhibit_delay'] = float(d['sono_inhibit_delay'])
+    st.session_state['gui_cfg_bld_sono_distance'] = str(d['sono_distance'])
     st.session_state['gui_cfg_bld_amp_step_vel'] = int(d['amp_step_vel'])
     rm = str(d['ramp_mode_default'])
     st.session_state['gui_cfg_bld_ramp_mode_default'] = rm if rm in ('linear', 'exponential') else 'linear'
@@ -7093,6 +7096,21 @@ def main():
                             step=1,
                             format='%d',
                         )
+                        st.number_input(
+                            'Sono transmit pulse (`sono_transmit_pulse`)',
+                            key='gui_cfg_bld_sono_transmit_pulse',
+                            format='%.6g',
+                        )
+                        st.number_input(
+                            'Sono inhibit delay (`sono_inhibit_delay`)',
+                            key='gui_cfg_bld_sono_inhibit_delay',
+                            format='%.6g',
+                        )
+                        st.text_input(
+                            'Sono distance per crystal pair (`sono_distance`, comma-separated, e.g. 12.5,14.2)',
+                            key='gui_cfg_bld_sono_distance',
+                            help='One value per crystal pair; stored as a string and parsed downstream.',
+                        )
                         st.text_input(
                             'Sono cal left [V_lo, V_hi, mm_lo, mm_hi] comma-separated',
                             key='gui_cfg_bld_sono_cal_left',
@@ -7233,6 +7251,15 @@ def main():
                                         ),
                                         'sono_cal_left': sono_lf,
                                         'sono_cal_right': sono_rf,
+                                        'sono_transmit_pulse': float(
+                                            st.session_state.get('gui_cfg_bld_sono_transmit_pulse') or 0.0
+                                        ),
+                                        'sono_inhibit_delay': float(
+                                            st.session_state.get('gui_cfg_bld_sono_inhibit_delay') or 0.0
+                                        ),
+                                        'sono_distance': str(
+                                            st.session_state.get('gui_cfg_bld_sono_distance') or ''
+                                        ),
                                         'amp_step_vel': int(st.session_state.get('gui_cfg_bld_amp_step_vel') or 10),
                                         'ramp_mode_default': rm,
                                         'waitbefore': float(st.session_state.get('gui_cfg_bld_waitbefore') or 3.0),
