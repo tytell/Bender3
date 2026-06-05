@@ -7881,7 +7881,6 @@ def main():
                     if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
                         updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
                     updates['randomize_step_order'] = _render_randomize_step_order_field(b)
-                    st.markdown('**Optional**')
                     for key in schema['isometric_optional']:
                         if key == 'randomize_step_order':
                             pass  # already rendered immediately after step size fields above
