@@ -6994,7 +6994,7 @@ def main():
                             ),
                         )
                 with c_cfg_r:
-                    with st.expander('DAQ rates & device', expanded=True):
+                    with st.expander('DAQ rates & device', expanded=False):
                         st.text_input('NI-DAQ device name', key='gui_cfg_bld_device_name')
                         st.number_input('AI + encoder sample rate (Hz)', key='gui_cfg_bld_daq_ai_sr', min_value=1.0, format='%.f')
                         st.number_input('AO + DO sample rate (Hz)', key='gui_cfg_bld_daq_ao_sr', min_value=1.0, format='%.f')
