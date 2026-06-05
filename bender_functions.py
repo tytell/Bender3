@@ -4867,68 +4867,96 @@ class Bender:
         # Use the passed-in basis if available, otherwise fallback to self
         t = t_basis if t_basis is not None else self.t
         tnorm = tnorm_basis if tnorm_basis is not None else self.tnorm
-        
+
         S1stimcmd = np.zeros_like(t)
         S2stimcmd = np.zeros_like(t)
         Lonoff, Ronoff = [], []
-        
+
+        # Route left-phase and right-phase bursts to the AO channel that serves each
+        # physical side, as declared in the hardware config (S1side / S2side).
+        s1_is_left = str(getattr(self, 'S1side', 'left')).strip().lower() == 'left'
+
+        def _assign_left(mask, pw):
+            if s1_is_left:
+                S1stimcmd[mask] = pw[mask]
+            else:
+                S2stimcmd[mask] = pw[mask]
+
+        def _assign_right(mask, pw):
+            if s1_is_left:
+                S2stimcmd[mask] = pw[mask]
+            else:
+                S1stimcmd[mask] = pw[mask]
+
         # Calculate the pulse wave once
         # Using 5.0 for the stimulator 'On' voltage; pulse high time from pulse_width_ms.
         _pw_frac = self._pulse_high_fraction(stim_pulse_rate)
         pulse_wave = (np.mod(t * stim_pulse_rate, 1) < _pw_frac).astype(float) * 5.0
         bendphase = tnorm - 0.25
-    
+
         # 4. Optimized Cycle Loop
         for c, (dur1, duty1, f1, p1) in enumerate(zip(stimburstdur, duty_by_cycle, freq_by_cycle, phase_by_cycle)):
             if dur1 <= 0: continue
-            
-            # Left Side (S1)
-            t_s1 = c + p1
-            m1 = (bendphase >= t_s1) & (bendphase < t_s1 + duty1)
-            if np.any(m1):
-                S1stimcmd[m1] = pulse_wave[m1]
-                t_sub = t[m1]
+
+            # Left-phase burst
+            t_left = c + p1
+            m_left = (bendphase >= t_left) & (bendphase < t_left + duty1)
+            if np.any(m_left):
+                _assign_left(m_left, pulse_wave)
+                t_sub = t[m_left]
                 Lonoff.append([t_sub[0], t_sub[-1]])
 
-            # Right Side (S2)
-            t_s2 = c + 0.5 + p1
-            m2 = (bendphase >= t_s2) & (bendphase < t_s2 + duty1)
-            if np.any(m2):
-                S2stimcmd[m2] = pulse_wave[m2]
-                t_sub2 = t[m2]
+            # Right-phase burst (half-cycle offset)
+            t_right = c + 0.5 + p1
+            m_right = (bendphase >= t_right) & (bendphase < t_right + duty1)
+            if np.any(m_right):
+                _assign_right(m_right, pulse_wave)
+                t_sub2 = t[m_right]
                 Ronoff.append([t_sub2[0], t_sub2[-1]])
 
         # 5. Pre-stimulation (bilateral sequential bursts before bending at t=0)
-        # S1 starts at prestim_time; S2 starts prepoststim_sep later; both last prepoststim_dur.
+        # S1 channel fires at prestim_time; S2 channel fires prepoststim_sep later; both last prepoststim_dur.
         pre_s1_start = prestim_time
         pre_s1_end = prestim_time + prepoststim_dur
         m_pre_s1 = (t >= pre_s1_start) & (t < pre_s1_end)
         if np.any(m_pre_s1):
             S1stimcmd[m_pre_s1] = pulse_wave[m_pre_s1]
-            Lonoff.append([pre_s1_start, pre_s1_end])
+            if s1_is_left:
+                Lonoff.append([pre_s1_start, pre_s1_end])
+            else:
+                Ronoff.append([pre_s1_start, pre_s1_end])
 
         pre_s2_start = prestim_time + prepoststim_sep
         pre_s2_end = pre_s2_start + prepoststim_dur
         m_pre_s2 = (t >= pre_s2_start) & (t < pre_s2_end)
         if np.any(m_pre_s2):
             S2stimcmd[m_pre_s2] = pulse_wave[m_pre_s2]
-            Ronoff.append([pre_s2_start, pre_s2_end])
+            if s1_is_left:
+                Ronoff.append([pre_s2_start, pre_s2_end])
+            else:
+                Lonoff.append([pre_s2_start, pre_s2_end])
 
         # 5b. Post-stimulation (bilateral sequential bursts after motion ends)
-        # S1 starts at movedur + poststim_time; S2 starts prepoststim_sep later; both last prepoststim_dur.
+        # S1 channel fires at movedur + poststim_time; S2 channel fires prepoststim_sep later; both last prepoststim_dur.
         post_s1_start = movedur + poststim_time
         post_s1_end = post_s1_start + prepoststim_dur
         m_post_s1 = (t >= post_s1_start) & (t < post_s1_end)
         if np.any(m_post_s1):
             S1stimcmd[m_post_s1] = pulse_wave[m_post_s1]
-            Lonoff.append([post_s1_start, post_s1_end])
+            if s1_is_left:
+                Lonoff.append([post_s1_start, post_s1_end])
+            else:
+                Ronoff.append([post_s1_start, post_s1_end])
 
         post_s2_start = movedur + poststim_time + prepoststim_sep
         post_s2_end = post_s2_start + prepoststim_dur
         m_post_s2 = (t >= post_s2_start) & (t < post_s2_end)
         if np.any(m_post_s2):
             S2stimcmd[m_post_s2] = pulse_wave[m_post_s2]
-            Ronoff.append([post_s2_start, post_s2_end])
+            if s1_is_left:
+                Ronoff.append([post_s2_start, post_s2_end])
+            else:
+                Lonoff.append([post_s2_start, post_s2_end])
 
         # 6. Save and Return
         self.Lonoff = Lonoff

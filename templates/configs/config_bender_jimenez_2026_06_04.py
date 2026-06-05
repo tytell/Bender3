@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from jimenez_bender_config_B import *
+from config_bender_jimenez_2026_06_04 import *
 
 S1side = 'left'
 S2side = 'right'
