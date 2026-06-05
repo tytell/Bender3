@@ -22,3 +22,4 @@ TestData/
 .Rhistory
 *.nb.html
 debug-*.log
+.DS_Store
