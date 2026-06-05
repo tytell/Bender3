@@ -7034,12 +7034,8 @@ def main():
             # Unified config section: load an existing config into the editable fields, edit any
             # field, then save it as a NEW file. There is no separate Load/Build mode.
             _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
+            st.caption('Edit any fields below, then enter a new name and click Write to save a new config.')
             st.divider()
-            st.caption(
-                'Edit any field below, then **Write config file and load** to save a NEW config '
-                'file (the loaded config is never overwritten unless you reuse its name and confirm). '
-                'Use **Build new config** to reset the fields to template defaults.'
-            )
             if st.button(
                 'Build new config (clear fields)',
                 key='gui_btn_cfg_build_new_clear',
@@ -7052,48 +7048,12 @@ def main():
             if True:
                 _flush_pending_cfg_build_base()
                 _maybe_seed_cfg_build_fields()
-                c_top_l, c_top_r = st.columns(2, gap='large')
-                with c_top_l:
-                    if 'gui_cfg_build_base_path' not in st.session_state:
-                        _base_mod = str(st.session_state.get('gui_cfg_build_base') or '')
-                        _base_path = os.path.join(_ROOT, _base_mod.replace('.', os.sep) + '.py') if _base_mod else ''
-                        st.session_state['gui_cfg_build_base_path'] = _base_path if _base_path and os.path.isfile(_base_path) else ''
-                    _base_cfg_path = str(
-                        st.text_input(
-                            'Base config to inherit from (saved file does `import *` from this)',
-                            key='gui_cfg_build_base_path',
-                            placeholder='Paste full path to a base config .py file',
-                            help=(
-                                'The saved config inherits all fields from this base via `import *`, '
-                                'then overrides the values you edit below. Defaults to the loaded config; '
-                                'changing it re-seeds the fields from that base.'
-                            ),
-                        )
-                        or ''
-                    ).strip()
-                    _resolved_base = None
-                    if _base_cfg_path:
-                        _base_cfg_norm = os.path.normpath(_base_cfg_path)
-                        if os.path.isfile(_base_cfg_norm):
-                            st.success('✅ File found')
-                            try:
-                                _resolved_base, _ = _resolve_hardware_config_import_target(_base_cfg_norm)
-                            except ValueError:
-                                pass
-                        else:
-                            st.error('❌ File not found — check path')
-                    if _resolved_base and _resolved_base != str(
-                        st.session_state.get('gui_cfg_build_base') or ''
-                    ).strip():
-                        st.session_state['gui_pending_cfg_build_base'] = _resolved_base
-                        st.rerun()
-                with c_top_r:
-                    st.text_input(
-                        'Save new config as (module name, no `.py`)',
-                        key='gui_cfg_build_out',
-                        placeholder='e.g. lab_setup_2026',
-                        help='Writes a new `.py` file in this folder and loads it.',
-                    )
+                st.text_input(
+                    'Save new config as (module name, no `.py`)',
+                    key='gui_cfg_build_out',
+                    placeholder='e.g. lab_setup_2026',
+                    help='Writes a new `.py` file in this folder and loads it.',
+                )
                 c_cfg_l, c_cfg_r = st.columns(2, gap='large')
                 with c_cfg_l:
                     with st.expander('Calibration, direction & axis labels', expanded=False):
@@ -7173,7 +7133,7 @@ def main():
                     with st.expander('Strain / ATI channels', expanded=False):
                         st.text_input('SG AI channels (comma-separated)', key='gui_cfg_bld_SG_chan')
                         st.text_input('SG channel names (comma-separated)', key='gui_cfg_bld_SG_name')
-                    with st.expander('Stim monitor AI (optional)', expanded=False):
+                    with st.expander('Stim monitor AI', expanded=False):
                         st.text_input(
                             'Stim monitor AI channels (comma-separated; empty = none)',
                             key='gui_cfg_bld_stim_monitor_chan',
