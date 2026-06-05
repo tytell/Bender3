@@ -3784,6 +3784,24 @@ class Bender:
             t = np.concatenate([t, t_post])
             angle = np.concatenate([angle, ang_post])
             anglevel = np.concatenate([anglevel, w_post])
+            # End-of-trial buffer: after the controlled return to neutral, hold flat at the final
+            # angle (0 deg) with zero velocity for ``pre_hold_s`` so the trial does not end abruptly
+            # the instant motion stops. Mirrors the dynamic protocol's post-motion hold (waitafter)
+            # and matches the isovelocity start hold (pre_hold), so each trial is symmetric. Only the
+            # trial-ending segment returns to neutral (post_baseline_s > 0); intermediate
+            # bilateral-mirror sub-segments (post_baseline_s == 0) get no spurious hold.
+            end_hold_s = max(0.0, float(pre_hold_s))
+            if end_hold_s > 0:
+                hold_ang = float(angle[-1])
+                n_hold = max(2, int(round(end_hold_s * float(daq_hz))) + 1)
+                t_hold = float(t[-1]) + np.linspace(0.0, end_hold_s, n_hold)[1:]
+                if t_hold.size < 1:
+                    t_hold = np.array([float(t[-1]) + end_hold_s])
+                a_hold = np.full(t_hold.size, hold_ang)
+                w_hold = np.zeros(t_hold.size)
+                t = np.concatenate([t, t_hold])
+                angle = np.concatenate([angle, a_hold])
+                anglevel = np.concatenate([anglevel, w_hold])
         t_post0 = t_seg_end
         t_post1 = t_seg_end + post_b
         t_stim0 = t_iso0 + float(stim_onset_s)

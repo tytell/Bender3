@@ -335,14 +335,21 @@ def _iso_block_kw(**over):
 
 def test_isovelocity_one_block_post_baseline_extends_and_returns_to_neutral(b):
     post_b = 0.5
+    pre_hold_s = 0.3  # end-of-trial buffer mirrors the start hold (pre_hold_s)
     d = b._isovelocity_one_block(0.0, 30.0, post_baseline_s=post_b, **_iso_block_kw())
     seg_end = d['t_iso0'] + 0.2
-    # Post-baseline window is reported and lengthens the timeline by ~post_b.
+    # Post-baseline window metadata still describes only the return-to-neutral ramp.
     assert d['t_post0'] == pytest.approx(seg_end, abs=1e-6)
     assert d['t_post1'] == pytest.approx(seg_end + post_b, abs=1e-6)
-    assert d['t'][-1] == pytest.approx(seg_end + post_b, abs=1e-2)
-    # Motor returns to neutral (0 deg) at the end of the post-baseline ramp.
+    # Timeline now also includes a flat end-of-trial hold (pre_hold_s) after the return ramp.
+    assert d['t'][-1] == pytest.approx(seg_end + post_b + pre_hold_s, abs=1e-2)
+    # Motor returns to neutral (0 deg) and holds there (zero velocity) through the end buffer.
     assert d['angle'][-1] == pytest.approx(0.0, abs=1e-6)
+    t = np.asarray(d['t']); av = np.asarray(d['anglevel']); ang = np.asarray(d['angle'])
+    end_mask = t >= (seg_end + post_b + 1e-9)
+    assert end_mask.any()
+    assert np.allclose(av[end_mask], 0.0, atol=1e-9)
+    assert np.allclose(ang[end_mask], 0.0, atol=1e-6)
 
 
 def test_isovelocity_one_block_zero_post_baseline_no_extension(b):
