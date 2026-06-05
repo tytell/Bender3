@@ -885,6 +885,10 @@ _AUTOSAVE_EXCLUDE_KEYS = {
     'gui_setup_confirmed',
     'gui_measurements_confirmed',
     'gui_protocol_confirmed',
+    # Manual filename override is intentionally session-only: it must default to unchecked
+    # on every launch, so it (and its seed-tracking flag) are never persisted/restored.
+    'gui_override_autoname',
+    'gui_override_autoname_seeded',
     # Action button keys cannot be assigned via session_state.
     'gui_nav_home_stepwise',
     'gui_nav_home_main',
@@ -2690,7 +2694,13 @@ def _compose_output_h5_path() -> str:
     """
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
     specimen = str(st.session_state.get('gui_specimen_id') or '').strip()
-    if specimen:
+    override = bool(st.session_state.get('gui_override_autoname'))
+    if override:
+        # Manual override: use the entered name verbatim — no basename, no `.h5` appending.
+        fn = str(st.session_state.get('gui_data_filename') or '').strip()
+        if not fn:
+            return ''
+    elif specimen:
         fn = _standard_filename_stem(_current_protocol_token()) + '.h5'
     else:
         fn = str(st.session_state.get('gui_data_filename') or '').strip()
@@ -2704,6 +2714,20 @@ def _compose_output_h5_path() -> str:
     if folder:
         return os.path.normpath(os.path.join(folder, fn))
     return os.path.normpath(fn)
+
+
+def _autoname_basename() -> str:
+    """Auto-generated `.h5` basename for the next save (ignores any manual override).
+
+    Mirrors the auto-name branches of :func:`_compose_output_h5_path`: with a specimen ID
+    set this is ``YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5``; otherwise it is the
+    current manual ``gui_data_filename`` value. Used to pre-populate the editable field as a
+    starting point when the user enables the override.
+    """
+    specimen = str(st.session_state.get('gui_specimen_id') or '').strip()
+    if specimen:
+        return _standard_filename_stem(_current_protocol_token()) + '.h5'
+    return str(st.session_state.get('gui_data_filename') or '').strip()
 
 
 def _normalize_data_filename_field() -> None:
@@ -7327,7 +7351,24 @@ def main():
                 elif _preview_folder:
                     st.caption(f'Save path: `{_preview_folder}`')
             with fn_col:
-                _auto_named = bool(str(st.session_state.get('gui_specimen_id') or '').strip())
+                if 'gui_override_autoname' not in st.session_state:
+                    st.session_state['gui_override_autoname'] = False
+                st.checkbox(
+                    'Override auto-name',
+                    key='gui_override_autoname',
+                    help='Type a custom file name. The name is used exactly as entered — no '
+                    'date/NN/protocol formatting and no `.h5` appended.',
+                )
+                _override = bool(st.session_state.get('gui_override_autoname'))
+                # Seed the editable field with the current auto-name the first time override is
+                # enabled, then leave it alone so the user can edit freely.
+                if _override:
+                    if not st.session_state.get('gui_override_autoname_seeded'):
+                        st.session_state['gui_data_filename'] = _autoname_basename()
+                        st.session_state['gui_override_autoname_seeded'] = True
+                else:
+                    st.session_state['gui_override_autoname_seeded'] = False
+                _auto_named = bool(str(st.session_state.get('gui_specimen_id') or '').strip()) and not _override
                 st.text_input(
                     ' ',
                     key='gui_data_filename',
@@ -7341,6 +7382,8 @@ def main():
                         'Auto-named: `YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5` '
                         '(NN increments per acquisition this session).'
                     )
+                elif _override:
+                    st.caption('Manual override: file name used exactly as typed.')
             full_out = _compose_output_h5_path()
             if full_out:
                 # Show "selected" state immediately; committing to the in-memory experiment still requires "Apply setup".
