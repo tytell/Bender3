@@ -7651,68 +7651,71 @@ def main():
                         'and **cross-section width** from **section 4** (same as clamp spacing `dclamp`). '
                         'Those values are copied when you use **Apply** in **section 4** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
                     )
-                    st.markdown('**Required**')
-                    for key in schema['isometric_required']:
-                        if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
-                            continue
-                        label = key.replace('_', ' ')
-                        updates[key] = _render_field(
-                            b,
-                            key,
-                            'float' if 'steps' not in key else 'int',
-                            label,
-                            help_text=ISOMETRIC_FIELD_HELP.get(key),
-                        )
-                    if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
-                        updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
-                    updates['randomize_step_order'] = _render_randomize_step_order_field(b)
-                    for key in schema['isometric_optional']:
-                        if key == 'randomize_step_order':
-                            pass  # already rendered immediately after step size fields above
-                        elif key == 'isometric_stim_params':
-                            st.markdown('**Stimulation**')
-                            assembled = _render_isometric_stim_fields(b)
-                            updates[key] = assembled
-                        elif key == 'isometric_mode':
-                            modes = list(ALL_AMPS_MODE_OPTIONS)
-                            skm = _widget_key('isometric_mode')
-                            cur_m = str(_get_session_value(b, key, 'strain'))
-                            if skm not in st.session_state:
-                                st.session_state[skm] = cur_m if cur_m in modes else 'strain'
-                            updates[key] = st.selectbox(
-                                'Isometric mode (units for initial/final)',
-                                modes,
-                                key=skm,
-                                format_func=_format_strain_or_amp_mode,
-                                help=ISOMETRIC_FIELD_HELP.get(key),
-                            )
-                        elif key == 'rest_between_steps_s':
-                            updates[key] = _render_rest_between_steps_field(b)
-                        elif key == 'reset_between_steps':
-                            updates[key] = _render_reset_between_steps_field(b)
-                        elif 'random_seed' in key:
-                            sks = _widget_key(key)
-                            if sks not in st.session_state:
-                                v0 = _get_session_value(b, key)
-                                st.session_state[sks] = '' if v0 is None else str(v0)
-                            s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
-                            if not str(s).strip():
-                                updates[key] = None
-                            else:
-                                try:
-                                    updates[key] = int(s)
-                                except ValueError:
-                                    _st_error_actions(
-                                        'Random seed invalid.',
-                                        ['Use whole number only', 'Or leave field blank'],
-                                    )
-                                    updates[key] = None
-                        else:
-                            kind = 'bool' if 'randomize' in key else 'str'
-                            lbl = key.replace('_', ' ')
+                    mcol, scol = st.columns([1.35, 1.0], gap='large')
+                    with mcol:
+                        st.markdown('**Required**')
+                        for key in schema['isometric_required']:
+                            if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
+                                continue
+                            label = key.replace('_', ' ')
                             updates[key] = _render_field(
-                                b, key, kind, lbl, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                                b,
+                                key,
+                                'float' if 'steps' not in key else 'int',
+                                label,
+                                help_text=ISOMETRIC_FIELD_HELP.get(key),
                             )
+                        if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
+                            updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
+                        updates['randomize_step_order'] = _render_randomize_step_order_field(b)
+                        for key in schema['isometric_optional']:
+                            if key == 'randomize_step_order':
+                                pass  # already rendered immediately after step size fields above
+                            elif key == 'isometric_stim_params':
+                                continue  # rendered in the Stimulation column (scol)
+                            elif key == 'isometric_mode':
+                                modes = list(ALL_AMPS_MODE_OPTIONS)
+                                skm = _widget_key('isometric_mode')
+                                cur_m = str(_get_session_value(b, key, 'strain'))
+                                if skm not in st.session_state:
+                                    st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                                updates[key] = st.selectbox(
+                                    'Isometric mode (units for initial/final)',
+                                    modes,
+                                    key=skm,
+                                    format_func=_format_strain_or_amp_mode,
+                                    help=ISOMETRIC_FIELD_HELP.get(key),
+                                )
+                            elif key == 'rest_between_steps_s':
+                                updates[key] = _render_rest_between_steps_field(b)
+                            elif key == 'reset_between_steps':
+                                updates[key] = _render_reset_between_steps_field(b)
+                            elif 'random_seed' in key:
+                                sks = _widget_key(key)
+                                if sks not in st.session_state:
+                                    v0 = _get_session_value(b, key)
+                                    st.session_state[sks] = '' if v0 is None else str(v0)
+                                s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
+                                if not str(s).strip():
+                                    updates[key] = None
+                                else:
+                                    try:
+                                        updates[key] = int(s)
+                                    except ValueError:
+                                        _st_error_actions(
+                                            'Random seed invalid.',
+                                            ['Use whole number only', 'Or leave field blank'],
+                                        )
+                                        updates[key] = None
+                            else:
+                                kind = 'bool' if 'randomize' in key else 'str'
+                                lbl = key.replace('_', ' ')
+                                updates[key] = _render_field(
+                                    b, key, kind, lbl, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                                )
+                    with scol:
+                        st.markdown('**Stimulation**')
+                        updates['isometric_stim_params'] = _render_isometric_stim_fields(b)
                     with st.container(border=True):
                         st.markdown('**Block sequence**')
                         _block_up = _render_block_sequence_fields(b)
@@ -7720,81 +7723,84 @@ def main():
                             updates.update(_block_up)
 
                 elif tt == 'isovelocity':
-                    st.markdown('**Required**')
-                    for key in schema['isovelocity_required']:
-                        if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
-                            continue
-                        if key == 'isovelocity_starting_strain_mode':
-                            modes = list(ALL_AMPS_MODE_OPTIONS)
-                            skm = _widget_key('isovelocity_starting_strain_mode')
-                            cur_m = str(_get_session_value(b, key, 'strain'))
-                            if skm not in st.session_state:
-                                st.session_state[skm] = cur_m if cur_m in modes else 'strain'
-                            updates[key] = st.selectbox(
-                                ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for starting posture'),
-                                modes,
-                                key=skm,
-                                format_func=_format_strain_or_amp_mode,
-                                help=ISOVELOCITY_FIELD_HELP.get(key),
-                            )
-                        elif key == 'isovelocity_velocity_mode':
-                            vmodes = list(VELOCITY_MODE_OPTIONS)
-                            skv = _widget_key('isovelocity_velocity_mode')
-                            cur_v = str(_get_session_value(b, key, 'angle_vel'))
-                            if skv not in st.session_state:
-                                st.session_state[skv] = cur_v if cur_v in vmodes else 'angle_vel'
-                            updates[key] = st.selectbox(
-                                ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for min/max velocity'),
-                                vmodes,
-                                key=skv,
-                                format_func=_format_velocity_mode,
-                                help=ISOVELOCITY_FIELD_HELP.get(key),
-                            )
-                        else:
-                            kind = 'int' if 'num_steps' in key else 'float'
-                            lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                            updates[key] = _render_field(
-                                b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                            )
-                    if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
-                        updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
-                    st.markdown('**Optional**')
-                    for key in schema['isovelocity_optional']:
-                        if key == 'isovelocity_stim_params':
-                            st.markdown('**Stimulation**')
-                            assembled = _render_isovelocity_stim_fields(b)
-                            updates[key] = assembled
-                        elif key == 'isovelocity_velocity_mode':
-                            pass  # required-only; rendered in Required section
-                        elif key == 'rest_between_steps_s':
-                            updates[key] = _render_rest_between_steps_field(b)
-                        elif key == 'reset_between_steps':
-                            updates[key] = _render_reset_between_steps_field(b)
-                        elif key == 'randomize_step_order':
-                            updates[key] = _render_randomize_step_order_field(b)
-                        elif 'random_seed' in key:
-                            sks = _widget_key(key)
-                            if sks not in st.session_state:
-                                v0 = _get_session_value(b, key)
-                                st.session_state[sks] = '' if v0 is None else str(v0)
-                            s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
-                            if not str(s).strip():
-                                updates[key] = None
+                    mcol, scol = st.columns([1.35, 1.0], gap='large')
+                    with mcol:
+                        st.markdown('**Required**')
+                        for key in schema['isovelocity_required']:
+                            if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
+                                continue
+                            if key == 'isovelocity_starting_strain_mode':
+                                modes = list(ALL_AMPS_MODE_OPTIONS)
+                                skm = _widget_key('isovelocity_starting_strain_mode')
+                                cur_m = str(_get_session_value(b, key, 'strain'))
+                                if skm not in st.session_state:
+                                    st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                                updates[key] = st.selectbox(
+                                    ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for starting posture'),
+                                    modes,
+                                    key=skm,
+                                    format_func=_format_strain_or_amp_mode,
+                                    help=ISOVELOCITY_FIELD_HELP.get(key),
+                                )
+                            elif key == 'isovelocity_velocity_mode':
+                                vmodes = list(VELOCITY_MODE_OPTIONS)
+                                skv = _widget_key('isovelocity_velocity_mode')
+                                cur_v = str(_get_session_value(b, key, 'angle_vel'))
+                                if skv not in st.session_state:
+                                    st.session_state[skv] = cur_v if cur_v in vmodes else 'angle_vel'
+                                updates[key] = st.selectbox(
+                                    ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for min/max velocity'),
+                                    vmodes,
+                                    key=skv,
+                                    format_func=_format_velocity_mode,
+                                    help=ISOVELOCITY_FIELD_HELP.get(key),
+                                )
                             else:
-                                try:
-                                    updates[key] = int(s)
-                                except ValueError:
-                                    _st_error_actions(
-                                        'Random seed invalid.',
-                                        ['Use whole number only', 'Or leave field blank'],
-                                    )
+                                kind = 'int' if 'num_steps' in key else 'float'
+                                lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                                updates[key] = _render_field(
+                                    b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                                )
+                        if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
+                            updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
+                        st.markdown('**Optional**')
+                        for key in schema['isovelocity_optional']:
+                            if key == 'isovelocity_stim_params':
+                                continue  # rendered in the Stimulation column (scol)
+                            elif key == 'isovelocity_velocity_mode':
+                                pass  # required-only; rendered in Required section
+                            elif key == 'rest_between_steps_s':
+                                updates[key] = _render_rest_between_steps_field(b)
+                            elif key == 'reset_between_steps':
+                                updates[key] = _render_reset_between_steps_field(b)
+                            elif key == 'randomize_step_order':
+                                updates[key] = _render_randomize_step_order_field(b)
+                            elif 'random_seed' in key:
+                                sks = _widget_key(key)
+                                if sks not in st.session_state:
+                                    v0 = _get_session_value(b, key)
+                                    st.session_state[sks] = '' if v0 is None else str(v0)
+                                s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
+                                if not str(s).strip():
                                     updates[key] = None
-                        else:
-                            kind = 'bool' if 'randomize' in key else 'float'
-                            lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                            updates[key] = _render_field(
-                                b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                            )
+                                else:
+                                    try:
+                                        updates[key] = int(s)
+                                    except ValueError:
+                                        _st_error_actions(
+                                            'Random seed invalid.',
+                                            ['Use whole number only', 'Or leave field blank'],
+                                        )
+                                        updates[key] = None
+                            else:
+                                kind = 'bool' if 'randomize' in key else 'float'
+                                lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                                updates[key] = _render_field(
+                                    b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                                )
+                    with scol:
+                        st.markdown('**Stimulation**')
+                        updates['isovelocity_stim_params'] = _render_isovelocity_stim_fields(b)
                     with st.container(border=True):
                         st.markdown('**Block sequence**')
                         _block_up = _render_block_sequence_fields(b)
