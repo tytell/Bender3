@@ -67,3 +67,48 @@ def test_raw_mod_for_hardware_config_load_prefers_file_path(tmp_path, monkeypatc
     st.session_state['gui_load_cfg_file_path'] = str(cfg)
 
     assert gui._raw_mod_for_hardware_config_load(module_stem='external_cfg') == os.path.normpath(str(cfg))
+
+
+def test_edit_loaded_config_and_save_new_persists_change(tmp_path, monkeypatch):
+    """Unified config editor flow: load a config, edit one field, save to a NEW module, reload it,
+    and confirm the edited value persisted (and inherited fields are unchanged)."""
+    import importlib
+
+    import bender_config_builder as cb
+
+    # A standalone base config the editor "loads" and seeds from.
+    base = tmp_path / 'base_cfg.py'
+    base.write_text(
+        'device_name = "Dev1"\n'
+        'waitbefore = 3.0\n'
+        'waitafter = 4.0\n'
+        'sono_distance = ""\n'
+        # Channel lists referenced by the generated config tail (input_channels rebuild).
+        'SG_chan = ["ai0", "ai1"]\n'
+        'SG_name = ["xForce", "yForce"]\n'
+        'use_sono = False\n'
+        'sono_channel = []\n'
+        'sono_name = []\n'
+        'stim_monitor_chan = []\n'
+        'stim_monitor_name = []\n',
+        encoding='utf-8',
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+
+    # Seed (load) defaults from the base, then edit one field as the GUI would.
+    d = cb.read_base_defaults('base_cfg')
+    assert d['waitbefore'] == 3.0
+    edited = {'waitbefore': 9.5, 'sono_distance': '12.5,14.2', 'waitafter': d['waitafter']}
+
+    # Save to a NEW module that inherits from the base via ``import *`` and overrides edits.
+    src = cb.render_generated_config('base_cfg', edited)
+    new_mod = tmp_path / 'edited_cfg.py'
+    new_mod.write_text(src, encoding='utf-8')
+    importlib.invalidate_caches()
+
+    reloaded = importlib.import_module('edited_cfg')
+    assert reloaded.waitbefore == 9.5  # edited value persisted
+    assert reloaded.sono_distance == '12.5,14.2'  # edited value persisted
+    assert reloaded.waitafter == 4.0  # inherited from base, unchanged
+    assert reloaded.device_name == 'Dev1'  # inherited from base via import *

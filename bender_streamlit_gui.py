@@ -854,35 +854,6 @@ def _load_save_button(
         )
 
 
-def _hardware_configuration_mode_toggle() -> str:
-    """Two-action setup: load existing config or switch to build new."""
-    st.session_state.setdefault('gui_config_setup_mode', 'Load existing')
-    mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
-    if mode not in ('Load existing', 'Build new'):
-        mode = 'Load existing'
-        st.session_state['gui_config_setup_mode'] = mode
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button(
-            'Load existing',
-            key='gui_hw_cfg_mode_load_existing',
-            use_container_width=True,
-            type='primary' if mode == 'Load existing' else 'secondary',
-        ):
-            st.session_state['gui_config_setup_mode'] = 'Load existing'
-            st.rerun()
-    with c2:
-        if st.button(
-            'Build new',
-            key='gui_hw_cfg_mode_build',
-            use_container_width=True,
-            type='primary' if mode == 'Build new' else 'secondary',
-        ):
-            st.session_state['gui_config_setup_mode'] = 'Build new'
-            st.rerun()
-    return str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
-
-
 def _shared_experiment_dir() -> str:
     """Protocol & morphometrics JSON files use the same folder as **Data folder** (section 2) when it exists."""
     d = str(st.session_state.get('gui_data_folder') or '').strip()
@@ -987,7 +958,6 @@ def _is_restore_safe_key(key: str) -> bool:
             or key.startswith('morpho_btn_')
             or key.startswith('gui_nav_')
             or key.startswith('gui_sw_')
-            or key.startswith('gui_hw_cfg_mode_')
             or key.startswith('gui_recovery_')
             or key.startswith('gui_kill_')
             or 'upload' in key
@@ -3244,8 +3214,9 @@ def _setup_ready(b: Optional[Bender]) -> bool:
     _cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
     if not _cfg_sel:
         return False
-    _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
-    if _cfg_mode == 'Load existing' and not _selected_config_matches_bender(b, _cfg_sel):
+    # Unified config section: the loaded/saved config always sets ``gui_load_cfg_select`` to match
+    # the in-memory experiment, so readiness requires the selection to match the loaded bender.
+    if not _selected_config_matches_bender(b, _cfg_sel):
         return False
     return True
 
@@ -6751,6 +6722,10 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                 else:
                     st.session_state['gui_load_cfg_select'] = eff
                     st.session_state['gui_pending_load_cfg_file_path'] = norm_cfg_path
+                    # Unified config editor: seed the editable fields from the just-loaded config so
+                    # the user can edit and save it as a new file (re-seed by clearing the guard).
+                    st.session_state['gui_pending_cfg_build_base'] = eff
+                    st.session_state.pop('gui_cfg_build_seeded_for', None)
                     st.success(f'Loaded `{eff}`')
                     st.rerun()
 
@@ -6926,8 +6901,10 @@ def main():
         _setup_left, _setup_right = st.columns(2, gap='large')
 
     def _apply_setup_action(*, sw_dp: bool) -> None:
-        _cfg_mode = str(st.session_state.get('gui_config_setup_mode', 'Load existing'))
-        if _cfg_mode == 'Load existing':
+        # Unified config section: a config is always loaded/saved via the loader or Save action, so
+        # Apply re-loads the selected module if it differs from the in-memory experiment, then
+        # commits the data path. (No separate Load/Build modes.)
+        if True:
             _ensure_hw_config_session_defaults()
             eff = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
             if not eff:
@@ -6986,21 +6963,6 @@ def main():
             st.rerun()
             return
 
-        if st.session_state.get('bender') is None:
-            _st_error_actions('Setup apply blocked.', ['Load or build hardware config first'])
-            return
-        perr = _sec1_apply_composed_path_to_bender()
-        if perr:
-            _st_error_detail(
-                'Data path not applied.',
-                ['Fix folder name', 'Fix file name'],
-                perr,
-            )
-        else:
-            st.toast('Data file path set.' if sw_dp else 'Data file path applied.')
-            st.session_state['gui_setup_confirmed'] = True
-            st.rerun()
-
     if _show_hw:
         _hw_host = _setup_left if _setup_left is not None else st
         _hw_host.subheader('1 · Hardware configuration')
@@ -7009,15 +6971,31 @@ def main():
             if _default_pick not in _cfg_mods:
                 _default_pick = _cfg_mods[0]
             st.session_state.setdefault('gui_load_cfg_select', _default_pick)
-            st.session_state.setdefault('gui_cfg_build_base', _cfg_mods[0])
+            # Editable fields seed from the loaded config (its import base) so a loaded config can be
+            # edited and saved as a new file; "Build new config" below re-seeds from a template.
+            st.session_state.setdefault('gui_cfg_build_base', _default_pick or _cfg_mods[0])
             st.session_state.setdefault('gui_cfg_build_out', '')
             st.session_state.setdefault('gui_cfg_build_overwrite', False)
 
-            mode = _hardware_configuration_mode_toggle()
-
-            if mode == 'Load existing':
-                _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
-            else:
+            # Unified config section: load an existing config into the editable fields, edit any
+            # field, then save it as a NEW file. There is no separate Load/Build mode.
+            _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
+            st.divider()
+            st.caption(
+                'Edit any field below, then **Write config file and load** to save a NEW config '
+                'file (the loaded config is never overwritten unless you reuse its name and confirm). '
+                'Use **Build new config** to reset the fields to template defaults.'
+            )
+            if st.button(
+                'Build new config (clear fields)',
+                key='gui_btn_cfg_build_new_clear',
+                help='Reset the fields below to template defaults to start a fresh config.',
+            ):
+                st.session_state['gui_pending_cfg_build_base'] = _cfg_mods[0]
+                st.session_state.pop('gui_cfg_build_seeded_for', None)
+                st.session_state['gui_cfg_build_out'] = ''
+                st.rerun()
+            if True:
                 _flush_pending_cfg_build_base()
                 _maybe_seed_cfg_build_fields()
                 c_top_l, c_top_r = st.columns(2, gap='large')
@@ -7028,10 +7006,14 @@ def main():
                         st.session_state['gui_cfg_build_base_path'] = _base_path if _base_path and os.path.isfile(_base_path) else ''
                     _base_cfg_path = str(
                         st.text_input(
-                            'Start from template (base module for import *)',
+                            'Base config to inherit from (saved file does `import *` from this)',
                             key='gui_cfg_build_base_path',
                             placeholder='Paste full path to a base config .py file',
-                            help='Other settings from the template stay unless you override them below.',
+                            help=(
+                                'The saved config inherits all fields from this base via `import *`, '
+                                'then overrides the values you edit below. Defaults to the loaded config; '
+                                'changing it re-seeds the fields from that base.'
+                            ),
                         )
                         or ''
                     ).strip()
@@ -7283,6 +7265,10 @@ def main():
                                         )
                                     else:
                                         st.session_state['gui_load_cfg_select'] = out_stem
+                                        # The saved file is now the loaded config; point the import
+                                        # base at it so subsequent edits inherit from it (fields
+                                        # re-seed from the just-written file, i.e. the same values).
+                                        st.session_state['gui_pending_cfg_build_base'] = out_stem
                                         st.success(f'Wrote and loaded `{out_stem}`')
                                         st.rerun()
 
