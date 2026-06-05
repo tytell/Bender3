@@ -1396,7 +1396,10 @@ class Bender:
 
         period_by_cycle = 1.0 / freq_by_cycle
 
-        if np.any(np.array(stim_cycles_in_step) >= cycles_per_step):
+        # Only validate stim-cycle indices when stimulation is enabled. With stim off, the
+        # preview should render from passive cycles alone; stim_cycles_in_step is irrelevant
+        # (is_stim_cycle / stimburstdur below handle out-of-range indices harmlessly).
+        if getattr(self, 'is_stim', False) and np.any(np.array(stim_cycles_in_step) >= cycles_per_step):
             raise IndexError("stim_cycles_in_step have to be less than cycles_in_step")
 
         c = np.arange(0, cycles_per_step)
