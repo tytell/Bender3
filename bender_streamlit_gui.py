@@ -7669,16 +7669,6 @@ def main():
                         '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
                     ),
                 )
-                if 'morpho_clamp_plate_extension' not in st.session_state:
-                    st.session_state['morpho_clamp_plate_extension'] = 0.0
-                st.number_input(
-                    'Inter-clamp span (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_clamp_plate_extension',
-                    help=MORPHO_CLAMP_PLATE_EXTENSION_FIELD_HELP,
-                )
-
                 st.divider()
                 st.markdown('**Mounted body profile (inertial model)**')
                 st.selectbox(
@@ -7739,6 +7729,21 @@ def main():
                             'Enter positive values.'
                         ),
                     )
+                st.divider()
+                st.markdown('**Apparatus calibration**')
+                st.caption(
+                    'Both values are needed together for empty-apparatus inertial calibration. '
+                    'Measure and record for every trial.'
+                )
+                if 'morpho_clamp_plate_extension' not in st.session_state:
+                    st.session_state['morpho_clamp_plate_extension'] = 0.0
+                st.number_input(
+                    'Inter-clamp span (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='morpho_clamp_plate_extension',
+                    help=MORPHO_CLAMP_PLATE_EXTENSION_FIELD_HELP,
+                )
                 if 'morpho_prof_clamp' not in st.session_state:
                     st.session_state['morpho_prof_clamp'] = 0.0
                 st.number_input(
