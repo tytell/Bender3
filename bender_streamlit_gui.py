@@ -7441,13 +7441,6 @@ def main():
         if _morpho_apply_dirty():
             _soft_apply_reminder()
 
-        with st.expander('About the measurements', expanded=False):
-            st.markdown(
-                '- Use this section to set specimen identity, morphometrics, experimental conditions, clamp geometry, and profile/inertial settings.\n'
-                '- **Apply specimen** commits identity, morphometrics, and session conditions; **Apply clamp geometry & inertial correction** commits clamp geometry, profile, and the inertial flag.\n'
-                '- Morphometrics templates are separate from protocol templates.'
-            )
-
         if bf := st.session_state.pop('gui_morphometrics_load_feedback', None):
             ok_bf, txt_bf = bf
             if ok_bf:
