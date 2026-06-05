@@ -1223,7 +1223,7 @@ def _render_recovery_status_ui() -> None:
             st.success(msg)
         # Recovery is preserved here as a status banner; the single start-fresh / save-progress
         # control lives in the setup "Start fresh / save progress" panel (no duplicate button).
-        c1, c2 = st.columns(2, gap='small')
+        c1 = c2 = st.container()
         with c1:
             with st.expander('Recovery details', expanded=False):
                 info = dict(st.session_state.get('gui_recovery_summary') or {})
@@ -1666,7 +1666,7 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
     )
     blocks = []
     for i in range(count):
-        c1, c2 = st.columns(2)
+        c1 = c2 = st.container()
         with c1:
             direction = st.selectbox(
                 f'Block {i + 1} — bend direction',
@@ -3570,7 +3570,7 @@ def _render_acquired_trial_review(b: Bender) -> None:
         st.caption('Raw torque shown; inertia-corrected torque appears when available.')
     except Exception as rev_exc:
         st.warning(f'Could not build review plot: {type(rev_exc).__name__}: {rev_exc}')
-    keep_col, del_col = st.columns(2)
+    keep_col = del_col = st.container()
     with keep_col:
         if st.button('Keep data', key='gui_review_keep', type='primary', use_container_width=True):
             st.session_state['gui_review_pending'] = False
@@ -4302,7 +4302,7 @@ def _render_pending_morpho_nav_warning(origin: str) -> None:
     )
     st.caption('- Apply specimen')
     st.caption('- Apply clamp geometry & inertial correction (or Apply all morphometrics)')
-    _w1, _w2 = st.columns(2, gap='small')
+    _w1 = _w2 = st.container()
     with _w1:
         if st.button('Switch anyway', key=f'gui_morpho_nav_switch_anyway_{origin}', type='primary', use_container_width=True):
             _apply_route_switch(target_route=_target, stepwise_step=_step, clear_stepwise=_clear_step)
@@ -6480,7 +6480,7 @@ def _render_data_folder_dropdown(*, key_suffix: str) -> None:
         on_change=_on_folder_text_change,
         help=(
             'Paste a folder path. The full HDF5 path is **folder + file name** '
-            'in the next column. Native **Browse…** may not work on remote desktops or hosted Streamlit.'
+            'shown below. Native **Browse…** may not work on remote desktops or hosted Streamlit.'
         ),
     )
     folder_path = str(folder_path or '').strip()
@@ -6544,7 +6544,7 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
     if 'gui_load_cfg_file_path' not in st.session_state:
         st.session_state['gui_load_cfg_file_path'] = _sel_path if _sel and os.path.isfile(_sel_path) else ''
 
-    _path_col, _load_col = st.columns([5, 1])
+    _path_col = _load_col = st.container()
     with _path_col:
         cfg_path = str(
             st.text_input(
@@ -6716,7 +6716,7 @@ def main():
             st.session_state['gui_setup_actions_show'] = not bool(st.session_state.get('gui_setup_actions_show', False))
         if st.session_state.get('gui_setup_actions_show'):
             st.caption('Choose what to do with your current form state before starting over.')
-            _a_save, _a_home = st.columns(2, gap='small')
+            _a_save = _a_home = st.container()
             with _a_save:
                 if st.button('Save progress snapshot', key='gui_save_progress_snapshot', use_container_width=True):
                     ok, msg = _save_progress_snapshot()
@@ -6775,7 +6775,9 @@ def main():
     _show_data = _show_data_path_section()
     _setup_left = _setup_right = None
     if _show_hw and _show_data:
-        _setup_left, _setup_right = st.columns(2, gap='large')
+        # Single-column vertical: §1 Hardware config renders first, then §2 Data file path
+        # below it (one shared full-width container) for clean top-to-bottom tab order.
+        _setup_left = _setup_right = st.container()
 
     def _apply_setup_action(*, sw_dp: bool) -> None:
         # Unified config section: a config is always loaded/saved via the loader or Save action, so
@@ -6877,7 +6879,7 @@ def main():
                     placeholder='e.g. lab_setup_2026',
                     help='Writes a new `.py` file in this folder and loads it.',
                 )
-                c_cfg_l, c_cfg_r = st.columns(2, gap='large')
+                c_cfg_l = c_cfg_r = st.container()
                 with c_cfg_l:
                     with st.expander('Calibration, direction & axis labels', expanded=False):
                         st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
@@ -7124,7 +7126,7 @@ def main():
         _data_host.subheader('2 · Data file path')
         _sw_dp = _stepwise_on_data_file_path_step()
         with _data_host.container(border=True):
-            df_col, fn_col = st.columns(2)
+            df_col = fn_col = st.container()
             with df_col:
                 _render_data_folder_dropdown(key_suffix='main')
                 _preview_out = _compose_output_h5_path().strip()
@@ -7319,7 +7321,7 @@ def main():
             # Section 3 (Specimen): identity + morphometrics + session temperature + prep condition.
             # One Apply commits only these fields (per 4-section model, ux_spec §2.1/§3).
             with st.form('morpho_form_specimen', clear_on_submit=False):
-                id1, id2 = st.columns(2)
+                id1 = id2 = st.container()
                 with id1:
                     st.text_input(
                         'Genus-species',
@@ -7879,7 +7881,7 @@ def main():
                     if 'gui_protocol_overwrite' not in st.session_state:
                         st.session_state['gui_protocol_overwrite'] = False
                     st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
-                    _pc1, _pc2 = st.columns(2)
+                    _pc1 = _pc2 = st.container()
                     with _pc1:
                         sub_proc_apply = st.form_submit_button(
                             'Apply procedure',
@@ -8460,7 +8462,7 @@ def main():
             _warns = list(st.session_state.get('gui_run_soft_warnings') or [])
             if _warns:
                 st.warning('\n'.join([f'- {w}' for w in _warns]))
-            c_go, c_stop = st.columns(2)
+            c_go = c_stop = st.container()
             with c_go:
                 if st.button(
                     'Proceed',
@@ -8515,7 +8517,7 @@ def main():
                 qc_base = _qc_figure_base_path(b, sel_h5, qix)
                 return save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
 
-            e1, e2 = st.columns(2)
+            e1 = e2 = st.container()
             with e1:
                 if _load_save_button('Only save Data File (.h5)', key='gui_save_h5_only', button_type='secondary'):
                     try:
@@ -8605,7 +8607,7 @@ def main():
                     if not summ['ok']:
                         st.warning(summ.get('error') or 'Could not read this HDF5 file.')
                     else:
-                        m1, m2, m3, m4 = st.columns(4)
+                        m1 = m2 = m3 = m4 = st.container()
                         with m1:
                             st.metric('test_type (file)', summ['test_type'] or '—')
                         with m2:
@@ -8656,7 +8658,7 @@ def main():
                                 )
                                 for p in range(int(n_panel)):
                                     st.markdown(f'**Panel {p + 1}**')
-                                    cxa, cya = st.columns(2)
+                                    cxa = cya = st.container()
                                     with cxa:
                                         st.selectbox(
                                             'X (time, angle, stim, …)',
