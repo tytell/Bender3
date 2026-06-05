@@ -1877,7 +1877,7 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
     post_baseline_sk = _widget_key('isovelocity_post_baseline_s')
     post_baseline = float(
         st.number_input(
-            'Post-stim baseline (s)',
+            'Post-ramp reset duration (s)',
             key=post_baseline_sk,
             format='%.6g',
             min_value=0.0,
@@ -3495,8 +3495,8 @@ def _collect_check_tuples(b: Bender) -> list[tuple[str, str]]:
             out.append((_CHK_SEC_MORPHO, f'Segment center distance: {v_dbend:g} mm (check units).'))
 
     for label, key in (
-        ('Vertical offset (dvert)', 'morpho_dvert'),
-        ('Horizontal offset (dhoriz)', 'morpho_dhoriz'),
+        ('Vertical specimen offset', 'morpho_dvert'),
+        ('Horizontal specimen offset', 'morpho_dhoriz'),
     ):
         v = _session_float(key)
         if v is None:
@@ -7627,17 +7627,17 @@ def main():
                 if 'morpho_dbend' not in st.session_state:
                     st.session_state['morpho_dbend'] = 0.0
                 st.number_input(
-                    'Along-body distance to center of clamped test segment (mm)',
+                    'Test section position (mm)',
                     min_value=0.0,
                     format='%.6g',
                     key='morpho_dbend',
-                    help=MORPHO_DBEND_FIELD_HELP,
+                    help='Distance from snout (or your chosen landmark) to the center of the clamped test segment.',
                 )
                 cw1, cw2 = st.columns(2)
                 with cw1:
                     if 'morpho_xsec' not in st.session_state:
                         st.session_state['morpho_xsec'] = 0.0
-                    st.number_input('Width `xsec_width` (mm)', min_value=0.001, format='%.6g', key='morpho_xsec')
+                    st.number_input('Local body width (mm)', min_value=0.001, format='%.6g', key='morpho_xsec')
                     if 'morpho_muscle_depth' not in st.session_state:
                         st.session_state['morpho_muscle_depth'] = 0.0
                     st.number_input(
@@ -7653,16 +7653,28 @@ def main():
                 with cw2:
                     if 'morpho_xsec_height' not in st.session_state:
                         st.session_state['morpho_xsec_height'] = 0.0
-                    st.number_input('Height `xsec_height` (mm)', min_value=0.001, format='%.6g', key='morpho_xsec_height')
+                    st.number_input('Local body height (mm)', min_value=0.001, format='%.6g', key='morpho_xsec_height')
                 co1, co2 = st.columns(2)
                 with co1:
                     if 'morpho_dvert' not in st.session_state:
                         st.session_state['morpho_dvert'] = 0.0
-                    st.number_input('Vertical offset `dvert` (mm)', min_value=0.0, format='%.6g', key='morpho_dvert')
+                    st.number_input(
+                        'Vertical specimen offset (mm)',
+                        min_value=0.0,
+                        format='%.6g',
+                        key='morpho_dvert',
+                        help='Vertical distance from sensor centerline to mounted specimen center.',
+                    )
                 with co2:
                     if 'morpho_dhoriz' not in st.session_state:
                         st.session_state['morpho_dhoriz'] = 0.0
-                    st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='morpho_dhoriz')
+                    st.number_input(
+                        'Horizontal specimen offset (mm)',
+                        min_value=0.0,
+                        format='%.6g',
+                        key='morpho_dhoriz',
+                        help='Horizontal distance from sensor centerline to mounted specimen center.',
+                    )
                 if 'morpho_clamp_plate_extension' not in st.session_state:
                     st.session_state['morpho_clamp_plate_extension'] = 0.0
                 st.number_input(
