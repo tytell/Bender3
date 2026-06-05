@@ -1409,6 +1409,12 @@ MORPHO_PROF_CLAMP_FIELD_HELP = (
     'Saved as `specimen_profile_clamp_offset_mm`.'
 )
 
+MORPHO_CLAMP_PLATE_EXTENSION_FIELD_HELP = (
+    'Distance between the outer faces of the clamp plates on the moving side. Measure and record for every trial — the '
+    'value must match between the specimen trial and its paired empty-apparatus calibration run for inertial correction '
+    'to be valid.'
+)
+
 
 def _resolved_morpho_prof_rho_g_per_mm3() -> float:
     """Density for profile/inertial apply: preset table value, or the custom ``morpho_prof_rho`` number input."""
@@ -3032,6 +3038,7 @@ _MORPHO_APPLY_SESSION_KEYS = (
     'morpho_geom_y',
     'morpho_geom_pos',
     'morpho_prof_clamp',
+    'morpho_clamp_plate_extension',
 )
 
 
@@ -4003,10 +4010,12 @@ def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
     b.xsec_height = float(st.session_state['morpho_xsec_height'])
     b.dvert = float(st.session_state['morpho_dvert'])
     b.dhoriz = float(st.session_state['morpho_dhoriz'])
+    b.clamp_plate_extension_mm = float(st.session_state.get('morpho_clamp_plate_extension', 0.0) or 0.0)
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['dvert'] = float(st.session_state['morpho_dvert'])
     meta['dhoriz'] = float(st.session_state['morpho_dhoriz'])
     meta['target_muscle_depth_mm'] = md
+    meta['clamp_plate_extension_mm'] = b.clamp_plate_extension_mm
     b.h5_protocol_metadata = meta
     _mark_morpho_applied()
     return True
@@ -4172,6 +4181,7 @@ def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
         'morpho_geom_y': geom_y,
         'morpho_geom_pos': geom_pos,
         'morpho_prof_clamp': float(getattr(b, 'specimen_profile_clamp_offset_mm', 20.0) or 20.0),
+        'morpho_clamp_plate_extension': float(getattr(b, 'clamp_plate_extension_mm', 0.0) or 0.0),
         'morpho_prof_rho_preset': MORPHO_DENSITY_PRESET_LABELS[0],
     }
 
@@ -7617,6 +7627,15 @@ def main():
                     if 'morpho_dhoriz' not in st.session_state:
                         st.session_state['morpho_dhoriz'] = 0.0
                     st.number_input('Horizontal offset `dhoriz` (mm)', min_value=0.0, format='%.6g', key='morpho_dhoriz')
+                if 'morpho_clamp_plate_extension' not in st.session_state:
+                    st.session_state['morpho_clamp_plate_extension'] = 0.0
+                st.number_input(
+                    'Inter-clamp span (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='morpho_clamp_plate_extension',
+                    help=MORPHO_CLAMP_PLATE_EXTENSION_FIELD_HELP,
+                )
 
                 st.divider()
                 st.markdown('**Mounted body profile (inertial model)**')
