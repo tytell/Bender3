@@ -8292,19 +8292,25 @@ def main():
                                 'Each trace is the commanded voltage for that channel.'
                             )
                             fig_st = go.Figure()
+                            # Use the dense, preview-only stim time axis when a protocol supplies one
+                            # (so short pulses are not aliased); otherwise fall back to the motion
+                            # plot's time axis. The two arrays are always length-matched per source.
+                            _stim_x = prev.get('stim_t_plot')
+                            if _stim_x is None or len(_stim_x) == 0:
+                                _stim_x = tp
                             # S1 and S2 are independent channels: draw them in distinct colors so the
                             # two AO traces are always visually separable in the preview.
                             if stim_s1_plot is not None and len(stim_s1_plot) > 0:
                                 fig_st.add_trace(
                                     go.Scatter(
-                                        x=tp, y=stim_s1_plot, mode='lines', name='S1 (left) stim (V)',
+                                        x=_stim_x, y=stim_s1_plot, mode='lines', name='S1 (left) stim (V)',
                                         line=dict(color='#0d9488', width=1.6),
                                     )
                                 )
                             if stim_s2_plot is not None and len(stim_s2_plot) > 0:
                                 fig_st.add_trace(
                                     go.Scatter(
-                                        x=tp, y=stim_s2_plot, mode='lines', name='S2 (right) stim (V)',
+                                        x=_stim_x, y=stim_s2_plot, mode='lines', name='S2 (right) stim (V)',
                                         line=dict(color='#dc2626', width=1.6),
                                     )
                                 )

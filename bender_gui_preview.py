@@ -13,6 +13,13 @@ import numpy as np
 
 PreviewResult = Dict[str, Any]
 
+# Preview-only oversampling for the on-screen stimulation trace. The motion/stim arrays are built
+# on the DAQ acquisition grid (``daq_ai_sample_rate_hz``, ~1 kHz), which is too coarse to draw a
+# short carrier pulse (e.g. 1 ms at 75 Hz) without aliasing. The stim plot is therefore redrawn on
+# this denser grid (>=10x oversampling of a 1 ms pulse). This affects ONLY the plotted preview
+# trace; it does NOT change the DAQ sample rate, channel configuration, or anything written to HDF5.
+STIM_PREVIEW_PLOT_SAMPLE_RATE_HZ = 20000.0
+
 
 def _strain_mode_caption(mode: Any) -> str:
     """Short label for preview tables: decimal ε vs percent, etc."""
@@ -193,6 +200,7 @@ def build_protocol_preview(
         'stim_s1': None,
         'stim_s2': None,
         'stim_total': None,
+        'stim_t_plot': None,
         'stim_s1_plot': None,
         'stim_s2_plot': None,
         'strain': None,
@@ -253,9 +261,14 @@ def build_protocol_preview(
                 _, out['stim_plot'] = _downsample(t, stot, max_plot_points)
                 # S1 and S2 are routed to independent AO channels at the hardware
                 # (vstack -> two ao_voltage_chan), so the preview must show them as
-                # independent traces rather than the misleading summed signal.
-                _, out['stim_s1_plot'] = _downsample(t, s1a[:n_st], max_plot_points)
-                _, out['stim_s2_plot'] = _downsample(t, s2a[:n_st], max_plot_points)
+                # independent traces rather than the misleading summed signal. If a protocol
+                # already supplied a dense, preview-only stim trace (``stim_t_plot`` +
+                # ``stim_s*_plot``) to avoid aliasing short pulses, keep it; otherwise fall back
+                # to downsampling the coarse acquisition-grid stim arrays.
+                if out.get('stim_s1_plot') is None:
+                    _, out['stim_s1_plot'] = _downsample(t, s1a[:n_st], max_plot_points)
+                if out.get('stim_s2_plot') is None:
+                    _, out['stim_s2_plot'] = _downsample(t, s2a[:n_st], max_plot_points)
         return out
     except Exception as e:
         out['error'] = f'{type(e).__name__}: {e}'
@@ -936,6 +949,27 @@ def _preview_dynamic(b: Any, max_plot_points: int) -> PreviewResult:
         )
         r['stim_s1'] = np.asarray(s1, dtype=float).reshape(-1)
         r['stim_s2'] = np.asarray(s2, dtype=float).reshape(-1)
+        # Preview-only: regenerate the stim command on a dense time grid solely for the on-screen
+        # trace, so short carrier pulses (e.g. 1 ms at 75 Hz) are not aliased by the coarse AI
+        # acquisition grid. The DAQ rate and the stim-monitor data written to HDF5 are unchanged;
+        # only this plotted trace is denser (see STIM_PREVIEW_PLOT_SAMPLE_RATE_HZ).
+        t_arr = r['t']
+        if t_arr.size >= 2:
+            t0 = float(t_arr[0])
+            t1 = float(t_arr[-1])
+            n_hi = int(max(2, math.ceil((t1 - t0) * STIM_PREVIEW_PLOT_SAMPLE_RATE_HZ) + 1))
+            t_hi = np.linspace(t0, t1, n_hi)
+            tnorm_hi = np.interp(t_hi, t_arr, np.asarray(tnorm, dtype=float).reshape(-1))
+            s1_hi, s2_hi = b.make_stimuli(
+                is_stim=True,
+                t_basis=t_hi,
+                tnorm_basis=tnorm_hi,
+                stim_pulse_rate=spr,
+                movedur=movedur,
+            )
+            r['stim_t_plot'] = t_hi
+            r['stim_s1_plot'] = np.asarray(s1_hi, dtype=float).reshape(-1)
+            r['stim_s2_plot'] = np.asarray(s2_hi, dtype=float).reshape(-1)
         r['table'].extend(
             [
                 {'metric': 'stimulation enabled', 'value': True},
