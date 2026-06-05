@@ -85,6 +85,8 @@ appearance.
 
 - **Primary (`type='primary'`):** fill `#2563eb`, border `#1d4ed8`, text
   `#ffffff`, font-weight 600, transition ~`0.15s` on background/border/shadow.
+  Streamlit 1.45+ form submit buttons use testid `stBaseButton-primaryFormSubmit`
+  (matched via `[data-testid^="stBaseButton-primary"]` in `_inject_load_save_button_theme`).
 - **Primary hover ("lights up"):** fill `#3b82f6`, border `#60a5fa`, soft
   outer glow `box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45)`.
 - **Secondary (`type='secondary'`):** fill `#ffffff`, border `#cbd5e1`, label

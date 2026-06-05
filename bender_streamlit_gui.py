@@ -357,6 +357,7 @@ def _inject_load_save_button_theme() -> None:
     - **Primary:** blue fill, white label; hover brightens and adds a soft blue glow.
     - **Secondary:** white fill, slate border and text; hover tints toward light red.
     - **Load/Save:** `_load_save_button` uses primary styling (blue).
+    - **Form submit (Streamlit 1.45+):** primary actions use testid ``stBaseButton-primaryFormSubmit``.
     - **KILL DAQ:** `key=gui_kill_daq` (`.st-key-gui_kill_daq`) overrides primary back to red.
     """
     st.markdown(
@@ -673,7 +674,8 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"
 }
 /* Load/Save full-width actions (marker div .bnd-ls-action); default is primary = blue */
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"],
-[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"] {
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"],
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid^="stBaseButton-primary"] {
     background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
@@ -682,8 +684,10 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"
 }
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:hover,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"]:hover,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid^="stBaseButton-primary"]:hover,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="baseButton-primary"],
-[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="stBaseButton-primary"] {
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="stBaseButton-primary"],
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid^="stBaseButton-primary"] {
     background-color: #3b82f6 !important;
     border-color: #60a5fa !important;
     color: #ffffff !important;
@@ -693,8 +697,10 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"
 }
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"] *,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"] *,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid^="stBaseButton-primary"] *,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="baseButton-primary"] *,
-[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="stBaseButton-primary"] * {
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="stBaseButton-primary"] *,
+[data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid^="stBaseButton-primary"] * {
     color: #ffffff !important;
     fill: #ffffff !important;
 }
@@ -789,6 +795,42 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] .bnd-sim-osc-banner {
     font-size: 0.98rem !important;
     border: 1px solid #cbd5e1 !important;
     border-left-width: 4px !important;
+}
+/* Streamlit 1.45+ — form submit primary (stBaseButton-primaryFormSubmit) and stFormSubmitButton wrapper */
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBaseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stFormSubmitButton"] button[data-testid^="stBaseButton-primary"] {
+    background-color: #2563eb !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #1d4ed8 !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBaseButton-primary"]:hover,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stFormSubmitButton"]:hover button[data-testid^="stBaseButton-primary"],
+body:has(.bnd-workflow-active) [data-testid="stMain"] [data-testid="stButton"]:hover button[data-testid^="stBaseButton-primary"] {
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
+    color: #ffffff !important;
+    background-image: none !important;
+    filter: none !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBaseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stFormSubmitButton"]:hover button[data-testid^="stBaseButton-primary"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBaseButton-primary"]:disabled {
+    background-color: #60a5fa !important;
+    border-color: #3b82f6 !important;
+    color: #fef2f2 !important;
+    box-shadow: none !important;
+    opacity: 0.9 !important;
+}
+body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBaseButton-primary"]:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb !important;
 }
 /* KILL DAQ — danger override via Streamlit key class (key=gui_kill_daq); wins over global blue primary */
 .st-key-gui_kill_daq button[data-testid="baseButton-primary"],
