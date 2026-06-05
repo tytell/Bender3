@@ -61,7 +61,7 @@ titles:
 | Marker | Meaning |
 |--------|---------|
 | `.bnd-landing-page` | Home/landing only: hide sidebar, custom shell |
-| `.bnd-workflow-active` | Inside Run Experiment: white app chrome; primary red / secondary white buttons |
+| `.bnd-workflow-active` | Inside Run Experiment: white app chrome; primary blue / secondary white buttons |
 | `.bnd-sim-compare-active` | Simulate route: numpy-only teaching view; no NI-DAQ; workbench ~36/64 columns (controls left, plots right) |
 | `.bnd-sim-osc-banner` | Oscillatory viscoelastic mode callout on the simulate route (navy left accent, slate wash) |
 | `.bnd-ls-action` | Wrapper marker for Load/Save full-width rows (styling hook) |
@@ -83,27 +83,30 @@ appearance.
 
 ### Buttons (workflow + landing main)
 
-- **Primary (`type='primary'`):** fill `#dc2626`, border `#b91c1c`, text
+- **Primary (`type='primary'`):** fill `#2563eb`, border `#1d4ed8`, text
   `#ffffff`, font-weight 600, transition ~`0.15s` on background/border/shadow.
-- **Primary hover ("lights up"):** fill `#f87171`, border `#fca5a5`, soft
-  outer glow `box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45)`.
+- **Primary hover ("lights up"):** fill `#3b82f6`, border `#60a5fa`, soft
+  outer glow `box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45)`.
 - **Secondary (`type='secondary'`):** fill `#ffffff`, border `#cbd5e1`, label
   `#334155`.
 - **Secondary hover:** fill `#fff1f2`, border `#fb7185`, label `#991b1b`,
   light drop shadow `rgba(220, 38, 38, 0.18)`.
-- **Disabled primary:** muted red fill/border, no glow, opacity ~`0.9`.
+- **Disabled primary:** muted blue fill/border, no glow, opacity ~`0.9`.
 - **Disabled secondary:** `#f1f5f9` fill, slate border/text, no shadow.
-- **Focus-visible:** white inner ring + outer ring (`#dc2626` primary,
+- **Focus-visible:** white inner ring + outer ring (`#2563eb` primary,
   `#94a3b8` secondary); load/save rows use the same pattern in
   `:has(.bnd-ls-action)` rules.
 
-**Load/Save** (`_load_save_button`) is **primary** by default (red).
+**Load/Save** (`_load_save_button`) is **primary** by default (blue).
+
+**KILL DAQ** (`key='gui_kill_daq'`, DOM class `.st-key-gui_kill_daq`) overrides
+primary styling back to red (`#dc2626` / `#b91c1c`) for this button only.
 
 ### Landing / Home accents
 
 - **Simulate CTA:** deep slate / navy gradient (`#1e3a5f` → `#0f172a`), light
   text `#f8fafc`, hover cyan accent — scoped via `.bnd-land-sim-btn-marker` so
-  live workflow primaries stay red.
+  live workflow primaries stay blue.
 - **Headings:** `#334155`
 - **Tagline / secondary text:** `#64748b` (tagline ~`1.32rem`, weight ~450)
 - **Hero rule (below hero):** solid `4px`, `#c2410c`
@@ -146,7 +149,7 @@ roomier on Home/marketing blocks.
    load/save marker pattern; avoid horizontal `st.radio` for this binary choice.
 3. **Apply buttons:** each section's Apply (per `ux_spec.md` Section 3) is a
    full-width primary action at the foot of that section.
-4. **Landing primary CTAs:** same red / white / min-height **3rem** treatment
+4. **Landing primary CTAs:** same blue / white / min-height **3rem** treatment
    as workflow (`_landing_style`).
 5. **Danger actions:** safety-critical actions (e.g. emergency stop) live in
    their own bordered block for visual separation.

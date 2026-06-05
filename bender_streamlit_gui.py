@@ -354,9 +354,10 @@ def _inject_load_save_button_theme() -> None:
     """Inject CSS for persistent action buttons.
 
     Visual tiers (main panel, workflow):
-    - **Primary:** red fill, white label; hover brightens and adds a soft red glow.
+    - **Primary:** blue fill, white label; hover brightens and adds a soft blue glow.
     - **Secondary:** white fill, slate border and text; hover tints toward light red.
-    - **Load/Save:** `_load_save_button` uses primary styling (red).
+    - **Load/Save:** `_load_save_button` uses primary styling (blue).
+    - **KILL DAQ:** `key=gui_kill_daq` (`.st-key-gui_kill_daq`) overrides primary back to red.
     """
     st.markdown(
         """
@@ -371,13 +372,13 @@ body:has(.bnd-workflow-active) [data-testid="stSidebar"] {
     background-color: #ffffff !important;
     border-right: 1px solid #e2e8f0 !important;
 }
-/* Sidebar — primary: red / white; secondary: white / slate (hover lights up) */
+/* Sidebar — primary: blue / white; secondary: white / slate (hover lights up) */
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"],
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     font-weight: 600 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
@@ -389,9 +390,9 @@ body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stB
 }
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"]:hover,
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:hover {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
@@ -432,10 +433,10 @@ body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stBut
 body:has(.bnd-workflow-active) .stApp div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-primary"],
 body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"] button[data-testid="baseButton-primary"],
 body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"] button[data-testid="stBaseButton-primary"] {
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     font-weight: 600 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
@@ -453,9 +454,9 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"
 body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:hover,
 body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:hover,
 body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:hover {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     color: #ffffff !important;
     background-image: none !important;
     filter: none !important;
@@ -506,10 +507,10 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div.stButton button[data-t
 }
 /* role=button fallbacks (match primary) */
 body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     font-weight: 600 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
@@ -518,18 +519,18 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"
     color: #ffffff !important;
 }
 body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
 body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"],
 body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] {
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     font-weight: 600 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
@@ -541,9 +542,9 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBase
 }
 body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"]:hover,
 body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
@@ -577,8 +578,8 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBase
 }
 body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="baseButton-primary"]:disabled,
 body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:disabled {
-    background-color: #fca5a5 !important;
-    border-color: #f87171 !important;
+    background-color: #60a5fa !important;
+    border-color: #3b82f6 !important;
     color: #fef2f2 !important;
     box-shadow: none !important;
     opacity: 0.9 !important;
@@ -593,8 +594,8 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid="stBase
 }
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-primary"]:disabled,
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:disabled {
-    background-color: #fca5a5 !important;
-    border-color: #f87171 !important;
+    background-color: #60a5fa !important;
+    border-color: #3b82f6 !important;
     opacity: 0.9 !important;
 }
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:disabled,
@@ -640,9 +641,9 @@ body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"]:h
 body:has(.bnd-workflow-active) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
 body:has(.bnd-workflow-active) [data-testid="stSidebar"] [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     color: #ffffff !important;
     filter: none !important;
@@ -660,9 +661,9 @@ body:has(.bnd-workflow-active) [data-testid="stSidebar"] [data-testid="stButton"
     fill: #ffffff !important;
 }
 body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"]:hover [role="button"] {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
@@ -670,23 +671,23 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"
     color: #ffffff !important;
     fill: #ffffff !important;
 }
-/* Load/Save full-width actions (marker div .bnd-ls-action); default is primary = red */
+/* Load/Save full-width actions (marker div .bnd-ls-action); default is primary = blue */
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"],
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"] {
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:hover,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"]:hover,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="baseButton-primary"],
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action):hover button[data-testid="stBaseButton-primary"] {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
     color: #ffffff !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
@@ -714,7 +715,7 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] div[data-testid="stButton"
 }
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-primary"]:focus-visible,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-primary"]:focus-visible {
-    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #dc2626 !important;
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb !important;
 }
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="baseButton-secondary"]:focus-visible,
 [data-testid="stMain"] div[data-testid="stVerticalBlock"]:has(.bnd-ls-action) button[data-testid="stBaseButton-secondary"]:focus-visible {
@@ -788,6 +789,48 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] .bnd-sim-osc-banner {
     font-size: 0.98rem !important;
     border: 1px solid #cbd5e1 !important;
     border-left-width: 4px !important;
+}
+/* KILL DAQ — danger override via Streamlit key class (key=gui_kill_daq); wins over global blue primary */
+.st-key-gui_kill_daq button[data-testid="baseButton-primary"],
+.st-key-gui_kill_daq button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"],
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
+    background-color: #dc2626 !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #b91c1c !important;
+    box-shadow: none !important;
+    filter: none !important;
+}
+.st-key-gui_kill_daq button[data-testid="baseButton-primary"]:hover,
+.st-key-gui_kill_daq button[data-testid="stBaseButton-primary"]:hover,
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="baseButton-primary"]:hover,
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"]:hover,
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
+    background-color: #f87171 !important;
+    border-color: #fca5a5 !important;
+    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    filter: none !important;
+}
+.st-key-gui_kill_daq button[data-testid="baseButton-primary"] *,
+.st-key-gui_kill_daq button[data-testid="stBaseButton-primary"] *,
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="baseButton-primary"] *,
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"] *,
+.st-key-gui_kill_daq button[data-testid="baseButton-primary"]:hover *,
+.st-key-gui_kill_daq button[data-testid="stBaseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="baseButton-primary"]:hover *,
+body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"]:hover * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+.st-key-gui_kill_daq button[data-testid="baseButton-primary"]:focus-visible,
+.st-key-gui_kill_daq button[data-testid="stBaseButton-primary"]:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #dc2626 !important;
 }
 </style>
 """,
@@ -4844,7 +4887,7 @@ def _render_landing_page() -> None:
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMarkdownContainer"] li {
     color: #475569 !important;
 }
-/* st.button — primary red / secondary white; hover brightens (see workflow theme). */
+/* st.button — primary blue / secondary white; hover brightens (see workflow theme). */
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-primary"],
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"],
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"],
@@ -4856,10 +4899,10 @@ def _render_landing_page() -> None:
 :is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="baseButton-primary"],
 :is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"] button[data-testid="stBaseButton-primary"] {
     min-height: 3rem !important;
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     font-weight: 600 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
@@ -4877,9 +4920,9 @@ def _render_landing_page() -> None:
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:hover,
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:hover,
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:hover {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     color: #ffffff !important;
     background-image: none !important;
     filter: none !important;
@@ -4933,10 +4976,10 @@ def _render_landing_page() -> None:
 }
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] [role="button"] {
     min-height: 3rem !important;
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     font-weight: 600 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
@@ -4945,9 +4988,9 @@ def _render_landing_page() -> None:
     color: #ffffff !important;
 }
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] [role="button"]:hover {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
@@ -4955,7 +4998,7 @@ def _render_landing_page() -> None:
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-primary"]:focus-visible,
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="baseButton-primary"]:focus-visible,
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div.stButton button[data-testid="stBaseButton-primary"]:focus-visible {
-    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #dc2626 !important;
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb !important;
 }
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="baseButton-secondary"]:focus-visible,
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"] button[data-testid="stBaseButton-secondary"]:focus-visible,
@@ -4966,18 +5009,18 @@ def _render_landing_page() -> None:
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"],
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"] {
     min-height: 3rem !important;
-    background-color: #dc2626 !important;
+    background-color: #2563eb !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #1d4ed8 !important;
     font-weight: 600 !important;
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
 }
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="baseButton-primary"]:hover,
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] button[data-testid="stBaseButton-primary"]:hover {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
@@ -5051,9 +5094,9 @@ def _render_landing_page() -> None:
 :is(#root, body:has(.bnd-landing-page)) div.row-widget.stButton[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"],
 :is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
 :is(#root, body:has(.bnd-landing-page)) div[data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     color: #ffffff !important;
     filter: none !important;
@@ -5071,9 +5114,9 @@ def _render_landing_page() -> None:
     fill: #ffffff !important;
 }
 :is(#root, body:has(.bnd-landing-page)) [data-testid="stMain"] div[data-testid="stButton"]:hover [role="button"] {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
     background-image: none !important;
     filter: none !important;
 }
