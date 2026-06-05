@@ -758,6 +758,20 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         r['anglevel'] = anglevel
         r['stim_s1'] = s1
         r['stim_s2'] = s2
+        # Dense preview-only stim trace: upsample to STIM_PREVIEW_PLOT_SAMPLE_RATE_HZ via
+        # zero-order-hold so short carrier pulses (e.g. 1 ms at 75 Hz) are not aliased on
+        # the DAQ acquisition grid. Only the plotted trace is denser; HDF5 and DAQ are unchanged.
+        _t_iso = np.asarray(t, dtype=float).reshape(-1)
+        _s1_iso = np.asarray(s1, dtype=float).reshape(-1)
+        _s2_iso = np.asarray(s2, dtype=float).reshape(-1)
+        if _t_iso.size >= 2:
+            _t0_iso, _t1_iso = float(_t_iso[0]), float(_t_iso[-1])
+            _n_hi_iso = int(max(2, math.ceil((_t1_iso - _t0_iso) * STIM_PREVIEW_PLOT_SAMPLE_RATE_HZ) + 1))
+            _t_hi_iso = np.linspace(_t0_iso, _t1_iso, _n_hi_iso)
+            _idx_iso = np.clip(np.searchsorted(_t_iso, _t_hi_iso, side='right') - 1, 0, _t_iso.size - 1)
+            r['stim_t_plot'] = _t_hi_iso
+            r['stim_s1_plot'] = _s1_iso[_idx_iso]
+            r['stim_s2_plot'] = _s2_iso[_idx_iso]
         if block_seq:
             r['table'].extend([
                 {'metric': 'block_sequence', 'value': len(block_seq)},
@@ -898,6 +912,20 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
     r['anglevel'] = anglevel
     r['stim_s1'] = s1
     r['stim_s2'] = s2
+    # Dense preview-only stim trace: upsample to STIM_PREVIEW_PLOT_SAMPLE_RATE_HZ via
+    # zero-order-hold so short carrier pulses (e.g. 1 ms at 75 Hz) are not aliased on
+    # the DAQ acquisition grid. Only the plotted trace is denser; HDF5 and DAQ are unchanged.
+    _t_isov = np.asarray(t, dtype=float).reshape(-1)
+    _s1_isov = np.asarray(s1, dtype=float).reshape(-1)
+    _s2_isov = np.asarray(s2, dtype=float).reshape(-1)
+    if _t_isov.size >= 2:
+        _t0_isov, _t1_isov = float(_t_isov[0]), float(_t_isov[-1])
+        _n_hi_isov = int(max(2, math.ceil((_t1_isov - _t0_isov) * STIM_PREVIEW_PLOT_SAMPLE_RATE_HZ) + 1))
+        _t_hi_isov = np.linspace(_t0_isov, _t1_isov, _n_hi_isov)
+        _idx_isov = np.clip(np.searchsorted(_t_isov, _t_hi_isov, side='right') - 1, 0, _t_isov.size - 1)
+        r['stim_t_plot'] = _t_hi_isov
+        r['stim_s1_plot'] = _s1_isov[_idx_isov]
+        r['stim_s2_plot'] = _s2_isov[_idx_isov]
     if block_seq:
         r['table'].extend([
             {'metric': 'block_sequence', 'value': len(block_seq)},
