@@ -288,18 +288,7 @@ def export_primary_h5(
             'angle_measured': np.asarray(getattr(bender, 'angle_measured', np.array([]))),
             'forcetorque': np.asarray(getattr(bender, 'forcetorque', np.array([]))),
             'forcetorque_raw': np.asarray(getattr(bender, 'forcetorque_raw', np.array([]))),
-            'forcetorque_corrected': np.asarray(getattr(bender, 'forcetorque_corrected', np.array([]))),
-            'inertial_torque_system_primary': np.asarray(
-                getattr(bender, 'inertial_torque_system_primary', np.array([]))
-            ),
-            'inertial_torque_specimen_primary': np.asarray(
-                getattr(bender, 'inertial_torque_specimen_primary', np.array([]))
-            ),
-            'inertial_torque_total_primary': np.asarray(
-                getattr(bender, 'inertial_torque_total_primary', np.array([]))
-            ),
             'primary_torque_raw': np.asarray(getattr(bender, 'primary_torque_raw', np.array([]))),
-            'primary_torque_corrected': np.asarray(getattr(bender, 'primary_torque_corrected', np.array([]))),
         }]
 
     # Store the file's own name, not the absolute path: portable across machines and avoids
@@ -545,11 +534,9 @@ def _concat_trial_records(records):
     single step. Missing per-segment arrays are filled with NaN so trace lengths stay aligned.
     """
     t_parts = []
-    keys_1d = ['angle_cmd', 'anglevel_cmd', 'angle_measured', 'S1stimcmd', 'S2stimcmd',
-               'inertial_torque_total_primary']
+    keys_1d = ['angle_cmd', 'anglevel_cmd', 'angle_measured', 'S1stimcmd', 'S2stimcmd']
     parts_1d = {k: [] for k in keys_1d}
     ft_raw_parts = []
-    ft_corr_parts = []
     t_offset = 0.0
     for r in records:
         tr = np.asarray(r.get('t', np.array([])), dtype=float).reshape(-1)
@@ -565,19 +552,12 @@ def _concat_trial_records(records):
         raw = np.asarray(raw, dtype=float) if raw is not None else np.array([])
         ft_raw_parts.append(raw if (raw.ndim == 2 and raw.shape[1] == n and raw.shape[0] >= 6)
                             else np.full((6, n), np.nan, dtype=float))
-        corr = r.get('forcetorque_corrected', None)
-        corr = np.asarray(corr, dtype=float) if corr is not None else np.array([])
-        ft_corr_parts.append(corr if (corr.ndim == 2 and corr.shape[1] == n and corr.shape[0] >= 6)
-                             else np.full((6, n), np.nan, dtype=float))
         dt = (tr[-1] - tr[0]) / max(1, n - 1)
         t_offset = float(tr0[-1] + dt)
     combined: dict = {'t': np.concatenate(t_parts) if t_parts else np.array([])}
     for k in keys_1d:
         combined[k] = np.concatenate(parts_1d[k]) if parts_1d[k] else np.array([])
     combined['forcetorque_raw'] = np.concatenate(ft_raw_parts, axis=1) if ft_raw_parts else np.array([])
-    combined['forcetorque_corrected'] = (
-        np.concatenate(ft_corr_parts, axis=1) if ft_corr_parts else np.array([])
-    )
     return combined
 
 
@@ -603,10 +583,6 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
             'S2stimcmd': np.asarray(getattr(bender, 'S2stimcmd', np.array([]))),
             'forcetorque': np.asarray(getattr(bender, 'forcetorque', np.array([]))),
             'forcetorque_raw': np.asarray(getattr(bender, 'forcetorque_raw', np.array([]))),
-            'forcetorque_corrected': np.asarray(getattr(bender, 'forcetorque_corrected', np.array([]))),
-            'inertial_torque_total_primary': np.asarray(
-                getattr(bender, 'inertial_torque_total_primary', np.array([]))
-            ),
         }]
 
     combine_all = (qc_trial_index is None) or (

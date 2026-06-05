@@ -381,11 +381,11 @@ class Bender:
         self.inertial_calibration_file = None
         self.use_inertial_calibration = False
         self.inertial_calibration_profile = None
-        self.inertial_torque_system_primary = np.array([])
-        self.inertial_torque_specimen_primary = np.array([])
-        self.inertial_torque_total_primary = np.array([])
+        # Raw primary-axis torque (saved). The inertial correction itself is applied post-hoc in R
+        # (empirical apparatus inertia from an empty calibration run; analytic specimen inertia from
+        # geometry), so the acquisition path stores raw torque + correction parameters only and does
+        # not produce corrected/inertial-torque time series.
         self.primary_torque_raw = np.array([])
-        self.primary_torque_corrected = np.array([])
         self.trial_records = []
         # Sweep / step motion length (seconds); set via update_metadata(duration=...) or bender.duration = ...
         self.duration = None
@@ -447,12 +447,7 @@ class Bender:
             'angle_measured': np.array(getattr(self, 'angle_measured', np.array([])), copy=True),
             'forcetorque': np.array(getattr(self, 'forcetorque', np.array([])), copy=True),
             'forcetorque_raw': np.array(getattr(self, 'forcetorque_raw', np.array([])), copy=True),
-            'forcetorque_corrected': np.array(getattr(self, 'forcetorque_corrected', np.array([])), copy=True),
-            'inertial_torque_system_primary': np.array(getattr(self, 'inertial_torque_system_primary', np.array([])), copy=True),
-            'inertial_torque_specimen_primary': np.array(getattr(self, 'inertial_torque_specimen_primary', np.array([])), copy=True),
-            'inertial_torque_total_primary': np.array(getattr(self, 'inertial_torque_total_primary', np.array([])), copy=True),
             'primary_torque_raw': np.array(getattr(self, 'primary_torque_raw', np.array([])), copy=True),
-            'primary_torque_corrected': np.array(getattr(self, 'primary_torque_corrected', np.array([])), copy=True),
         }
         if extra:
             rec.update(extra)
@@ -539,40 +534,6 @@ class Bender:
             if v is not None and np.isfinite(v) and float(v) > 0:
                 return float(v)
         return 0.0
-
-    def _compute_primary_torque_components(self, raw_primary_torque, anglevel_deg_s):
-        """
-        Compute raw/system/specimen/total/corrected primary torque vectors.
-
-        corrected = raw_primary - (system_inertial + specimen_inertial)
-        """
-        raw = np.asarray(raw_primary_torque, dtype=float).reshape(-1)
-        av = np.asarray(anglevel_deg_s, dtype=float).reshape(-1)
-        n = min(raw.size, av.size)
-        if n < 2:
-            z = np.zeros_like(raw)
-            return {'raw': raw, 'system': z.copy(), 'specimen': z.copy(), 'total': z.copy(), 'corrected': raw.copy()}
-
-        raw = raw[:n]
-        av = av[:n]
-        alpha = np.gradient(av) * float(self.daq_ai_sample_rate_hz)
-
-        system = np.zeros_like(raw)
-        use_cal = bool(getattr(self, 'use_inertial_calibration', False))
-        prof = getattr(self, 'inertial_calibration_profile', None)
-        if use_cal and isinstance(prof, dict):
-            system = float(prof.get('I_est', 0.0)) * alpha + float(prof.get('bias_est', 0.0))
-
-        specimen = np.zeros_like(raw)
-        use_specimen = bool(getattr(self, 'use_theoretical_inertial_correction', False))
-        if use_specimen:
-            i_spec = self._specimen_moi_for_inertial_torque()
-            if i_spec > 0:
-                specimen = i_spec * alpha
-
-        total = system + specimen
-        corrected = raw - total
-        return {'raw': raw, 'system': system, 'specimen': specimen, 'total': total, 'corrected': corrected}
 
     def save_inertial_calibration_file(self, calibration_h5_path):
         """Save inertial calibration profile as a standalone H5 file."""
@@ -1018,13 +979,8 @@ class Bender:
         if len(forcetorque_indices) == 6:
             self.forcetorque = self.apply_calibration_forcetorque(self.aidata[forcetorque_indices, :])
             self.forcetorque_raw = np.array(self.forcetorque, copy=True)
-            self.forcetorque_corrected = None
             ns = int(self.forcetorque.shape[1]) if np.ndim(self.forcetorque) == 2 else 0
-            self.inertial_torque_system_primary = np.zeros(ns, dtype=float)
-            self.inertial_torque_specimen_primary = np.zeros(ns, dtype=float)
-            self.inertial_torque_total_primary = np.zeros(ns, dtype=float)
             self.primary_torque_raw = np.zeros(ns, dtype=float)
-            self.primary_torque_corrected = np.zeros(ns, dtype=float)
             use_cal = bool(getattr(self, 'use_inertial_calibration', False))
             cal_file = getattr(self, 'inertial_calibration_file', None)
             if use_cal and getattr(self, 'inertial_calibration_profile', None) is None and cal_file and os.path.exists(cal_file):
@@ -1035,15 +991,10 @@ class Bender:
             prof = getattr(self, 'inertial_calibration_profile', None)
             if requested_test_type != 'calibration':
                 idx_t = self._primary_torque_index()
-                comp = self._compute_primary_torque_components(self.forcetorque[idx_t, :], self.anglevel)
-                self.inertial_torque_system_primary = np.array(comp['system'], copy=True)
-                self.inertial_torque_specimen_primary = np.array(comp['specimen'], copy=True)
-                self.inertial_torque_total_primary = np.array(comp['total'], copy=True)
-                self.primary_torque_raw = np.array(comp['raw'], copy=True)
-                self.primary_torque_corrected = np.array(comp['corrected'], copy=True)
-                corr = np.array(self.forcetorque, copy=True)
-                corr[idx_t, :len(self.primary_torque_corrected)] = self.primary_torque_corrected
-                self.forcetorque_corrected = corr
+                # Raw primary torque only; the inertial correction is applied post-hoc in R. Record
+                # the parameters R needs: whether a system-inertia calibration profile is loaded,
+                # whether analytic specimen inertia is available, and the theoretical system inertia.
+                self.primary_torque_raw = np.asarray(self.forcetorque[idx_t, :], dtype=float).reshape(-1)
                 self.h5_protocol_metadata.update({
                     'system_inertial_from_profile': bool(use_cal and isinstance(prof, dict)),
                     'specimen_inertial_from_geometry': bool(self._specimen_moi_for_inertial_torque() > 0),
@@ -3255,15 +3206,8 @@ class Bender:
                     entry['forcetorque'] = ft
                     entry['forcetorque_raw'] = np.array(ft, copy=True)
                     idx_t = self._primary_torque_index()
-                    comp = self._compute_primary_torque_components(ft[idx_t, :], anglevel)
-                    ft_corr = np.array(ft, copy=True)
-                    ft_corr[idx_t, :len(comp['corrected'])] = comp['corrected']
-                    entry['forcetorque_corrected'] = ft_corr
-                    entry['inertial_torque_system_primary'] = np.array(comp['system'], copy=True)
-                    entry['inertial_torque_specimen_primary'] = np.array(comp['specimen'], copy=True)
-                    entry['inertial_torque_total_primary'] = np.array(comp['total'], copy=True)
-                    entry['primary_torque_raw'] = np.array(comp['raw'], copy=True)
-                    entry['primary_torque_corrected'] = np.array(comp['corrected'], copy=True)
+                    # Raw primary torque only; inertial correction is applied post-hoc in R.
+                    entry['primary_torque_raw'] = np.asarray(ft[idx_t, :], dtype=float).reshape(-1)
                     m = active & np.isfinite(t)
                     if np.any(m):
                         entry['mean_xforce_stim'] = float(np.mean(ft[0, m]))
@@ -4103,15 +4047,8 @@ class Bender:
                     entry['forcetorque'] = ft
                     entry['forcetorque_raw'] = np.array(ft, copy=True)
                     idx_t = self._primary_torque_index()
-                    comp = self._compute_primary_torque_components(ft[idx_t, :], anglevel)
-                    ft_corr = np.array(ft, copy=True)
-                    ft_corr[idx_t, :len(comp['corrected'])] = comp['corrected']
-                    entry['forcetorque_corrected'] = ft_corr
-                    entry['inertial_torque_system_primary'] = np.array(comp['system'], copy=True)
-                    entry['inertial_torque_specimen_primary'] = np.array(comp['specimen'], copy=True)
-                    entry['inertial_torque_total_primary'] = np.array(comp['total'], copy=True)
-                    entry['primary_torque_raw'] = np.array(comp['raw'], copy=True)
-                    entry['primary_torque_corrected'] = np.array(comp['corrected'], copy=True)
+                    # Raw primary torque only; inertial correction is applied post-hoc in R.
+                    entry['primary_torque_raw'] = np.asarray(ft[idx_t, :], dtype=float).reshape(-1)
                     m = active & np.isfinite(t)
                     if np.any(m):
                         entry['mean_xforce_stim'] = float(np.mean(ft[0, m]))
