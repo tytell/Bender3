@@ -7633,48 +7633,42 @@ def main():
                     key='morpho_dbend',
                     help='Distance from snout (or your chosen landmark) to the center of the clamped test segment.',
                 )
-                cw1, cw2 = st.columns(2)
-                with cw1:
-                    if 'morpho_xsec' not in st.session_state:
-                        st.session_state['morpho_xsec'] = 0.0
-                    st.number_input('Local body width (mm)', min_value=0.001, format='%.6g', key='morpho_xsec')
-                    if 'morpho_muscle_depth' not in st.session_state:
-                        st.session_state['morpho_muscle_depth'] = 0.0
-                    st.number_input(
-                        'Muscle depth `target_muscle_depth_mm` (mm)',
-                        min_value=0.0,
-                        format='%.6g',
-                        key='morpho_muscle_depth',
-                        help=(
-                            'Distance from the outer surface to the muscle/fiber layer used for strain↔curvature '
-                            '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
-                        ),
-                    )
-                with cw2:
-                    if 'morpho_xsec_height' not in st.session_state:
-                        st.session_state['morpho_xsec_height'] = 0.0
-                    st.number_input('Local body height (mm)', min_value=0.001, format='%.6g', key='morpho_xsec_height')
-                co1, co2 = st.columns(2)
-                with co1:
-                    if 'morpho_dvert' not in st.session_state:
-                        st.session_state['morpho_dvert'] = 0.0
-                    st.number_input(
-                        'Vertical specimen offset (mm)',
-                        min_value=0.0,
-                        format='%.6g',
-                        key='morpho_dvert',
-                        help='Vertical distance from sensor centerline to mounted specimen center.',
-                    )
-                with co2:
-                    if 'morpho_dhoriz' not in st.session_state:
-                        st.session_state['morpho_dhoriz'] = 0.0
-                    st.number_input(
-                        'Horizontal specimen offset (mm)',
-                        min_value=0.0,
-                        format='%.6g',
-                        key='morpho_dhoriz',
-                        help='Horizontal distance from sensor centerline to mounted specimen center.',
-                    )
+                if 'morpho_xsec' not in st.session_state:
+                    st.session_state['morpho_xsec'] = 0.0
+                st.number_input('Local body width (mm)', min_value=0.001, format='%.6g', key='morpho_xsec')
+                if 'morpho_xsec_height' not in st.session_state:
+                    st.session_state['morpho_xsec_height'] = 0.0
+                st.number_input('Local body height (mm)', min_value=0.001, format='%.6g', key='morpho_xsec_height')
+                if 'morpho_dvert' not in st.session_state:
+                    st.session_state['morpho_dvert'] = 0.0
+                st.number_input(
+                    'Vertical specimen offset (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='morpho_dvert',
+                    help='Vertical distance from sensor centerline to mounted specimen center.',
+                )
+                if 'morpho_dhoriz' not in st.session_state:
+                    st.session_state['morpho_dhoriz'] = 0.0
+                st.number_input(
+                    'Horizontal specimen offset (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='morpho_dhoriz',
+                    help='Horizontal distance from sensor centerline to mounted specimen center.',
+                )
+                if 'morpho_muscle_depth' not in st.session_state:
+                    st.session_state['morpho_muscle_depth'] = 0.0
+                st.number_input(
+                    'Muscle depth `target_muscle_depth_mm` (mm)',
+                    min_value=0.0,
+                    format='%.6g',
+                    key='morpho_muscle_depth',
+                    help=(
+                        'Distance from the outer surface to the muscle/fiber layer used for strain↔curvature '
+                        '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
+                    ),
+                )
                 if 'morpho_clamp_plate_extension' not in st.session_state:
                     st.session_state['morpho_clamp_plate_extension'] = 0.0
                 st.number_input(
