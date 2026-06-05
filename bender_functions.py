@@ -494,6 +494,10 @@ class Bender:
             return None
 
         cal = np.asarray(cal_list, dtype=float).reshape(-1)
+        # N=0: no calibration provided (sono not in use / empty list). Short-circuit
+        # before the polyfit guard so an unused channel is a no-op, not an error.
+        if cal.size == 0:
+            return None
         if cal.size < 4 or cal.size % 2 != 0:
             raise ValueError(
                 'Sono calibration needs an even number of values >= 4 '
