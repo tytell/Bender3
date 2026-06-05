@@ -2475,19 +2475,32 @@ def _needs_missing_calibration_confirmation(b: Bender) -> bool:
 
 
 def _append_note_to_h5_file(h5_path: str, note_text: str):
-    """Append a dated note block to an existing .h5 file's post-trial notes attrs."""
+    """Append a timestamped note to an existing .h5 file's ``01_Metadata/user_notes``.
+
+    ``user_notes`` is a 1-D variable-length (vlen) UTF-8 string dataset; each append adds one new
+    timestamped entry and never overwrites existing entries. The dataset (and ``01_Metadata`` group)
+    is created on first use, so files saved before this feature gain notes without losing data.
+    """
     note = str(note_text or '').strip()
     if not note:
         raise ValueError('Please enter a note first.')
     if not os.path.isfile(h5_path):
         raise ValueError(f'File not found: {h5_path}')
     ts = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+    entry = f'[{ts}] {note}'
+    str_dt = h5py.string_dtype(encoding='utf-8')
     with h5py.File(h5_path, 'r+') as f:
-        prev = str(f.attrs.get('post-trial notes', '') or '').strip()
-        merged = note if not prev else f"{prev}\n\n--- Post-Experiment QC note ({ts}) ---\n{note}"
-        f.attrs['post-trial notes'] = merged
-        if '01_Metadata' in f:
-            f['01_Metadata'].attrs['post-trial notes'] = merged
+        g = f.require_group('01_Metadata')
+        existing: list[str] = []
+        if 'user_notes' in g:
+            raw = g['user_notes'][()]
+            for x in np.atleast_1d(raw).tolist():
+                existing.append(x.decode('utf-8') if isinstance(x, (bytes, bytearray)) else str(x))
+            # Rewrite as a resizable vlen-string dataset; existing entries are preserved (no overwrite).
+            del g['user_notes']
+        merged = existing + [entry]
+        ds = g.create_dataset('user_notes', shape=(len(merged),), maxshape=(None,), dtype=str_dt)
+        ds[:] = np.array(merged, dtype=object)
 
 
 def _candidate_review_files(data_file_path: str):
@@ -8865,8 +8878,12 @@ def main():
                                         _mark_review_data_used()
     
                 st.markdown('**Add post-experiment note to selected file**')
+                # Start blank and clear after a successful append (widget value can only be reset
+                # before the widget is instantiated this run, hence the pending-clear flag).
+                if st.session_state.pop('gui_clear_selected_file_note', False):
+                    st.session_state['gui_selected_file_note'] = ''
                 note_file = st.text_area(
-                    'New note text (appended for .h5 files)',
+                    'New note text (timestamped, appended to 01_Metadata/user_notes for .h5 files)',
                     key='gui_selected_file_note',
                     height=90,
                 )
@@ -8876,7 +8893,9 @@ def main():
                             raise ValueError('Selected file is not .h5. Choose a data file to append notes.')
                         _append_note_to_h5_file(selected_file, note_file)
                         _mark_review_data_used()
+                        st.session_state['gui_clear_selected_file_note'] = True
                         st.success('Note appended to selected data file.')
+                        st.rerun()
                     except Exception as e:
                         _show_friendly_error(e, action='save_h5')
 
