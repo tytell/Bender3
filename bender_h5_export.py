@@ -5,7 +5,11 @@ Used by the Streamlit GUI and callable from scripts/notebooks to avoid duplicati
 """
 from __future__ import annotations
 
+import importlib
+import inspect
+import json
 import os
+import sys
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
@@ -72,6 +76,82 @@ def _store_h5_metadata_value(group: Any, key: str, value: Any, *, max_attr_array
             group.attrs[k] = str(value)[:512]
     else:
         group.attrs[k] = f'<omitted_large_array shape={arr.shape}>'
+
+
+def _store_config_field(group: Any, key: str, value: Any) -> None:
+    """Store one **config-file** field into ``group`` for full provenance, additive only.
+
+    Mapping (per approved Task 1 contract):
+
+    * ``dict`` (e.g. ``units`` / ``unit_rules``) → JSON-string attribute written with an
+      explicit variable-length string dtype so long dictionaries are never truncated.
+    * ``str`` / ``bytes`` / scalars → attributes.
+    * ``list`` / ``tuple`` / ``ndarray`` → datasets (string/object arrays are encoded to bytes
+      so h5py can store them; if that fails, fall back to a JSON-string attribute).
+
+    Caller must guard against name collisions with existing ``01_Metadata`` entries; this
+    function never inspects or rewrites entries other than the one ``key`` it is asked to add.
+    """
+    k = str(key)
+    vlen_str = h5py.special_dtype(vlen=str)
+    if isinstance(value, dict):
+        try:
+            payload = json.dumps(value, default=str, sort_keys=True)
+        except Exception:
+            payload = str(value)
+        group.attrs.create(k, payload, dtype=vlen_str)
+        return
+    if isinstance(value, (str, bytes)):
+        group.attrs[k] = value
+        return
+    if isinstance(value, (bool, int, float, complex)) or isinstance(value, np.generic):
+        group.attrs[k] = value
+        return
+    if isinstance(value, (list, tuple, np.ndarray)):
+        arr = np.asarray(value)
+        if arr.dtype.kind in ('U', 'O'):
+            try:
+                arr = arr.astype('S')
+            except Exception:
+                try:
+                    group.attrs.create(k, json.dumps(list(value), default=str), dtype=vlen_str)
+                except Exception:
+                    group.attrs[k] = str(value)
+                return
+        try:
+            group.create_dataset(k, data=arr)
+        except Exception:
+            group.attrs[k] = str(value)
+        return
+    group.attrs[k] = str(value)
+
+
+def _iter_public_config_fields(config_module_name: str):
+    """Yield ``(name, value)`` for every public, data-like attribute of the config module.
+
+    The module is taken from ``sys.modules`` when already imported (it is, since ``Bender``
+    imported it at construction) and re-imported otherwise. Modules, callables, and classes are
+    skipped so only actual config values (scalars, strings, lists, dicts) are yielded.
+    """
+    name = str(config_module_name or '').strip()
+    if not name:
+        return
+    cfg = sys.modules.get(name)
+    if cfg is None:
+        try:
+            cfg = importlib.import_module(name)
+        except Exception:
+            return
+    for attr in sorted(dir(cfg)):
+        if attr.startswith('_'):
+            continue
+        try:
+            value = getattr(cfg, attr)
+        except Exception:
+            continue
+        if inspect.ismodule(value) or inspect.isclass(value) or callable(value):
+            continue
+        yield attr, value
 
 
 def _read_existing_post_trial_notes(h5_path: str) -> str:
@@ -429,6 +509,17 @@ def export_primary_h5(
             if k.startswith('_') or k in skip_keys or v is None:
                 continue
             _store_h5_metadata_value(g_settings, k, v)
+
+        # Full config-file provenance: write every public config attribute directly into
+        # 01_Metadata under its EXACT config field name. Additive only — any name that already
+        # exists as an attribute, dataset, or subgroup of 01_Metadata is left untouched so the
+        # established HDF5 / R-pipeline contract is preserved.
+        for cfg_key, cfg_val in _iter_public_config_fields(getattr(bender, 'config_name', '')):
+            if cfg_val is None:
+                continue
+            if cfg_key in g_meta.attrs or cfg_key in g_meta:
+                continue
+            _store_config_field(g_meta, cfg_key, cfg_val)
 
     msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})'
     return {
