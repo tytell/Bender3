@@ -8066,7 +8066,15 @@ def main():
                             )
                     with scol:
                         st.markdown('**Stimulation**')
-                        for name, kind, label in _stim_fields:
+                        # Render "Enable stimulation" first regardless of field-list order, then the rest.
+                        _is_stim_row = next((row for row in _stim_fields if row[0] == 'is_stim'), None)
+                        _other_stim = [row for row in _stim_fields if row[0] != 'is_stim']
+                        if _is_stim_row:
+                            updates[_is_stim_row[0]] = _render_field(
+                                b, _is_stim_row[0], _is_stim_row[1], _is_stim_row[2],
+                                help_text=MOTION_FIELD_HELP.get(_is_stim_row[0]),
+                            )
+                        for name, kind, label in _other_stim:
                             if name == 'pulse_width_ms':
                                 updates[name] = _render_pulse_width_field(b)
                             else:
