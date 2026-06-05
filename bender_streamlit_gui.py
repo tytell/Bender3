@@ -7554,6 +7554,12 @@ def main():
                 if 'morpho_segment' not in st.session_state:
                     st.session_state['morpho_segment'] = ''
                 st.text_input('Segment / preparation label (`segment`)', key='morpho_segment', placeholder='e.g. whole body, hemi')
+                st.text_input(
+                    'Prep note',
+                    key='morpho_prep_condition',
+                    placeholder='e.g. anesthetized, recovered 24 h, fasted',
+                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+                )
 
                 st.divider()
                 st.markdown('**Morphometrics**')
@@ -7596,12 +7602,6 @@ def main():
                     max_value=60.0,
                     format='%.3f',
                     key='morpho_temp_tank',
-                )
-                st.text_input(
-                    'Prep condition',
-                    key='morpho_prep_condition',
-                    placeholder='e.g. anesthetized, recovered 24 h, fasted',
-                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
                 )
                 sub_specimen = st.form_submit_button(
                     'Apply specimen',
