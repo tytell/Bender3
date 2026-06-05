@@ -653,9 +653,37 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
     off1 = _torque_row(ft_raw, axis_to_idx[off_axes[0]]) if len(off_axes) > 0 else np.array([])
     off2 = _torque_row(ft_raw, axis_to_idx[off_axes[1]]) if len(off_axes) > 1 else np.array([])
 
+    # Sonomicrometry (optional). Calibrated length (mm, from apply_calibration_sono) lives on the
+    # bender as sono_left_mm / sono_right_mm, aligned with t for a single-trial run; rec keys are
+    # checked first for forward compatibility. A side is plotted only when its length matches t and
+    # it has finite samples. When sono is absent (no instrumentation) or length-mismatched (e.g. a
+    # multi-step concatenated timeline), no subplot is added — no error, no placeholder.
+    def _sono_series(rec_key, attr_name):
+        v = rec.get(rec_key, None)
+        if v is None:
+            v = getattr(bender, attr_name, None)
+        if v is None:
+            return np.array([])
+        return np.asarray(v, dtype=float).reshape(-1)
+
+    sono_left = _sono_series('sono_left', 'sono_left_mm')
+    sono_right = _sono_series('sono_right', 'sono_right_mm')
+    sono_specs = []  # (legend name, array, line color)
+    if t.size > 0 and sono_left.size == t.size and np.any(np.isfinite(sono_left)):
+        sono_specs.append(('sono_left', sono_left, 'mediumvioletred'))
+    if t.size > 0 and sono_right.size == t.size and np.any(np.isfinite(sono_right)):
+        sono_specs.append(('sono_right', sono_right, 'darkcyan'))
+    has_sono = len(sono_specs) > 0
+    _units_map = getattr(bender, 'units', None) or {}
+    sono_unit = str(_units_map.get('sono_left') or _units_map.get('sono_right') or 'mm')
+
+    n_rows = 6 if has_sono else 5
+    row_specs = [[{'secondary_y': True}], [{}], [{}], [{}], [{}]]
+    if has_sono:
+        row_specs.append([{}])
     fig = make_subplots(
-        rows=5, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-        specs=[[{'secondary_y': True}], [{}], [{}], [{}], [{}]],
+        rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+        specs=row_specs,
     )
 
     if t.size > 0 and angle_cmd.size == t.size:
@@ -702,6 +730,14 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
             row=5, col=1,
         )
 
+    sono_row = 6
+    if has_sono:
+        for _name, _arr, _color in sono_specs:
+            fig.add_trace(
+                go.Scatter(x=t, y=_arr, mode='lines', name=_name, line=dict(color=_color)),
+                row=sono_row, col=1,
+            )
+
     proc = str(getattr(bender, 'test_type', 'unknown'))
     angle_title = 'Angle (deg)'
     if proc in ('isometric', 'isovelocity'):
@@ -713,11 +749,15 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
     fig.update_yaxes(title_text=f'{off_axes[0]} (N-m)', row=3, col=1)
     fig.update_yaxes(title_text=f'{off_axes[1]} (N-m)', row=4, col=1)
     fig.update_yaxes(title_text='Stim (V)', row=5, col=1)
-    fig.update_xaxes(title_text='Time (s)', row=5, col=1)
+    bottom_row = sono_row if has_sono else 5
+    if has_sono:
+        fig.update_yaxes(title_text=f'Sono length ({sono_unit})', row=sono_row, col=1)
+    fig.update_xaxes(title_text='Time (s)', row=bottom_row, col=1)
     qc_cap = f'QC: {proc} | ' + ('all steps' if qc_trial_index == 'all' else f'trial {qc_trial_index}')
     if proc in ('isometric', 'isovelocity'):
         qc_cap = qc_cap + "<br><sup style='font-size:11px'>" + bender.strain_geometry_plot_context() + '</sup>'
-    fig.update_layout(height=1400, width=1100, title_text=qc_cap, showlegend=True, hovermode='x unified')
+    fig_height = 1400 + (240 if has_sono else 0)
+    fig.update_layout(height=fig_height, width=1100, title_text=qc_cap, showlegend=True, hovermode='x unified')
     return fig, qc_trial_index
 
 
