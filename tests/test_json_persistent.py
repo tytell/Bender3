@@ -35,7 +35,7 @@ def test_snapshot_bender_procedure_serializes_ndarray_fields():
         all_freqs = np.array([1.0, 2.0, 3.0])
         all_amps = np.array([0.05, 0.1])
 
-    schema = {'isometric_required': [], 'isometric_optional': [], 'isovelocity_required': [], 'isovelocity_optional': [], 'calibration_optional': []}
+    schema = {'isometric_required': [], 'isometric_optional': [], 'isovelocity_required': [], 'isovelocity_optional': []}
     snap = pt.snapshot_bender_procedure(_B(), schema, 'dynamic')
     assert snap['all_freqs'] == [1.0, 2.0, 3.0]
     assert snap['all_amps'] == [0.05, 0.1]

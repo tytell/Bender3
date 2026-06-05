@@ -123,8 +123,6 @@ units = {
     'motion_duration_s': 'seconds',
     'dynamic_movedur_s': 'seconds',
     'amplitude_frequency_exponent': 'dimensionless',
-    'step_change_blocks': 'count',
-    'step_change_total_cycles': 'count',
     'dclamp_mm': 'mm',
     'specimen_lateral_index_on_positive_motor_side': 'dimensionless',
 }

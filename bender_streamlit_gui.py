@@ -117,7 +117,6 @@ from bender_protocol_templates import (  # noqa: E402
     load_protocol_template,
     save_protocol_template,
     sanitize_template_filename_stem,
-    snapshot_bender_procedure,
     template_display_label,
 )
 from bender_h5_explore import (  # noqa: E402
@@ -1278,7 +1277,7 @@ from bender_h5_plot_helpers import (  # noqa: E402
 )
 
 MOTION_TYPES = frozenset(
-    {'dynamic', 'frequency_sweep', 'frequency_step', 'curvature_step', 'step_change'}
+    {'dynamic', 'frequency_sweep'}
 )
 
 # Extra fields for motion-series protocols (not fully enumerated in get_dispatch_schema).
@@ -1313,12 +1312,6 @@ MOTION_GUI_FIELDS = [
     ),
 ]
 
-STEP_CHANGE_EXTRA = [
-    ('step_change_frequencies', 'list_float', 'Step-change frequencies'),
-    ('step_change_curves', 'list_float', 'Step-change curves/amplitudes'),
-    ('step_change_cycles_per_step', 'list_int', 'Step-change cycles per step'),
-]
-
 # Required by :meth:`Bender.make_cycles_frequency_sweep` but not used by other motion modes.
 FREQUENCY_SWEEP_ONLY_FIELDS = [
     (
@@ -1334,7 +1327,7 @@ _MOTION_ROW_BY_NAME = {row[0]: row for row in MOTION_GUI_FIELDS}
 def _motion_parameter_rows(test_type: str):
     """
     Rows (name, kind, label) shown for each motion ``test_type``, aligned with
-    :meth:`Bender.run_experiment` branches (dynamic vs sweep/step vs step_change).
+    :meth:`Bender.run_experiment` branches (dynamic vs frequency_sweep).
     """
     # Shared blocks (see ``organize_cycles`` + stim wiring in ``run_experiment``).
     freq_amp_mode = [
@@ -1368,10 +1361,6 @@ def _motion_parameter_rows(test_type: str):
             *FREQUENCY_SWEEP_ONLY_FIELDS,
             *stim_block,
         ]
-    if test_type in ('frequency_step', 'curvature_step'):
-        return [_MOTION_ROW_BY_NAME['duration'], *freq_amp_mode, *stim_block]
-    if test_type == 'step_change':
-        return [*list(STEP_CHANGE_EXTRA), *stim_block]
     return list(MOTION_GUI_FIELDS)
 
 
@@ -1566,9 +1555,6 @@ MOTION_FIELD_HELP = {
         'Leave blank to use defaults (e.g. 0.5) in preview.'
     ),
     'amplitude_frequency_exponent': 'For frequency sweep: exponent α so amplitude ∝ f^α relative to the sweep start.',
-    'step_change_frequencies': 'Comma-separated frequencies for each step-change segment.',
-    'step_change_curves': 'Comma-separated curvature / amplitude targets per segment.',
-    'step_change_cycles_per_step': 'Comma-separated integers: cycles per step-change segment.',
 }
 
 
@@ -2467,11 +2453,6 @@ def _preview_error_actions(err_text: str) -> tuple[str, list[str]]:
             'Preview needs isometric start/end/steps values.',
             ['Set isometric start, end, and number of steps', 'Click Refresh experiment preview'],
         )
-    if 'step_change' in low and 'needs' in low:
-        return (
-            'Preview needs step-change parameters.',
-            ['Set step-change frequencies, amplitudes, and cycles/step', 'Click Refresh experiment preview'],
-        )
     return ('Preview failed.', ['Review preview error detail', 'Update required fields and refresh preview'])
 
 
@@ -3338,7 +3319,7 @@ def _fld_raw_str(name: str) -> str:
 def _collect_experiment_form_status_messages(tt: str) -> list[str]:
     """Warnings from **Procedure fields** widgets (`fld_*`), including blank frequencies before **Apply**."""
     msgs: list[str] = []
-    if tt in MOTION_TYPES and tt != 'step_change':
+    if tt in MOTION_TYPES:
         raw_f = _fld_raw_str('all_freqs')
         if not raw_f:
             msgs.append('Frequencies field is blank.')
@@ -3358,7 +3339,7 @@ def _collect_experiment_form_status_messages(tt: str) -> list[str]:
             ap = _parse_float_list(raw_a)
             if not ap:
                 msgs.append('Amplitudes not parseable.')
-        if tt in ('frequency_sweep', 'frequency_step', 'curvature_step'):
+        if tt == 'frequency_sweep':
             skd = _widget_key('duration')
             dv = None
             if skd in st.session_state:
@@ -3377,28 +3358,6 @@ def _collect_experiment_form_status_messages(tt: str) -> list[str]:
                         msgs.append('Cycles per step must be ≥ 1.')
                 except (TypeError, ValueError):
                     msgs.append('Cycles per step must be an integer ≥ 1.')
-    elif tt == 'step_change':
-        for fname, label in (
-            ('step_change_frequencies', 'Step-change frequencies'),
-            ('step_change_curves', 'Step-change amplitudes'),
-            ('step_change_cycles_per_step', 'Cycles per step'),
-        ):
-            raw = _fld_raw_str(fname)
-            if not raw:
-                msgs.append(f'{label} field is blank.')
-                continue
-            if fname == 'step_change_cycles_per_step':
-                pi = _parse_int_list(raw)
-                if not pi:
-                    msgs.append(f'{label} not parseable.')
-                elif any(x < 1 for x in pi):
-                    msgs.append(f'{label}: values must be ≥ 1.')
-            else:
-                pf = _parse_float_list(raw)
-                if not pf:
-                    msgs.append(f'{label} not parseable.')
-                elif fname == 'step_change_frequencies' and any(not math.isfinite(x) or x <= 0 for x in pf):
-                    msgs.append('Step-change frequencies must be finite and > 0 Hz.')
     if tt == 'isometric':
         sk = _widget_key('isometric_num_steps')
         if sk in st.session_state:
@@ -3913,13 +3872,6 @@ def _apply_pair(b: Bender, name: str, value):
 
 
 def _apply_form_updates(b: Bender, updates: dict, tt: str):
-    if tt == 'calibration':
-        emb = st.session_state.get('gui_calibration_embedded_base')
-        if isinstance(emb, dict):
-            proc = emb.get('procedure')
-            if isinstance(proc, dict):
-                for k, v in proc.items():
-                    _apply_pair(b, k, v)
     for k, v in updates.items():
         _apply_pair(b, k, v)
     b.test_type = tt
@@ -4448,38 +4400,6 @@ def _landing_demo_figure(test_type: str) -> go.Figure:
             fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Frequency increases over time'
         )
         return fig
-    if tt == 'frequency_step':
-        t = np.linspace(0, 2.4, 600)
-        seg = (t * 3 / 2.4).astype(int)
-        seg = np.clip(seg, 0, 2)
-        freqs = np.array([0.8, 1.6, 2.4])[seg]
-        dt = float(t[1] - t[0])
-        phase = np.cumsum(2 * np.pi * freqs * dt)
-        y = 0.6 * np.sin(phase)
-        fig = go.Figure(go.Scatter(x=t, y=y, mode='lines', line=dict(color='#8b5cf6', width=2)))
-        _landing_plotly_demo_layout(
-            fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Plateau segments at fixed frequencies'
-        )
-        return fig
-    if tt == 'curvature_step':
-        t = np.linspace(0, 2.2, 500)
-        k = (t * 2.2 / 2.2).astype(int)
-        k = np.clip(k, 0, 3)
-        levels = np.array([-0.5, 0.2, 0.75, 1.1])[k]
-        fig = go.Figure(go.Scatter(x=t, y=levels, mode='lines', line=dict(color='#0d9488', width=2.5)))
-        _landing_plotly_demo_layout(
-            fig, x_title='Time (s)', y_title='Target curvature (a.u.)', chart_title='Hold at each curvature level'
-        )
-        return fig
-    if tt == 'step_change':
-        t = np.linspace(0, 2.0, 400)
-        amp = np.where(t < 1.0, 0.35, 0.9)
-        y = amp * np.sin(2 * np.pi * 1.5 * t)
-        fig = go.Figure(go.Scatter(x=t, y=y, mode='lines', line=dict(color='#ea580c', width=2)))
-        _landing_plotly_demo_layout(
-            fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Abrupt amplitude / condition change'
-        )
-        return fig
     if tt == 'isometric':
         t = np.linspace(0, 2.6, int(round(2.6 * 1200)) + 1)
         stim = _landing_stimulus_75hz_gated(t, ((0.35, 0.52), (1.05, 1.22), (1.85, 2.02)))
@@ -4565,49 +4485,10 @@ def _landing_demo_figure(test_type: str) -> go.Figure:
             legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0),
         )
         return fig
-    # calibration — commanded motion vs raw vs corrected torque (schematic)
-    t = np.linspace(0, 2.2, 550)
-    theta_cmd = 0.32 * np.sin(2 * np.pi * 1.1 * t)
-    theta_meas = 0.31 * np.sin(2 * np.pi * 1.1 * t - 0.07) + 0.018 * np.sin(2 * np.pi * 16.0 * t)
-    tau_raw = 0.55 * np.sin(2 * np.pi * 1.1 * t) + 0.22 * np.sin(2 * np.pi * 16.0 * t + 0.4)
-    tau_model = 0.20 * np.sin(2 * np.pi * 16.0 * t + 0.4)
-    tau_corr = tau_raw - tau_model
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.11)
-    fig.add_trace(
-        go.Scatter(x=t, y=theta_cmd, mode='lines', name='θ command', line=dict(color='#2563eb', width=2)),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=t, y=theta_meas, mode='lines', name='θ measured', line=dict(color='#f97316', width=2, dash='dot')),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=t, y=tau_raw, mode='lines', name='Torque raw', line=dict(color='#94a3b8', width=2)),
-        row=2,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=t, y=tau_corr, mode='lines', name='Torque corrected', line=dict(color='#0d9488', width=2)),
-        row=2,
-        col=1,
-    )
-    fig.update_yaxes(title_text='Angle (a.u.)', row=1, col=1, showgrid=True, gridcolor='#e2e8f0')
-    fig.update_yaxes(title_text='Torque (a.u.)', row=2, col=1, showgrid=True, gridcolor='#e2e8f0')
-    fig.update_xaxes(title_text='Time (s)', row=2, col=1, showgrid=True, gridcolor='#e2e8f0')
-    fig.update_layout(
-        margin=dict(l=52, r=18, t=44, b=40),
-        height=300,
-        title=dict(
-            text='Calibration: repeat a known motion; subtract modeled inertial ripple from torque',
-            font=dict(size=12, color='#1e293b'),
-        ),
-        paper_bgcolor='#ffffff',
-        plot_bgcolor='#f8fafc',
-        font=dict(size=11, color='#1e293b'),
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='left', x=0),
+    # Fallback for any unrecognized test_type: empty schematic frame.
+    fig = go.Figure()
+    _landing_plotly_demo_layout(
+        fig, x_title='Time (s)', y_title='Bending / strain (a.u.)', chart_title='Commanded motion'
     )
     return fig
 
@@ -4623,21 +4504,6 @@ _LANDING_EXPERIMENT_BLURBS: dict[str, tuple[str, str]] = {
         'Vary excitation frequency over time to map how mechanical response changes with frequency — helpful for '
         'resonance-like behavior and frequency-dependent stiffness in soft tissues.',
     ),
-    'frequency_step': (
-        'Frequency step',
-        'Hold several discrete frequencies in separate segments so each band is sampled clearly — separates steady '
-        'response at each frequency without the ambiguity of a continuous sweep.',
-    ),
-    'curvature_step': (
-        'Curvature step',
-        'Step through held curvature levels to read torque (or force) at specific bending states — supports '
-        'quasi-static–like curves and stress-relaxation–style interpretation between plateaus.',
-    ),
-    'step_change': (
-        'Step change',
-        'Suddenly change amplitude, frequency, or related parameters mid-protocol to probe transient adjustment, '
-        'history dependence, and nonlinear responses to a new loading condition.',
-    ),
     'isometric': (
         'Isometric hold',
         'Geometry is held constant while you may deliver **electrical or other stimuli** in pulses; torque evolves with '
@@ -4648,12 +4514,6 @@ _LANDING_EXPERIMENT_BLURBS: dict[str, tuple[str, str]] = {
         'Isovelocity ramp',
         'Bending follows a **commanded strain rate** (piecewise ramps here); optional **stimulus trains** can be aligned '
         'with loading segments so velocity-dependent effects are not confounded with steady cyclic loops.',
-    ),
-    'calibration': (
-        'Calibration',
-        'Run a **repeatable reference motion** (often the same `test_type` you use later). **Raw torque** mixes tissue load '
-        'with high-frequency inertial “ripple” from acceleration; after fitting a dynamic model, **corrected torque** '
-        'tracks the biology-linked component more cleanly for subsequent trials.',
     ),
 }
 
@@ -4686,9 +4546,7 @@ def _render_landing_learn_section() -> None:
     tabs = st.tabs(
         [
             'Oscillatory',
-            'Steps & sweeps',
             'Quasi-static',
-            'Calibration',
         ]
     )
     with tabs[0]:
@@ -4708,36 +4566,6 @@ def _render_landing_learn_section() -> None:
     with tabs[1]:
         c1, c2 = st.columns(2)
         with c1:
-            title, blurb = _LANDING_EXPERIMENT_BLURBS['frequency_step']
-            st.markdown(f'**{title}**')
-            st.caption(blurb)
-            st.plotly_chart(
-                _landing_demo_figure('frequency_step'), use_container_width=True, config={'displayModeBar': False}
-            )
-        with c2:
-            title, blurb = _LANDING_EXPERIMENT_BLURBS['curvature_step']
-            st.markdown(f'**{title}**')
-            st.caption(blurb)
-            st.plotly_chart(
-                _landing_demo_figure('curvature_step'), use_container_width=True, config={'displayModeBar': False}
-            )
-        c3, c4 = st.columns(2)
-        with c3:
-            title, blurb = _LANDING_EXPERIMENT_BLURBS['step_change']
-            st.markdown(f'**{title}**')
-            st.caption(blurb)
-            st.plotly_chart(
-                _landing_demo_figure('step_change'), use_container_width=True, config={'displayModeBar': False}
-            )
-        with c4:
-            st.markdown('**How to pick a type**')
-            st.caption(
-                'In the full workflow, choose **Experiment type (test_type)** first; the form shows only the motion '
-                'fields that protocol needs. Preview plots approximate commanded motion before you run on hardware.'
-            )
-    with tabs[2]:
-        c1, c2 = st.columns(2)
-        with c1:
             title, blurb = _LANDING_EXPERIMENT_BLURBS['isometric']
             st.markdown(f'**{title}**')
             st.caption(blurb)
@@ -4749,11 +4577,6 @@ def _render_landing_learn_section() -> None:
             st.plotly_chart(
                 _landing_demo_figure('isovelocity'), use_container_width=True, config={'displayModeBar': False}
             )
-    with tabs[3]:
-        title, blurb = _LANDING_EXPERIMENT_BLURBS['calibration']
-        st.markdown(f'**{title}**')
-        st.caption(blurb)
-        st.plotly_chart(_landing_demo_figure('calibration'), use_container_width=True, config={'displayModeBar': False})
 
 
 def _render_landing_page() -> None:
@@ -7976,38 +7799,10 @@ def main():
                         if _block_up is not None:
                             updates.update(_block_up)
 
-                elif tt == 'calibration':
-                    st.markdown('**Required**')
-                    bases = [x for x in test_types if x != 'calibration']
-                    cur = _get_session_value(b, 'calibration_base_test_type', 'dynamic')
-                    if cur not in bases:
-                        cur = 'dynamic'
-                    sk_cal = _widget_key('calibration_base_test_type')
-                    if sk_cal not in st.session_state:
-                        st.session_state[sk_cal] = cur
-                    if st.session_state[sk_cal] not in bases:
-                        st.session_state[sk_cal] = bases[0]
-                    updates['calibration_base_test_type'] = st.selectbox(
-                        'Calibration base test type', bases, key=sk_cal
-                    )
-                    st.info(
-                        'Calibration runs the **base** motion protocol. Set **test_type** to that base '
-                        '(e.g. dynamic), click **Apply** in **section 5 · Protocol / Run** (and **Refresh experiment preview** in **Procedure fields** if you use preview), '
-                        'then switch back to **calibration** before running.'
-                    )
-                    st.markdown('**Optional**')
-                    for key in schema['calibration_optional']:
-                        sko = _widget_key(key)
-                        if sko not in st.session_state:
-                            st.session_state[sko] = str(_get_session_value(b, key) or '')
-                        updates[key] = st.text_input(key.replace('_', ' '), key=sko)
-
                 elif tt in MOTION_TYPES:
                     st.markdown('**Motion-series parameters** (procedure-specific)')
                     if tt == 'dynamic':
                         st.info('Dynamic timing uses cycles (not Duration).')
-                    elif tt == 'step_change':
-                        st.info('Step-change timing is derived from step-change cycle parameters.')
                     fields = _motion_parameter_rows(tt)
                     _stim_field_names = {
                         'stim_cycles_in_step',
@@ -8079,7 +7874,7 @@ def main():
                         'Description (optional)',
                         key='gui_protocol_new_desc',
                         height=70,
-                        placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz x strains; or calibration + base',
+                        placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz x strains',
                     )
                     if 'gui_protocol_overwrite' not in st.session_state:
                         st.session_state['gui_protocol_overwrite'] = False
@@ -8139,20 +7934,12 @@ def main():
                     else:
                         os.makedirs(os.path.dirname(_out) or '.', exist_ok=True)
                         _proc = build_procedure_dict_from_updates(updates)
-                        _base = None
-                        if tt == 'calibration':
-                            _btt = _proc.get('calibration_base_test_type')
-                            if _btt:
-                                _snap = snapshot_bender_procedure(b, schema, str(_btt))
-                                if _snap:
-                                    _base = {'test_type': str(_btt), 'procedure': _snap}
                         save_protocol_template(
                             _out,
                             name=_name or _stem,
                             description=_desc,
                             test_type=tt,
                             procedure=_proc,
-                            base_protocol=_base,
                         )
                         st.session_state['gui_protocol_save_feedback'] = (True, f'Saved `{_out}`')
                 except Exception as e:
@@ -8270,11 +8057,6 @@ def main():
                 with st.expander('Preview error detail'):
                     st.code(str(prev['error']))
             elif prev.get('ok'):
-                    if tt == 'calibration':
-                        st.info(
-                            f"Calibration uses base protocol **{prev.get('motion_test_type')}** for motion "
-                            '(same as **Run experiment**).'
-                        )
                     if prev.get('table'):
                         st.markdown('**Summary table**')
                         st.dataframe(pd.DataFrame(prev['table']), use_container_width=True, hide_index=True)

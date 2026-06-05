@@ -70,17 +70,6 @@ def _minimal_dynamic_bender():
                 b,
             )[-1],
         ),
-        (
-            'step_change',
-            lambda: (
-                (b := _minimal_dynamic_bender()),
-                setattr(b, 'test_type', 'step_change'),
-                setattr(b, 'step_change_frequencies', [1.0]),
-                setattr(b, 'step_change_curves', [0.1]),
-                setattr(b, 'step_change_cycles_per_step', [2]),
-                b,
-            )[-1],
-        ),
     ],
 )
 def test_compute_max_rotation_deg_positive_finite(test_type, setup):

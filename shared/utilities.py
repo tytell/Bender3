@@ -108,9 +108,6 @@ def compute_max_rotation_deg(protocol_params: Dict[str, Any]) -> float:
     if b is None:
         raise ValueError("protocol_params must include 'bender'.")
     tt = _effective_test_type(protocol_params)
-    motion_tt = tt
-    if tt == 'calibration':
-        motion_tt = str(getattr(b, 'calibration_base_test_type', 'dynamic') or 'dynamic')
 
     if tt == 'isometric':
         n = getattr(b, 'isometric_num_steps', None)

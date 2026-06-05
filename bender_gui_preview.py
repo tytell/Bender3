@@ -2,7 +2,7 @@
 Protocol preview for the Streamlit GUI: motor command timeline without DAQ.
 
 Mirrors motion-generation branches in :meth:`bender_functions.Bender.run_experiment`
-(isometric / isovelocity / calibration base / dynamic / sweep / step_change).
+(isometric / isovelocity / dynamic / frequency_sweep).
 """
 from __future__ import annotations
 
@@ -185,8 +185,6 @@ def build_protocol_preview(
     """
     req = str(requested_test_type)
     motion_tt = req
-    if req == 'calibration':
-        motion_tt = str(getattr(b, 'calibration_base_test_type', 'dynamic') or 'dynamic')
 
     out: PreviewResult = {
         'ok': False,
@@ -220,12 +218,6 @@ def build_protocol_preview(
             out.update(_preview_dynamic(b, max_plot_points))
         elif motion_tt == 'frequency_sweep':
             out.update(_preview_frequency_sweep(b, max_plot_points))
-        elif motion_tt == 'frequency_step':
-            out.update(_preview_frequency_step(b, max_plot_points))
-        elif motion_tt == 'curvature_step':
-            out.update(_preview_curvature_step(b, max_plot_points))
-        elif motion_tt == 'step_change':
-            out.update(_preview_step_change(b, max_plot_points))
         else:
             out['error'] = f'No preview implemented for {req!r}.'
             return out
@@ -1049,74 +1041,3 @@ def _preview_frequency_sweep(b: Any, max_plot_points: int) -> PreviewResult:
     return r
 
 
-def _preview_frequency_step(b: Any, max_plot_points: int) -> PreviewResult:
-    r: PreviewResult = {'table': [], 't': None, 'angle': None, 'anglevel': None, 'error': None}
-    dur = getattr(b, 'duration', None)
-    if dur is None:
-        r['error'] = 'frequency_step preview needs duration (s).'
-        return r
-    af = getattr(b, 'all_freqs', None)
-    mode = getattr(b, 'all_amps_mode', None) or 'strain'
-    curves = _curves_from_amps(b, mode)
-    angle, anglevel, tnorm, _, t = b.make_cycles_frequency_step(
-        af,
-        curves,
-        float(dur),
-        b.waitbefore,
-        nominal_frequency=getattr(b, 'step_nominal_frequency', None),
-        nominal_curvature=getattr(b, 'step_nominal_curvature', None),
-    )
-    r['t'] = np.asarray(t, dtype=float).reshape(-1)
-    r['angle'] = np.asarray(angle, dtype=float).reshape(-1)
-    r['anglevel'] = np.asarray(anglevel, dtype=float).reshape(-1)
-    r['table'] = [{'metric': 'motion duration (s)', 'value': float(dur)}, {'metric': 'samples', 'value': int(r['t'].size)}]
-    return r
-
-
-def _preview_curvature_step(b: Any, max_plot_points: int) -> PreviewResult:
-    r: PreviewResult = {'table': [], 't': None, 'angle': None, 'anglevel': None, 'error': None}
-    dur = getattr(b, 'duration', None)
-    if dur is None:
-        r['error'] = 'curvature_step preview needs duration (s).'
-        return r
-    af = getattr(b, 'all_freqs', None)
-    mode = getattr(b, 'all_amps_mode', None) or 'strain'
-    curves = _curves_from_amps(b, mode)
-    angle, anglevel, tnorm, t = b.make_cycles_curvature_step(
-        af,
-        curves,
-        float(dur),
-        b.waitbefore,
-        nominal_frequency=getattr(b, 'step_nominal_frequency', None),
-        nominal_curvature=getattr(b, 'step_nominal_curvature', None),
-    )
-    r['t'] = np.asarray(t, dtype=float).reshape(-1)
-    r['angle'] = np.asarray(angle, dtype=float).reshape(-1)
-    r['anglevel'] = np.asarray(anglevel, dtype=float).reshape(-1)
-    r['table'] = [{'metric': 'motion duration (s)', 'value': float(dur)}, {'metric': 'samples', 'value': int(r['t'].size)}]
-    return r
-
-
-def _preview_step_change(b: Any, max_plot_points: int) -> PreviewResult:
-    r: PreviewResult = {'table': [], 't': None, 'angle': None, 'anglevel': None, 'error': None}
-    freqs = getattr(b, 'step_change_frequencies', None)
-    curves = getattr(b, 'step_change_curves', None)
-    cps = getattr(b, 'step_change_cycles_per_step', None)
-    if freqs is None or curves is None or cps is None:
-        r['error'] = 'step_change preview needs step_change_frequencies, step_change_curves, step_change_cycles_per_step.'
-        return r
-    angle, anglevel, tnorm, t, movedur = b.make_cycles_step_change(
-        freqs,
-        curves,
-        cps,
-        dclamp=getattr(b, 'dclamp', None),
-        amp_step_vel=getattr(b, 'step_change_amp_step_vel', None),
-    )
-    r['t'] = np.asarray(t, dtype=float).reshape(-1)
-    r['angle'] = np.asarray(angle, dtype=float).reshape(-1)
-    r['anglevel'] = np.asarray(anglevel, dtype=float).reshape(-1)
-    r['table'] = [
-        {'metric': 'computed motion duration (s)', 'value': float(movedur)},
-        {'metric': 'samples', 'value': int(r['t'].size)},
-    ]
-    return r

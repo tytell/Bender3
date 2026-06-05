@@ -742,13 +742,6 @@ class Bender:
         self.test_type = test_type
         requested_test_type = str(test_type)
         motion_test_type = requested_test_type
-        if requested_test_type == 'calibration':
-            motion_test_type = str(getattr(self, 'calibration_base_test_type', 'dynamic'))
-            if motion_test_type in ('isometric', 'isovelocity', 'calibration'):
-                raise ValueError(
-                    "calibration_base_test_type must be one of dynamic/frequency_sweep/frequency_step/"
-                    "curvature_step/step_change."
-                )
 
         # --- THE CLEANING CREW ---
         self.aidata = None
@@ -872,59 +865,10 @@ class Bender:
             )
             self.sweep_instantaneous_freq = sweep_freq
 
-        elif motion_test_type == 'frequency_step':
-            if self.duration is None:
-                raise AttributeError("frequency_step requires 'self.duration' to be set in the notebook first.")
-
-            duration = self.duration + self.waitbefore + self.waitafter
-
-            angle, anglevel, tnorm, _, t = self.make_cycles_frequency_step(
-                self.all_freqs,
-                self.all_curves,
-                self.duration,
-                self.waitbefore,
-                nominal_frequency=getattr(self, 'step_nominal_frequency', None),
-                nominal_curvature=getattr(self, 'step_nominal_curvature', None),
-            )
-
-        elif motion_test_type == 'curvature_step':
-            if self.duration is None:
-                raise AttributeError("curvature_step requires 'self.duration' to be set in the notebook first.")
-
-            duration = self.duration + self.waitbefore + self.waitafter
-
-            angle, anglevel, tnorm, _, t = self.make_cycles_curvature_step(
-                self.all_freqs,
-                self.all_curves,
-                self.duration,
-                self.waitbefore,
-                nominal_frequency=getattr(self, 'step_nominal_frequency', None),
-                nominal_curvature=getattr(self, 'step_nominal_curvature', None),
-            )
-
-        elif motion_test_type == 'step_change':
-            freqs = getattr(self, 'step_change_frequencies', None)
-            curves = getattr(self, 'step_change_curves', None)
-            cps = getattr(self, 'step_change_cycles_per_step', None)
-            if freqs is None or curves is None or cps is None:
-                raise AttributeError(
-                    "step_change requires step_change_frequencies, step_change_curves, "
-                    "and step_change_cycles_per_step on the Bender instance."
-                )
-            angle, anglevel, tnorm, t, movedur = self.make_cycles_step_change(
-                freqs,
-                curves,
-                cps,
-                dclamp=getattr(self, 'dclamp', None),
-                amp_step_vel=getattr(self, 'step_change_amp_step_vel', None),
-            )
-            duration = movedur
-
         else:
             raise ValueError(
                 f"Unknown test type: {test_type!r} (use 'dynamic', 'frequency_sweep', "
-                f"'frequency_step', 'curvature_step', 'step_change', 'isometric', "
-                "'isovelocity', or 'calibration')"
+                "'isometric', or 'isovelocity')"
             )
 
         # Access parameters for electrical stimuli stored in 'self' (set by organize_cycles)
@@ -1009,27 +953,16 @@ class Bender:
                 except Exception as e:
                     print(f"⚠️ Inertial calibration file could not be loaded: {e}")
             prof = getattr(self, 'inertial_calibration_profile', None)
-            if requested_test_type != 'calibration':
-                idx_t = self._primary_torque_index()
-                # Raw primary torque only; the inertial correction is applied post-hoc in R. Record
-                # the parameters R needs: whether a system-inertia calibration profile is loaded,
-                # whether analytic specimen inertia is available, and the theoretical system inertia.
-                self.primary_torque_raw = np.asarray(self.forcetorque[idx_t, :], dtype=float).reshape(-1)
-                self.h5_protocol_metadata.update({
-                    'system_inertial_from_profile': bool(use_cal and isinstance(prof, dict)),
-                    'specimen_inertial_from_geometry': bool(self._specimen_moi_for_inertial_torque() > 0),
-                    'theoretical_i_total_system_g_mm2': float(getattr(self, 'i_total_system', 0.0)),
-                })
-            if requested_test_type == 'calibration':
-                idx_t = self._primary_torque_index()
-                prof = self._estimate_inertial_profile(self.forcetorque[idx_t, :], self.anglevel)
-                if prof is not None:
-                    self.inertial_calibration_profile = prof
-                    self.h5_protocol_metadata.update({
-                        'inertial_axis_sensor': prof['axis_sensor'],
-                        'inertial_I_est': prof['I_est'],
-                        'inertial_bias_est': prof['bias_est'],
-                    })
+            idx_t = self._primary_torque_index()
+            # Raw primary torque only; the inertial correction is applied post-hoc in R. Record
+            # the parameters R needs: whether a system-inertia calibration profile is loaded,
+            # whether analytic specimen inertia is available, and the theoretical system inertia.
+            self.primary_torque_raw = np.asarray(self.forcetorque[idx_t, :], dtype=float).reshape(-1)
+            self.h5_protocol_metadata.update({
+                'system_inertial_from_profile': bool(use_cal and isinstance(prof, dict)),
+                'specimen_inertial_from_geometry': bool(self._specimen_moi_for_inertial_torque() > 0),
+                'theoretical_i_total_system_g_mm2': float(getattr(self, 'i_total_system', 0.0)),
+            })
         else:
             print("⚠️ Warning: Could not find all 6 SG channels for Force/Torque calibration.")
 
@@ -1472,7 +1405,7 @@ class Bender:
         if not np.all(np.isfinite(t_arr)):
             raise ValueError(
                 "record_motor_signal: t contains NaN or Inf. "
-                "Check for zero/invalid Hz in all_freqs (curvature_step / dynamic) or non-finite motion duration."
+                "Check for zero/invalid Hz in all_freqs (dynamic / frequency_sweep) or non-finite motion duration."
             )
         dt = float(t_arr[1] - t_arr[0])
         if not np.isfinite(dt) or dt <= 0:
@@ -4404,114 +4337,6 @@ class Bender:
         """Alias for :meth:`run_force_length_series`."""
         return self.run_force_length_series(*args, **kwargs)
 
-    def _uniform_cycles_from_duration(self, duration, f0, amp_deg):
-        """Build period/freq/amp arrays so ``make_cycles_dynamic`` runs uniform f and amplitude for ~``duration`` s."""
-        dur = float(duration)
-        fq = float(f0)
-        amp = float(amp_deg)
-        if not np.isfinite(dur) or dur <= 0:
-            raise ValueError(
-                f"_uniform_cycles_from_duration: duration must be finite and > 0 s; got {duration!r}."
-            )
-        if not np.isfinite(fq) or fq <= 0:
-            raise ValueError(
-                f"_uniform_cycles_from_duration: frequency f0 must be finite and > 0 Hz; got {f0!r}. "
-                "Zero or NaN Hz yields Inf/NaN periods and breaks the time axis."
-            )
-        if not np.isfinite(amp):
-            raise ValueError(f"_uniform_cycles_from_duration: amp_deg must be finite; got {amp_deg!r}.")
-        n = max(1, int(round(dur * fq)))
-        p = 1.0 / fq
-        period_by_cycle = np.full(n, p, dtype=float)
-        freq_by_cycle = np.full(n, fq, dtype=float)
-        amp_by_cycle = np.full(n, amp, dtype=float)
-        return period_by_cycle, freq_by_cycle, amp_by_cycle
-
-    def make_cycles_frequency_step(self, all_freqs, all_curves, duration, waitbefore,
-                                   nominal_frequency=None, nominal_curvature=None):
-        """Returns (angle, anglevel, tnorm, freq, t); ``freq`` is NaN outside the motion window."""
-        dclamp = getattr(self, 'dclamp', None)
-        if dclamp is None:
-            raise ValueError("frequency_step requires self.dclamp (set via organize_cycles).")
-        if duration is None:
-            raise ValueError(
-                "frequency_step requires motion duration (seconds). "
-                "Set bender.duration or use update_metadata(duration=...)."
-            )
-        fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
-        cq_src = nominal_curvature if nominal_curvature is not None else all_curves
-        f0, f1 = _normalize_start_end(fq_src)
-        c0, c1 = _normalize_start_end(cq_src)
-        if abs(f1 - f0) > 1e-9 or abs(c1 - c0) > 1e-9:
-            raise ValueError(
-                "frequency_step expects a single Hz and 1/m setpoint (float or equal [start, end])."
-            )
-        if not np.isfinite(f0) or f0 <= 0:
-            raise ValueError(
-                "make_cycles_frequency_step needs a positive finite frequency (Hz); "
-                f"got f={f0!r} from all_freqs/nominal_frequency {fq_src!r}."
-            )
-        amp_deg = np.rad2deg(c0 * dclamp / 1000.0)
-        period_by_cycle, freq_by_cycle, amp_by_cycle = self._uniform_cycles_from_duration(duration, f0, amp_deg)
-        # frequency_step never runs organize_cycles, so all_degs/all_freqs may be unset; read with
-        # getattr so saving them for make_cycles_dynamic does not raise AttributeError (3.2B).
-        saved_degs, saved_freqs = getattr(self, 'all_degs', None), getattr(self, 'all_freqs', None)
-        self.all_degs = np.array([amp_deg, amp_deg], dtype=float)
-        self.all_freqs = np.array([f0, f0], dtype=float)
-        try:
-            angle, anglevel, tnorm, t = self.make_cycles_dynamic(
-                period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=False)
-        finally:
-            self.all_degs, self.all_freqs = saved_degs, saved_freqs
-        movedur = float(np.sum(period_by_cycle))
-        freq = np.full_like(t, np.nan, dtype=float)
-        mask = (t >= 0) & (t < movedur)
-        freq[mask] = f0
-        self._protocol_log('frequency_step', f0, f0, c0, c0, motion_duration_s=float(duration))
-        return angle, anglevel, tnorm, freq, t
-
-    def make_cycles_curvature_step(self, all_freqs, all_curves, duration, waitbefore,
-                                   nominal_frequency=None, nominal_curvature=None):
-        """Returns (angle, anglevel, tnorm, freq, t); ``freq`` is NaN outside the motion window."""
-        dclamp = getattr(self, 'dclamp', None)
-        if dclamp is None:
-            raise ValueError("curvature_step requires self.dclamp (set via organize_cycles).")
-        if duration is None:
-            raise ValueError(
-                "curvature_step requires motion duration (seconds). "
-                "Set bender.duration or use update_metadata(duration=...)."
-            )
-        fq_src = nominal_frequency if nominal_frequency is not None else all_freqs
-        cq_src = nominal_curvature if nominal_curvature is not None else all_curves
-        f0, f1 = _normalize_start_end(fq_src)
-        c0, c1 = _normalize_start_end(cq_src)
-        if abs(f1 - f0) > 1e-9 or abs(c1 - c0) > 1e-9:
-            raise ValueError(
-                "curvature_step expects a single Hz and 1/m setpoint (float or equal [start, end])."
-            )
-        if not np.isfinite(f0) or f0 <= 0:
-            raise ValueError(
-                "make_cycles_curvature_step needs a positive finite bending frequency (Hz); "
-                f"got f={f0!r} from all_freqs/nominal_frequency {fq_src!r}. "
-                "Zero or NaN Hz makes cycle periods invalid and produces an empty or NaN time array."
-            )
-        amp_deg = np.rad2deg(c0 * dclamp / 1000.0)
-        period_by_cycle, freq_by_cycle, amp_by_cycle = self._uniform_cycles_from_duration(duration, f0, amp_deg)
-        saved_degs, saved_freqs = self.all_degs, self.all_freqs
-        self.all_degs = np.array([amp_deg, amp_deg], dtype=float)
-        self.all_freqs = np.array([f0, f0], dtype=float)
-        try:
-            angle, anglevel, tnorm, t = self.make_cycles_dynamic(
-                period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=False)
-        finally:
-            self.all_degs, self.all_freqs = saved_degs, saved_freqs
-        movedur = float(np.sum(period_by_cycle))
-        freq = np.full_like(t, np.nan, dtype=float)
-        mask = (t >= 0) & (t < movedur)
-        freq[mask] = f0
-        self._protocol_log('curvature_step', f0, f0, c0, c0, motion_duration_s=float(duration))
-        return angle, anglevel, tnorm, freq, t
-
     def make_cycles_frequency_sweep(self, all_freqs, all_curves, amplitude_frequency_exponent, duration, waitbefore,
                                     nominal_frequency=None, nominal_curvature=None):
         """Log-frequency sweep with curvature-based amplitude scaling (exponent matches legacy sweep).
@@ -4737,73 +4562,6 @@ class Bender:
                 )
 
         return angle, anglevel, tnorm, t
-
-    def make_cycles_step_change(self, frequencies, curves, cycles_per_step, dclamp=None,
-                                amp_step_vel=None, record_protocol=True):
-        """
-        Step-change protocol (``step_change.ipynb``): each block has one (frequency, curvature)
-        pair repeated ``cycles_per_step[i]`` times. Builds per-cycle arrays and delegates to
-        :meth:`make_cycles_dynamic`.
-
-        Arrays ``frequencies``, ``curves``, and ``cycles_per_step`` must have the same length
-        (one row per step in the schedule).
-
-        Also assigns ``self.freq_by_cycle``, ``self.amp_by_cycle``, and ``self.period_by_cycle``
-        to the expanded per-cycle vectors for stimulation bookkeeping.
-        """
-        dc = float(dclamp) if dclamp is not None else getattr(self, 'dclamp', None)
-        if dc is None:
-            raise ValueError("make_cycles_step_change requires dclamp (argument or self.dclamp).")
-        # Wrap bare scalars in a 1-element array before the length check so a single-step schedule
-        # (one frequency, one curvature, one cycle count) always has matching lengths (3.4B).
-        freqs = np.atleast_1d(np.asarray(frequencies, dtype=float)).reshape(-1)
-        curv = np.atleast_1d(np.asarray(curves, dtype=float)).reshape(-1)
-        cps = np.atleast_1d(np.asarray(cycles_per_step, dtype=int)).reshape(-1)
-        if not (len(freqs) == len(curv) == len(cps)):
-            raise ValueError("frequencies, curves, and cycles_per_step must have the same length.")
-        allfreqs = np.concatenate([np.full((int(c),), f, dtype=float) for c, f in zip(cps, freqs)])
-        allcurves = np.concatenate([np.full((int(c),), k, dtype=float) for c, k in zip(cps, curv)])
-        period_by_cycle = 1.0 / allfreqs
-        freq_by_cycle = allfreqs
-        amp_by_cycle = np.rad2deg(allcurves * (dc / 1000.0))
-
-        self.period_by_cycle = period_by_cycle
-        self.freq_by_cycle = freq_by_cycle
-        self.amp_by_cycle = amp_by_cycle
-
-        # step_change never runs organize_cycles, so all_degs/all_freqs may be unset; read with
-        # getattr so saving them for make_cycles_dynamic does not raise AttributeError (3.4C/3.2B).
-        saved_degs = getattr(self, 'all_degs', None)
-        saved_freqs = getattr(self, 'all_freqs', None)
-        saved_v = getattr(self, 'amp_step_vel', None)
-        try:
-            self.all_degs = np.array([amp_by_cycle[0], amp_by_cycle[-1]], dtype=float)
-            self.all_freqs = np.array([freq_by_cycle[0], freq_by_cycle[-1]], dtype=float)
-            if amp_step_vel is not None:
-                self.amp_step_vel = float(amp_step_vel)
-            angle, anglevel, tnorm, t = self.make_cycles_dynamic(
-                period_by_cycle, freq_by_cycle, amp_by_cycle, record_protocol=False)
-        finally:
-            self.all_degs = saved_degs
-            self.all_freqs = saved_freqs
-            self.amp_step_vel = saved_v
-
-        movedur = float(np.sum(period_by_cycle))
-        if record_protocol:
-            f_lo, f_hi = float(np.min(allfreqs)), float(np.max(allfreqs))
-            c_lo, c_hi = float(np.min(allcurves)), float(np.max(allcurves))
-            # Log the per-step bend amplitude(s) in curvature units (1/m): scalar for a single-step
-            # schedule, else the list of per-step curvatures (3.4A).
-            step_amp = float(curv[0]) if curv.size == 1 else [float(x) for x in curv]
-            self._protocol_log(
-                'step_change', f_lo, f_hi, c_lo, c_hi,
-                motion_duration_s=movedur,
-                step_change_blocks=int(len(freqs)),
-                step_change_total_cycles=int(len(allfreqs)),
-                dclamp_mm=float(dc),
-                step_amplitude_inv_m=step_amp,
-            )
-        return angle, anglevel, tnorm, t, movedur
 
     def make_stimuli(self, is_stim=None, phase_by_cycle=None, stim_pulse_rate=None, 
                       prestim_time=None, poststim_time=None, prepoststim_dur=None, 
@@ -5092,10 +4850,6 @@ class Bender:
                     'bilateral_mirror_motor': 'bilateral_mirror_motor',
                     'bilateral_sequential_left_frac': 'bilateral_sequential_left_frac',
                 }
-            elif tt == 'calibration':
-                alias_map = {
-                    'base_test_type': 'calibration_base_test_type',
-                }
             else:
                 alias_map = {}
 
@@ -5181,8 +4935,7 @@ class Bender:
         """Return GUI-friendly schema for run_experiment dispatcher fields."""
         return {
             'test_types': [
-                'dynamic', 'frequency_sweep', 'frequency_step', 'curvature_step',
-                'step_change', 'isometric', 'isovelocity', 'calibration',
+                'dynamic', 'frequency_sweep', 'isometric', 'isovelocity',
             ],
             'common_optional': [
                 'use_sono', 'use_inertial_calibration', 'inertial_calibration_file',
@@ -5219,8 +4972,6 @@ class Bender:
                 'isovelocity_pre_hold_s', 'rest_between_steps_s', 'reset_between_steps',
                 'isovelocity_stim_params',
             ],
-            'calibration_required': ['calibration_base_test_type'],
-            'calibration_optional': ['inertial_calibration_file'],
             'legacy_aliases_mirrored_to_canonical': {
                 'isometric': {
                     'initial': 'isometric_initial',
@@ -5308,10 +5059,7 @@ class Bender:
             if _iv_vel_mode in ('strain_rate', 'strain_pct_rate'):
                 if not self._xsec_width_mm_valid():
                     missing.append('xsec_width (mm) (required for strain-rate velocity mode)')
-        elif tt == 'calibration':
-            if getattr(self, 'calibration_base_test_type', None) is None:
-                missing.append('calibration_base_test_type')
-        elif tt in ('dynamic', 'frequency_sweep', 'frequency_step', 'curvature_step'):
+        elif tt in ('dynamic', 'frequency_sweep'):
             def _seq_missing(seq) -> bool:
                 if seq is None:
                     return True
@@ -5367,29 +5115,6 @@ class Bender:
                     neci = None
                 if neci is None or neci < 0:
                     missing.append('n_end_cycles')
-            if not self._clamp_spacing_mm_valid():
-                missing.append('dclamp (mm)')
-            if not self._xsec_width_mm_valid():
-                missing.append('xsec_width (mm)')
-        elif tt == 'step_change':
-            for attr, label in (
-                ('step_change_frequencies', 'step_change_frequencies'),
-                ('step_change_curves', 'step_change_curves'),
-                ('step_change_cycles_per_step', 'step_change_cycles_per_step'),
-            ):
-                seq = getattr(self, attr, None)
-                if seq is None:
-                    missing.append(label)
-                    continue
-                try:
-                    if np.asarray(seq).size == 0:
-                        missing.append(label)
-                except Exception:
-                    try:
-                        if len(seq) == 0:
-                            missing.append(label)
-                    except Exception:
-                        missing.append(label)
             if not self._clamp_spacing_mm_valid():
                 missing.append('dclamp (mm)')
             if not self._xsec_width_mm_valid():

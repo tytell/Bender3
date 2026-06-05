@@ -145,7 +145,7 @@ Goal: Keep the UI responsive and prevent resource spikes from extremely large in
 ## Sprint 9: Quality Gates via Tests & CI (81-90)
 Goal: Ensure changes do not regress safety/data behaviors and keep coverage for critical logic.
 
-- [ ] 81. Do automated tests cover every motion test type including boundary constraints (sweep/step/dynamic/step_change/isometric/isovelocity/calibration)?
+- [ ] 81. Do automated tests cover every motion test type including boundary constraints (dynamic/frequency_sweep/isometric/isovelocity)?
 - [ ] 82. Do tests include failure injection for DAQ-missing and export failure modes (permission denied, invalid output dir)?
 - [ ] 83. Are there tests for output path composition and normalization edge cases (filename-only vs folder+filename, full-path input pasted)?
 - [ ] 84. Do tests validate QC naming/linkage to the exact `.h5` file saved?

@@ -1,10 +1,8 @@
 """
 Named protocol templates: saved **procedure** parameters (test_type + form fields), not morphometrics.
 
-Supports every GUI experiment type: **dynamic**, **frequency_sweep**, **frequency_step**,
-**curvature_step**, **step_change**, **isometric**, **isovelocity**, and **calibration**.
-**calibration** templates may include an optional ``base_protocol`` block (motion parameters
-for ``calibration_base_test_type``) so load + **Apply** restores both layers.
+Supports every GUI experiment type: **dynamic**, **frequency_sweep**, **isometric**,
+and **isovelocity**.
 
 Templates are JSON files you can share or version-control. Load fills Streamlit ``fld_*`` session
 keys and ``test_type_select``; the user then **Apply**es to the ``Bender`` instance. Morphometrics
@@ -56,14 +54,6 @@ MOTION_PROCEDURE_KEYS: Dict[str, List[str]] = {
         'amplitude_frequency_exponent',
         *_MOTION_STIM,
     ],
-    'frequency_step': ['duration', *_MOTION_FREQ_AMP_MODE, *_MOTION_STIM],
-    'curvature_step': ['duration', *_MOTION_FREQ_AMP_MODE, *_MOTION_STIM],
-    'step_change': [
-        'step_change_frequencies',
-        'step_change_curves',
-        'step_change_cycles_per_step',
-        *_MOTION_STIM,
-    ],
 }
 
 # Keys edited as JSON text areas in the GUI (stim routing overrides only; stim params use widgets)
@@ -95,15 +85,12 @@ LIST_FLOAT_KEYS = frozenset(
         'all_amps',
         'all_stimduties',
         'all_stimphases',
-        'step_change_frequencies',
-        'step_change_curves',
     }
 )
 
 LIST_INT_KEYS = frozenset(
     {
         'stim_cycles_in_step',
-        'step_change_cycles_per_step',
     }
 )
 
@@ -179,7 +166,6 @@ def save_protocol_template(
     description: str,
     test_type: str,
     procedure: Dict[str, Any],
-    base_protocol: Optional[Dict[str, Any]] = None,
 ) -> None:
     payload = {
         'version': PROTOCOL_TEMPLATE_VERSION,
@@ -191,8 +177,6 @@ def save_protocol_template(
             str(k): to_json_persistent(v, path=f'procedure.{k}') for k, v in procedure.items()
         },
     }
-    if base_protocol is not None:
-        payload['base_protocol'] = to_json_persistent(base_protocol, path='base_protocol')
     try:
         json.dumps(payload, allow_nan=False)
     except (TypeError, ValueError) as e:
@@ -215,15 +199,13 @@ def procedure_field_names_for_test_type(schema: Dict[str, Any], tt: str) -> List
         return list(schema['isometric_required']) + list(schema['isometric_optional'])
     if tt == 'isovelocity':
         return list(schema['isovelocity_required']) + list(schema['isovelocity_optional'])
-    if tt == 'calibration':
-        return ['calibration_base_test_type'] + list(schema['calibration_optional'])
     if tt in MOTION_PROCEDURE_KEYS:
         return list(MOTION_PROCEDURE_KEYS[tt])
     return []
 
 
 def snapshot_bender_procedure(b: Any, schema: Dict[str, Any], tt: str) -> Dict[str, Any]:
-    """Read procedure-relevant attributes from a ``Bender`` for embedding (e.g. calibration base protocol)."""
+    """Read procedure-relevant attributes from a ``Bender`` for a protocol template."""
     out: Dict[str, Any] = {}
     for name in procedure_field_names_for_test_type(schema, tt):
         if hasattr(b, name):
@@ -393,24 +375,6 @@ def apply_template_to_session_state(
         inject_procedure_value_into_session_state(
             session_state, str(k), v, widget_key=widget_key
         )
-
-    bp = template.get('base_protocol')
-    if isinstance(bp, dict) and tt == 'calibration':
-        btt = str(bp.get('test_type') or '').strip()
-        bproc = bp.get('procedure')
-        if btt and btt in valid_test_types and isinstance(bproc, dict):
-            for k, v in bproc.items():
-                inject_procedure_value_into_session_state(
-                    session_state, str(k), v, widget_key=widget_key
-                )
-            session_state['gui_calibration_embedded_base'] = {
-                'test_type': btt,
-                'procedure': dict(bproc),
-            }
-        else:
-            session_state.pop('gui_calibration_embedded_base', None)
-    else:
-        session_state.pop('gui_calibration_embedded_base', None)
 
     return True, f'Loaded template {template.get("name")!r} ({tt}).'
 
