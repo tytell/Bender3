@@ -7880,9 +7880,12 @@ def main():
                         )
                     if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
                         updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
+                    updates['randomize_step_order'] = _render_randomize_step_order_field(b)
                     st.markdown('**Optional**')
                     for key in schema['isometric_optional']:
-                        if key == 'isometric_stim_params':
+                        if key == 'randomize_step_order':
+                            pass  # already rendered immediately after step size fields above
+                        elif key == 'isometric_stim_params':
                             st.markdown('**Stimulation**')
                             assembled = _render_isometric_stim_fields(b)
                             updates[key] = assembled
@@ -7903,8 +7906,6 @@ def main():
                             updates[key] = _render_rest_between_steps_field(b)
                         elif key == 'reset_between_steps':
                             updates[key] = _render_reset_between_steps_field(b)
-                        elif key == 'randomize_step_order':
-                            updates[key] = _render_randomize_step_order_field(b)
                         elif 'random_seed' in key:
                             sks = _widget_key(key)
                             if sks not in st.session_state:
