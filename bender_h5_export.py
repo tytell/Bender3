@@ -349,12 +349,17 @@ def export_primary_h5(
                 'test_type': rec_tt,
             }
 
+            # RAW torque only. Inertial correction (system + specimen) is NOT applied or saved by
+            # the acquisition GUI: empirical apparatus inertia is fit from an empty calibration run
+            # post-hoc in R, and specimen inertia is analytic from geometry. The parameters needed
+            # for that post-hoc correction (the use_theoretical_inertial_correction flag, specimen
+            # MOI, and the inertial_calibration_profile I_est/bias) are stored in 01_Metadata, not
+            # baked into a corrected time series here. So forcetorque_corrected,
+            # primary_torque_corrected, and the inertial_torque_* traces are intentionally omitted.
             series_keys = [
                 't', 'angle_cmd', 'anglevel_cmd', 'tnorm', 'S1stimcmd', 'S2stimcmd',
-                'aidata', 'angle_measured', 'forcetorque', 'forcetorque_raw', 'forcetorque_corrected',
-                'inertial_torque_system_primary', 'inertial_torque_specimen_primary',
-                'inertial_torque_total_primary',
-                'primary_torque_raw', 'primary_torque_corrected',
+                'aidata', 'angle_measured', 'forcetorque', 'forcetorque_raw',
+                'primary_torque_raw',
                 'cycle_index_by_sample', 'stim_type', 'stim_state', 'stim_side',
             ]
 
@@ -624,8 +629,6 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
     S2 = np.asarray(rec.get('S2stimcmd', np.array([])))
 
     ft_raw = np.asarray(rec.get('forcetorque_raw', rec.get('forcetorque', np.array([]))))
-    ft_corr = np.asarray(rec.get('forcetorque_corrected', np.array([])))
-    inertial_total = np.asarray(rec.get('inertial_torque_total_primary', np.array([])))
 
     axis_key = str(
         getattr(bender, 'primary_bending_axis', getattr(bender, 'bending_axis_sensor', 'zTorque'))
@@ -647,7 +650,6 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
         return np.array([])
 
     primary_raw = _torque_row(ft_raw, primary_idx)
-    primary_corr = _torque_row(ft_corr, primary_idx)
     off1 = _torque_row(ft_raw, axis_to_idx[off_axes[0]]) if len(off_axes) > 0 else np.array([])
     off2 = _torque_row(ft_raw, axis_to_idx[off_axes[1]]) if len(off_axes) > 1 else np.array([])
 
@@ -672,23 +674,12 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
             row=1, col=1, secondary_y=True,
         )
 
+    # RAW primary torque only. The inertial correction is applied post-hoc in R (empirical
+    # apparatus inertia from an empty calibration run; analytic specimen inertia from geometry),
+    # so the QC figure does not draw a "corrected" trace or an inertial-torque overlay.
     if t.size > 0 and primary_raw.size == t.size:
         fig.add_trace(
             go.Scatter(x=t, y=primary_raw, mode='lines', name=f'{axis_norm} raw', line=dict(color='firebrick')),
-            row=2, col=1,
-        )
-    if t.size > 0 and primary_corr.size == t.size:
-        fig.add_trace(
-            go.Scatter(x=t, y=primary_corr, mode='lines', name=f'{axis_norm} corrected', line=dict(color='seagreen')),
-            row=2, col=1,
-        )
-    if t.size > 0 and inertial_total.size == t.size and np.any(np.isfinite(inertial_total)):
-        fig.add_trace(
-            go.Scatter(
-                x=t, y=inertial_total, mode='lines',
-                name='inertial torque (total, primary)',
-                line=dict(color='goldenrod', dash='dot'),
-            ),
             row=2, col=1,
         )
 
