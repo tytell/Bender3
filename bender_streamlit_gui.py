@@ -2624,17 +2624,72 @@ def _current_protocol_token() -> str:
     )
 
 
+def _applied_specimen_id() -> str:
+    """Currently-applied specimen ID — the same value written to the HDF5 header
+    (``h5_protocol_metadata['specimen_id']``), so the auto-generated filename always matches the
+    specimen stored inside the file rather than a stale/uncommitted widget value. Falls back to
+    ``fishcode`` then the live ``gui_specimen_id`` field, then ``''``."""
+    b = st.session_state.get('bender')
+    if b is not None:
+        meta = getattr(b, 'h5_protocol_metadata', {}) or {}
+        sid = str(meta.get('specimen_id') or '').strip()
+        if sid:
+            return sid
+        fc = str(getattr(b, 'fishcode', '') or '').strip()
+        if fc:
+            return fc
+    return str(st.session_state.get('gui_specimen_id') or '').strip()
+
+
+def _next_trial_number_on_disk(folder: str, prefix: str) -> int:
+    """Next acquisition number for files named ``<prefix><NN>...`` in ``folder``.
+
+    Scans ``folder`` for existing files whose name starts with ``prefix`` and returns
+    ``max(found NN) + 1`` (``1`` when none exist or ``folder`` is unreadable). Because the scan is
+    scoped to the date+specimen ``prefix``, numbering resets to ``01`` for each unique
+    date+specimen pair instead of running continuously across the session.
+    """
+    folder = str(folder or '').strip()
+    if not folder or not os.path.isdir(folder):
+        return 1
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return 1
+    hi = 0
+    for name in names:
+        if not name.startswith(prefix):
+            continue
+        rest = name[len(prefix):]
+        digits = ''
+        for ch in rest:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if digits:
+            try:
+                hi = max(hi, int(digits))
+            except ValueError:
+                pass
+    return hi + 1
+
+
 def _standard_filename_stem(proc: str) -> str:
     """``YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>`` for the next acquisition.
 
-    ``NN`` is the 1-based acquisition number for this session (``counter + 1``), zero-padded to two
-    digits, so files sort by acquisition order in the file browser.
+    ``specimenID`` is the currently-applied specimen (the same value written to the HDF5 header).
+    ``NN`` is derived by scanning the output folder for existing files sharing this date+specimen
+    prefix (``max(found) + 1``, ``01`` if none), so numbering resets per unique date+specimen pair
+    rather than running continuously across the session.
     """
     date = _session_date_str()
-    specimen = _sanitize_filename_token(st.session_state.get('gui_specimen_id')) or 'specimen'
+    specimen = _sanitize_filename_token(_applied_specimen_id()) or 'specimen'
     proc_token = _sanitize_filename_token(proc).lower() or 'unknown'
-    n = _session_trial_counter() + 1
-    return f'{date}_{specimen}_bender_{n:02d}_{proc_token}'
+    folder = str(st.session_state.get('gui_data_folder') or '').strip()
+    prefix = f'{date}_{specimen}_bender_'
+    n = _next_trial_number_on_disk(folder, prefix)
+    return f'{prefix}{n:02d}_{proc_token}'
 
 
 def _compose_output_h5_path() -> str:

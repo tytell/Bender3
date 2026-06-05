@@ -343,21 +343,31 @@ def test_stepwise_does_not_show_redundant_hardware_not_loaded_banner():
 
 
 def test_standard_output_filename_convention():
-    """`_compose_output_h5_path` follows YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5."""
+    """`_compose_output_h5_path` follows YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5.
+
+    NN is derived by scanning the output folder for existing files with the same date+specimen
+    prefix (max + 1, 01 if none), so numbering resets per unique date+specimen pair.
+    """
     _clear_streamlit_session_state()
+    folder = tempfile.mkdtemp()
     st.session_state['gui_session_date'] = '2026-06-03'
-    st.session_state['gui_data_folder'] = r'C:\tmp'
+    st.session_state['gui_data_folder'] = folder
     st.session_state['gui_specimen_id'] = 'bass 01/L'  # exercises token sanitization
     st.session_state['test_type_select'] = 'isovelocity'
-    st.session_state['gui_session_trial_counter'] = 0
 
+    # Empty folder -> first acquisition is 01.
     p = gui._compose_output_h5_path()
     assert os.path.basename(p) == '2026-06-03_bass-01-L_bender_01_isovelocity.h5'
 
-    # The counter drives a zero-padded, sortable acquisition number.
-    gui._increment_session_trial_counter()
+    # An existing file for this date+specimen bumps the next number (scan-derived, sortable).
+    open(os.path.join(folder, '2026-06-03_bass-01-L_bender_01_isovelocity.h5'), 'w').close()
     p2 = gui._compose_output_h5_path()
     assert os.path.basename(p2) == '2026-06-03_bass-01-L_bender_02_isovelocity.h5'
+
+    # A different specimen on the same date resets numbering to 01 (prefix-scoped scan).
+    st.session_state['gui_specimen_id'] = 'inertial cal'
+    p3 = gui._compose_output_h5_path()
+    assert os.path.basename(p3) == '2026-06-03_inertial-cal_bender_01_isovelocity.h5'
 
 
 def test_standard_filename_falls_back_to_manual_without_specimen():
