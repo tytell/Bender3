@@ -3103,6 +3103,19 @@ class Bender:
                     s1 = np.zeros_like(t)
                     s2 = np.zeros_like(t)
 
+            # Post-experiment buffer on the final step, mirroring dynamic's waitafter: motor
+            # commanded to 0°, stim off, recording continues so the signal can settle.
+            if i == num_steps - 1:
+                _wait_after = max(0.0, float(getattr(self, 'waitafter', 0.0)))
+                if _wait_after > 0:
+                    _n_wait = max(2, int(round(_wait_after * daq_hz)) + 1)
+                    _t_wait = float(t[-1]) + np.linspace(0.0, _wait_after, _n_wait)[1:]
+                    t = np.concatenate([t, _t_wait])
+                    angle = np.concatenate([angle, np.zeros(_t_wait.size)])
+                    anglevel = np.concatenate([anglevel, np.zeros(_t_wait.size)])
+                    s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
+                    s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
+
             self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
             self.record_stim_signal(s1, s2)
             self.make_motor_stepper_pulses(
@@ -3931,6 +3944,20 @@ class Bender:
                 step_guard_angle = d0['guard_angle_deg']
 
             prev_end_deg = float(angle[-1])
+
+            # Post-experiment buffer on the final step, mirroring dynamic's waitafter: motor
+            # commanded to 0°, stim off, recording continues so the signal can settle.
+            if i == n - 1:
+                _wait_after = max(0.0, float(getattr(self, 'waitafter', 0.0)))
+                if _wait_after > 0:
+                    _n_wait = max(2, int(round(_wait_after * daq_hz)) + 1)
+                    _t_wait = float(t[-1]) + np.linspace(0.0, _wait_after, _n_wait)[1:]
+                    t = np.concatenate([t, _t_wait])
+                    angle = np.concatenate([angle, np.zeros(_t_wait.size)])
+                    anglevel = np.concatenate([anglevel, np.zeros(_t_wait.size)])
+                    s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
+                    s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
+
             self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
             self.record_stim_signal(s1, s2)
             self.make_motor_stepper_pulses(
