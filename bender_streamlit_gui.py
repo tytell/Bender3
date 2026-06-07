@@ -2299,9 +2299,9 @@ def _render_field(b: Bender, name: str, kind: str, label: str, *, help_text: Opt
 
     if kind == 'select':
         opts = list(ALL_AMPS_MODE_OPTIONS)
-        dv = str(cur or 'strain')
+        dv = str(cur or 'angle')
         if dv not in opts:
-            dv = 'strain'
+            dv = 'angle'
         if sk not in st.session_state:
             st.session_state[sk] = dv
         return str(st.selectbox(label, opts, key=sk, format_func=_format_strain_or_amp_mode, help=h))
@@ -7761,9 +7761,9 @@ def main():
                             elif key == 'isometric_mode':
                                 modes = list(ALL_AMPS_MODE_OPTIONS)
                                 skm = _widget_key('isometric_mode')
-                                cur_m = str(_get_session_value(b, key, 'strain'))
+                                cur_m = str(_get_session_value(b, key, 'angle'))
                                 if skm not in st.session_state:
-                                    st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                                    st.session_state[skm] = cur_m if cur_m in modes else 'angle'
                                 updates[key] = st.selectbox(
                                     'Isometric mode (units for initial/final)',
                                     modes,
@@ -7817,9 +7817,9 @@ def main():
                             if key == 'isovelocity_starting_strain_mode':
                                 modes = list(ALL_AMPS_MODE_OPTIONS)
                                 skm = _widget_key('isovelocity_starting_strain_mode')
-                                cur_m = str(_get_session_value(b, key, 'strain'))
+                                cur_m = str(_get_session_value(b, key, 'angle'))
                                 if skm not in st.session_state:
-                                    st.session_state[skm] = cur_m if cur_m in modes else 'strain'
+                                    st.session_state[skm] = cur_m if cur_m in modes else 'angle'
                                 updates[key] = st.selectbox(
                                     ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for starting posture'),
                                     modes,
