@@ -745,6 +745,18 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
         except Exception as e:
             r['error'] = f'Isometric timeline preview failed: {type(e).__name__}: {e}'
             return r
+        daq_hz = float(getattr(b, 'daq_ai_sample_rate_hz', 0.0) or 0.0)
+        if not (np.isfinite(daq_hz) and daq_hz > 0):
+            daq_hz = 1000.0
+        _wait_after = max(0.0, float(getattr(b, 'waitafter', 0.0)))
+        if _wait_after > 0:
+            _n_wait = max(2, int(round(_wait_after * daq_hz)) + 1)
+            _t_wait = float(t[-1]) + np.linspace(0.0, _wait_after, _n_wait)[1:]
+            t = np.concatenate([t, _t_wait])
+            angle = np.concatenate([angle, np.zeros(_t_wait.size)])
+            anglevel = np.concatenate([anglevel, np.zeros(_t_wait.size)])
+            s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
+            s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
         r['t'] = t
         r['angle'] = angle
         r['anglevel'] = anglevel
@@ -899,6 +911,18 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
     except Exception as e:
         r['error'] = f'Isovelocity timeline preview failed: {type(e).__name__}: {e}'
         return r
+    daq_hz = float(getattr(b, 'daq_ai_sample_rate_hz', 0.0) or 0.0)
+    if not (np.isfinite(daq_hz) and daq_hz > 0):
+        daq_hz = 1000.0
+    _wait_after = max(0.0, float(getattr(b, 'waitafter', 0.0)))
+    if _wait_after > 0:
+        _n_wait = max(2, int(round(_wait_after * daq_hz)) + 1)
+        _t_wait = float(t[-1]) + np.linspace(0.0, _wait_after, _n_wait)[1:]
+        t = np.concatenate([t, _t_wait])
+        angle = np.concatenate([angle, np.zeros(_t_wait.size)])
+        anglevel = np.concatenate([anglevel, np.zeros(_t_wait.size)])
+        s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
+        s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
     r['t'] = t
     r['angle'] = angle
     r['anglevel'] = anglevel
