@@ -1768,24 +1768,6 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
             )
         blocks.append({'direction': direction, 'stim_sides': stim_sides})
 
-    left_v = float(
-        st.number_input(
-            'Left stim voltage (V)',
-            key=_widget_key('left_stim_voltage'),
-            format='%.6g',
-            min_value=0.0,
-            help='Voltage on the LEFT stim channel when a block includes LEFT or BOTH.',
-        )
-    )
-    right_v = float(
-        st.number_input(
-            'Right stim voltage (V)',
-            key=_widget_key('right_stim_voltage'),
-            format='%.6g',
-            min_value=0.0,
-            help='Voltage on the RIGHT stim channel when a block includes RIGHT or BOTH.',
-        )
-    )
     reset_ramp = float(
         st.number_input(
             'Neutral reset ramp duration (s)',
@@ -1796,11 +1778,15 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
         )
     )
 
+    # Voltage values are rendered in the Stimulation section above; read from session state
+    # here only to cross-validate against which stim sides the blocks use.
+    _left_v = float(st.session_state.get(_widget_key('left_stim_voltage'), 5.0) or 5.0)
+    _right_v = float(st.session_state.get(_widget_key('right_stim_voltage'), 5.0) or 5.0)
     sides_used = {b['stim_sides'] for b in blocks}
-    if ('left' in sides_used or 'both' in sides_used) and not (np.isfinite(left_v) and left_v > 0):
+    if ('left' in sides_used or 'both' in sides_used) and not (np.isfinite(_left_v) and _left_v > 0):
         st.error('Left stim voltage must be finite and > 0 when any block uses LEFT or BOTH stim.')
         return None
-    if ('right' in sides_used or 'both' in sides_used) and not (np.isfinite(right_v) and right_v > 0):
+    if ('right' in sides_used or 'both' in sides_used) and not (np.isfinite(_right_v) and _right_v > 0):
         st.error('Right stim voltage must be finite and > 0 when any block uses RIGHT or BOTH stim.')
         return None
     if not (np.isfinite(reset_ramp) and reset_ramp >= 0):
@@ -1808,7 +1794,7 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
         return None
 
     try:
-        b._validate_block_sequence_voltages(blocks, left_v, right_v)
+        b._validate_block_sequence_voltages(blocks, _left_v, _right_v)
         b._normalize_block_sequence(blocks)
     except ValueError as exc:
         st.error(str(exc))
@@ -1816,8 +1802,6 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
 
     return {
         'block_sequence': blocks,
-        'left_stim_voltage': left_v,
-        'right_stim_voltage': right_v,
         'block_reset_ramp_duration_s': reset_ramp,
     }
 
@@ -1885,6 +1869,8 @@ def _seed_isovelocity_stim_widget_state(b: Bender) -> None:
         'isovelocity_stim_onset_s': onset,
         'isovelocity_stim_duration_s': duration,
         'isovelocity_post_baseline_s': float(sp.get('post_baseline_s', 1.0) or 0.0),
+        'left_stim_voltage': float(sp.get('left_stim_voltage', None) or getattr(b, 'left_stim_voltage', 5.0) or 5.0),
+        'right_stim_voltage': float(sp.get('right_stim_voltage', None) or getattr(b, 'right_stim_voltage', 5.0) or 5.0),
     }
     for name, val in defaults.items():
         sk = _widget_key(name)
@@ -1909,6 +1895,24 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
                 'visible and editable either way, so values are preserved while toggling and you can '
                 'pre-condition (run with stim off, then enable) or tune.'
             ),
+        )
+    )
+    left_v = float(
+        st.number_input(
+            'Left stim voltage (V)',
+            key=_widget_key('left_stim_voltage'),
+            format='%.6g',
+            min_value=0.0,
+            help='Voltage on the LEFT stim channel when a block includes LEFT or BOTH.',
+        )
+    )
+    right_v = float(
+        st.number_input(
+            'Right stim voltage (V)',
+            key=_widget_key('right_stim_voltage'),
+            format='%.6g',
+            min_value=0.0,
+            help='Voltage on the RIGHT stim channel when a block includes RIGHT or BOTH.',
         )
     )
     onset_sk = _widget_key('isovelocity_stim_onset_s')
@@ -1986,6 +1990,8 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
         'post_baseline_s': post_baseline,
         'stim_pulse_rate': pulse_rate,
         'pulse_width_ms': pulse_width,
+        'left_stim_voltage': left_v,
+        'right_stim_voltage': right_v,
     }
     return params
 
@@ -2006,6 +2012,8 @@ def _seed_isometric_stim_widget_state(b: Bender) -> None:
         'isometric_hold_duration_s': float(sp.get('hold_duration_s', 5.0)),
         'isometric_pre_baseline_s': float(sp.get('pre_baseline_s', 1.0) or 0.0),
         'isometric_post_baseline_s': float(sp.get('post_baseline_s', 1.0) or 0.0),
+        'left_stim_voltage': float(sp.get('left_stim_voltage', None) or getattr(b, 'left_stim_voltage', 5.0) or 5.0),
+        'right_stim_voltage': float(sp.get('right_stim_voltage', None) or getattr(b, 'right_stim_voltage', 5.0) or 5.0),
     }
     for name, val in defaults.items():
         sk = _widget_key(name)
@@ -2026,6 +2034,24 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
                 'visible and editable either way, so values are preserved while toggling and you can '
                 'pre-condition (run with stim off, then enable) or tune.'
             ),
+        )
+    )
+    left_v = float(
+        st.number_input(
+            'Left stim voltage (V)',
+            key=_widget_key('left_stim_voltage'),
+            format='%.6g',
+            min_value=0.0,
+            help='Voltage on the LEFT stim channel when a block includes LEFT or BOTH.',
+        )
+    )
+    right_v = float(
+        st.number_input(
+            'Right stim voltage (V)',
+            key=_widget_key('right_stim_voltage'),
+            format='%.6g',
+            min_value=0.0,
+            help='Voltage on the RIGHT stim channel when a block includes RIGHT or BOTH.',
         )
     )
     onset_sk = _widget_key('isometric_stim_onset_s')
@@ -2140,6 +2166,8 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
         'post_baseline_s': post_baseline,
         'stim_pulse_rate': pulse_rate,
         'pulse_width_ms': pulse_width,
+        'left_stim_voltage': left_v,
+        'right_stim_voltage': right_v,
     }
     return params
 
