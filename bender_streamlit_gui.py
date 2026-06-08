@@ -8191,6 +8191,7 @@ def main():
                         st.session_state['gui_last_preview_tt'] = tt
                         if st.session_state['gui_last_preview'].get('ok'):
                             st.session_state['gui_protocol_confirmed'] = True
+                        st.session_state['gui_sec5_hide'] = False
                         st.toast('Preview updated.')
                         st.rerun()
 
@@ -8204,8 +8205,7 @@ def main():
 
         st.divider()
         st.subheader('6 · Experiment preview')
-        if _procedure_apply_dirty() or _morpho_apply_dirty():
-            _soft_apply_reminder()
+        st.session_state.setdefault('gui_sec5_hide', True)
 
         def _render_current_settings_table() -> None:
             _sync_morphometric_flags_from_session(b)
@@ -8262,7 +8262,12 @@ def main():
                 )
             st.dataframe(_settings_df, use_container_width=True, hide_index=True)
 
-        if st.session_state.get('gui_last_preview') is not None:
+        if st.session_state.get('gui_sec5_hide'):
+            st.caption('Preview hidden. Uncheck **Hide section** below to view.')
+        if not st.session_state.get('gui_sec5_hide'):
+            if _procedure_apply_dirty() or _morpho_apply_dirty():
+                _soft_apply_reminder()
+        if not st.session_state.get('gui_sec5_hide') and st.session_state.get('gui_last_preview') is not None:
             prev = st.session_state['gui_last_preview']
             if st.session_state.get('gui_last_preview_tt') != tt:
                 st.warning(
@@ -8472,6 +8477,12 @@ def main():
                 st.warning(
                     'Preview incomplete — open **Procedure fields** and click **Refresh experiment preview** (bottom of that form).'
                 )
+
+        st.checkbox(
+            'Hide section (values stay; unhide to view)',
+            key='gui_sec5_hide',
+            help='Collapse preview charts to reduce page weight. Section 6 auto-opens when you generate a new preview.',
+        )
 
         st.divider()
         st.markdown('### Run controls')
