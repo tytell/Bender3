@@ -358,7 +358,8 @@ def _inject_load_save_button_theme() -> None:
     - **Secondary:** white fill, slate border and text; hover tints toward light red.
     - **Load/Save:** `_load_save_button` uses primary styling (blue).
     - **Form submit (Streamlit 1.45+):** primary actions use testid ``stBaseButton-primaryFormSubmit``.
-    - **KILL DAQ:** `key=gui_kill_daq` (`.st-key-gui_kill_daq`) overrides primary back to red.
+    - **KILL DAQ:** `key=gui_kill_daq` (`.st-key-gui_kill_daq`) overrides primary to orange (warning).
+    - **Save/commit actions:** keyed save buttons (``gui_save_*``, ``gui_append_*``, etc.) override to green (declared last for cascade priority).
     """
     st.markdown(
         """
@@ -832,17 +833,58 @@ body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBas
 body:has(.bnd-workflow-active) [data-testid="stMain"] button[data-testid^="stBaseButton-primary"]:focus-visible {
     box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb !important;
 }
-/* KILL DAQ — danger override via Streamlit key class (key=gui_kill_daq); wins over global blue primary */
+/* Global primary button baseline — blue on all routes (no page-scoping).
+   Declared before per-key overrides; keyed colors win by cascade order. */
+button[data-testid="baseButton-primary"],
+button[data-testid="stBaseButton-primary"],
+button[data-testid^="stBaseButton-primary"] {
+    background-color: #2563eb !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #1d4ed8 !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+button[data-testid="baseButton-primary"]:hover,
+button[data-testid="stBaseButton-primary"]:hover,
+button[data-testid^="stBaseButton-primary"]:hover {
+    background-color: #3b82f6 !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45) !important;
+    background-image: none !important;
+    filter: none !important;
+}
+button[data-testid="baseButton-primary"] *,
+button[data-testid="stBaseButton-primary"] *,
+button[data-testid^="stBaseButton-primary"] * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+button[data-testid="baseButton-primary"]:disabled,
+button[data-testid="stBaseButton-primary"]:disabled,
+button[data-testid^="stBaseButton-primary"]:disabled {
+    background-color: #60a5fa !important;
+    border-color: #3b82f6 !important;
+    color: #fef2f2 !important;
+    box-shadow: none !important;
+    opacity: 0.9 !important;
+}
+button[data-testid="baseButton-primary"]:focus-visible,
+button[data-testid="stBaseButton-primary"]:focus-visible,
+button[data-testid^="stBaseButton-primary"]:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #2563eb !important;
+}
+/* KILL DAQ — orange warning; declared after global blue so cascade order wins */
 .st-key-gui_kill_daq button[data-testid="baseButton-primary"],
 .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"],
 body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="baseButton-primary"],
 body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"],
 body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
 body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
-    background-color: #dc2626 !important;
+    background-color: #f97316 !important;
     background-image: none !important;
     color: #ffffff !important;
-    border: 1px solid #b91c1c !important;
+    border: 1px solid #ea580c !important;
     box-shadow: none !important;
     filter: none !important;
 }
@@ -852,9 +894,9 @@ body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="baseButt
 body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"]:hover,
 body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="baseButton-primary"],
 body:has(.bnd-workflow-active) .st-key-gui_kill_daq [data-testid="stButton"]:hover button[data-testid="stBaseButton-primary"] {
-    background-color: #f87171 !important;
-    border-color: #fca5a5 !important;
-    box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45) !important;
+    background-color: #fb923c !important;
+    border-color: #fdba74 !important;
+    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.45) !important;
     background-image: none !important;
     color: #ffffff !important;
     filter: none !important;
@@ -872,7 +914,64 @@ body:has(.bnd-workflow-active) .st-key-gui_kill_daq button[data-testid="stBaseBu
 }
 .st-key-gui_kill_daq button[data-testid="baseButton-primary"]:focus-visible,
 .st-key-gui_kill_daq button[data-testid="stBaseButton-primary"]:focus-visible {
-    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #dc2626 !important;
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #f97316 !important;
+}
+/* Save / commit actions — green; declared after orange so cascade order is correct.
+   Covers all button types (primary and secondary) for consistent solid-green appearance. */
+.st-key-gui_save_h5_and_qc button,
+.st-key-gui_save_h5_only button,
+.st-key-gui_save_qc_only button,
+.st-key-gui_append_note_to_h5 button,
+.st-key-gui_h5_attr_apply button,
+.st-key-gui_btn_write_load_config button,
+.st-key-gui_morphometrics_btn_save button,
+.st-key-gui_proc_save_template button,
+.st-key-gui_save_progress_snapshot button {
+    background-color: #16a34a !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    border: 1px solid #15803d !important;
+    font-weight: 600 !important;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+.st-key-gui_save_h5_and_qc button:hover,
+.st-key-gui_save_h5_only button:hover,
+.st-key-gui_save_qc_only button:hover,
+.st-key-gui_append_note_to_h5 button:hover,
+.st-key-gui_h5_attr_apply button:hover,
+.st-key-gui_btn_write_load_config button:hover,
+.st-key-gui_morphometrics_btn_save button:hover,
+.st-key-gui_proc_save_template button:hover,
+.st-key-gui_save_progress_snapshot button:hover {
+    background-color: #22c55e !important;
+    border-color: #4ade80 !important;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.45) !important;
+    background-image: none !important;
+    color: #ffffff !important;
+    filter: none !important;
+}
+.st-key-gui_save_h5_and_qc button *,
+.st-key-gui_save_h5_only button *,
+.st-key-gui_save_qc_only button *,
+.st-key-gui_append_note_to_h5 button *,
+.st-key-gui_h5_attr_apply button *,
+.st-key-gui_btn_write_load_config button *,
+.st-key-gui_morphometrics_btn_save button *,
+.st-key-gui_proc_save_template button *,
+.st-key-gui_save_progress_snapshot button * {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+.st-key-gui_save_h5_and_qc button:focus-visible,
+.st-key-gui_save_h5_only button:focus-visible,
+.st-key-gui_save_qc_only button:focus-visible,
+.st-key-gui_append_note_to_h5 button:focus-visible,
+.st-key-gui_h5_attr_apply button:focus-visible,
+.st-key-gui_btn_write_load_config button:focus-visible,
+.st-key-gui_morphometrics_btn_save button:focus-visible,
+.st-key-gui_proc_save_template button:focus-visible,
+.st-key-gui_save_progress_snapshot button:focus-visible {
+    box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #16a34a !important;
 }
 </style>
 """,
@@ -8008,7 +8107,7 @@ def main():
                             help='Copy procedure fields onto the experiment object (not **Run experiment**).',
                         )
                     with _pc2:
-                        sub_proc_save = st.form_submit_button('Save template', use_container_width=True)
+                        sub_proc_save = st.form_submit_button('Save template', key='gui_proc_save_template', use_container_width=True)
                 else:
                     sub_proc_apply = st.form_submit_button(
                         'Apply procedure',
