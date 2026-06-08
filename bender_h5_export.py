@@ -316,6 +316,7 @@ def export_primary_h5(
         g_meta.attrs['post-trial notes'] = notes
         g_meta.attrs['filename'] = filename_only
         g_meta.attrs['start_time_iso'] = start_time_iso
+        g_meta.attrs['starting_angle_deg'] = float(getattr(bender, 'starting_angle_deg', 0.0))
 
         g_cal_link = g_meta.create_group('calibration_link')
         g_cal_link.attrs['use_inertial_calibration'] = bool(use_cal)

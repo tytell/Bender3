@@ -4094,6 +4094,7 @@ def _apply_procedure_form_to_bender(b: Bender, updates: dict, tt: str) -> None:
     _sync_morphometric_flags_from_session(b)
     _apply_form_updates(b, updates, tt)
     _sync_genus_species_to_bender(b)
+    b.starting_angle_deg = float(st.session_state.get('gui_starting_angle_deg') or 0.0)
     _pn = str(st.session_state.get('gui_post_notes') or '').strip()
     if _pn:
         b.post_trial_notes = _pn
@@ -8074,6 +8075,18 @@ def main():
                     st.info(_stim_clamp)
 
                 st.divider()
+                if 'gui_starting_angle_deg' not in st.session_state:
+                    st.session_state['gui_starting_angle_deg'] = 0.0
+                st.number_input(
+                    'Starting angle (deg)',
+                    format='%.4g',
+                    key='gui_starting_angle_deg',
+                    help=(
+                        'Physical starting angle of the apparatus measured by protractor before '
+                        'the experiment. Reference annotation only — stored in HDF5 metadata, '
+                        'does not affect motor commands.'
+                    ),
+                )
                 if 'gui_protocol_show_save_template' not in st.session_state:
                     st.session_state['gui_protocol_show_save_template'] = False
                 _show_tpl_save = st.checkbox(
