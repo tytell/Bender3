@@ -7789,7 +7789,7 @@ def main():
         st.divider()
         st.subheader('5 · Protocol / Run')
 
-        with st.expander('Load protocol template (optional)', expanded=False):
+        with st.expander('Load protocol template (optional)', expanded=True):
             st.caption(
                 'Templates set experiment type + procedure fields only (not morphometrics). '
                 'Use **Apply procedure** after loading.'
