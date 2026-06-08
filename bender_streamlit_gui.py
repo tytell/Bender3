@@ -6826,7 +6826,7 @@ def main():
     st.set_page_config(
         page_title='CritterGripper',
         layout='wide',
-        initial_sidebar_state='expanded',
+        initial_sidebar_state='collapsed',
         menu_items={
             'Get Help': None,
             'Report a bug': None,
