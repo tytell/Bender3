@@ -368,6 +368,7 @@ def _preview_concat_isovelocity_timeline(
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='left',
                 post_baseline_s=0.0,
+                approach_from_deg=0.0,
                 **iso_timing_kw,
                 **iso_extra,
             )
@@ -415,6 +416,7 @@ def _preview_concat_isovelocity_timeline(
                 sequential_left_frac=seq_frac,
                 mirror_stim_side=None,
                 post_baseline_s=post_b,
+                approach_from_deg=0.0,
                 **iso_timing_kw,
                 **iso_extra,
             )
