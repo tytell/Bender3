@@ -361,6 +361,16 @@ class Bender:
         # re-anchored to 0.0 whenever the motor is driven and confirmed to neutral.
         self._motor_continuous_step_pos = None
 
+        # Persistent, NON-re-zeroing cumulative encoder reference (specimen/output-shaft degrees).
+        # The encoder counter task in run() is created fresh each segment (NI default
+        # initial_angle=0.0), so angle_measured re-zeros every segment and cannot reveal cumulative
+        # open-loop drift from home. This accumulator sums each segment's end-of-segment encoder
+        # reading so the running divergence from the commanded position is observable per segment.
+        # Re-anchored to 0.0 only when the motor is driven and confirmed to neutral (never per
+        # segment), in lockstep with _motor_continuous_step_pos. Observability only -- never read by
+        # the motion path, so it cannot change motion.
+        self._encoder_cumulative_deg = 0.0
+
         # 5. Placeholders (to prevent NoneType/0-channel errors)
         self.t = np.array([0.0, 1.0/self.daq_ai_sample_rate_hz])
         self.S1stimcmd = np.zeros(len(self.t))
@@ -3007,6 +3017,9 @@ class Bender:
         # Confirmed at neutral: re-anchor the cross-segment step-quantization phase to 0 so the
         # next protocol's first segment starts from a known sub-step reference.
         self._motor_continuous_step_pos = 0.0
+        # Re-anchor the cumulative encoder drift reference at the same confirmed-neutral point so
+        # the observability divergence is measured from this known home, not across protocols.
+        self._encoder_cumulative_deg = 0.0
         return 0.0
 
     def command_start_position_zero(self, device_name=None, ramp_duration_s=None):
@@ -3034,6 +3047,79 @@ class Bender:
         entry['block_stim_sides'] = str(block_stim_sides)
         entry['left_stim_voltage'] = float(left_stim_voltage)
         entry['right_stim_voltage'] = float(right_stim_voltage)
+
+    def _record_motor_position_reference(self, entry, *, protocol, segment_index):
+        """Record the persistent, NON-re-zeroing motor position reference for one segment (Task A).
+
+        The encoder counter task in :meth:`run` is recreated each segment (NI default
+        ``initial_angle=0.0``), so ``angle_measured`` re-zeros every segment and cannot reveal
+        cumulative open-loop drift from home. This logs two cross-segment references:
+
+        - ``cumulative_commanded_steps``: ``round(self._motor_continuous_step_pos)`` -- the
+          continuous commanded position in MOTOR microsteps (already carried across boundaries).
+        - ``encoder_cumulative_deg``: running sum of each segment's NET encoder displacement
+          (``angle_measured[-1] - angle_measured[0]``, specimen/output-shaft degrees), accumulated
+          on ``self._encoder_cumulative_deg``. Because the counter re-zeros to ~0 at each segment
+          start, this reconstructs the cumulative angle a non-re-zeroing encoder would report, and is
+          directly comparable to the absolute commanded position above.
+
+        Both are written onto the trial ``entry`` (serialized to HDF5 by ``export_primary_h5``) AND
+        printed as one stdout line so the drift is visible in the Streamlit terminal while the
+        in-app plotter and file-save are unavailable. Reads only -- never alters motion.
+        """
+        pos = self._motor_continuous_step_pos
+        angle_measured = np.asarray(
+            getattr(self, 'angle_measured', np.array([])), dtype=float
+        ).reshape(-1)
+        # LOUD guard: the reference is meaningless if either source is missing/garbage. Make the
+        # failure loud on stdout (terminal-visible) AND raise -- never silently skip the write.
+        if pos is None or not np.isfinite(float(pos)):
+            msg = (
+                f"[motor-ref] {protocol} seg {segment_index}: cannot record position reference -- "
+                f"_motor_continuous_step_pos is {pos!r} (expected a finite commanded step count)."
+            )
+            print(msg)
+            raise RuntimeError(msg)
+        if angle_measured.size == 0 or not np.all(np.isfinite(angle_measured)):
+            msg = (
+                f"[motor-ref] {protocol} seg {segment_index}: cannot record position reference -- "
+                f"angle_measured is empty or non-finite (size={angle_measured.size})."
+            )
+            print(msg)
+            raise RuntimeError(msg)
+
+        cumulative_commanded_steps = int(round(float(pos)))
+        # Net displacement over the segment; the counter re-zeros each run() so angle_measured[0]
+        # is ~0 on hardware -- subtract it anyway to be exact and offset-robust.
+        segment_net_deg = float(angle_measured[-1] - angle_measured[0])
+        self._encoder_cumulative_deg += segment_net_deg
+        encoder_cumulative_deg = float(self._encoder_cumulative_deg)
+        entry['cumulative_commanded_steps'] = cumulative_commanded_steps
+        entry['encoder_cumulative_deg'] = encoder_cumulative_deg
+
+        # Commanded steps are MOTOR microsteps; the encoder reads specimen/output-shaft degrees, so
+        # divide the gear ratio out to compare both in the same specimen-degree frame.
+        try:
+            deg_per_step = (360.0 / float(self.motor_full_steps_per_rev)) / float(self.motor_gear_ratio)
+        except (TypeError, ValueError, ZeroDivisionError):
+            deg_per_step = float('nan')
+        if np.isfinite(deg_per_step) and deg_per_step != 0.0:
+            commanded_deg = cumulative_commanded_steps * deg_per_step
+            divergence_deg = commanded_deg - encoder_cumulative_deg
+            print(
+                f"[motor-ref] {protocol} seg {segment_index}: "
+                f"cumulative_commanded_steps={cumulative_commanded_steps} ({commanded_deg:.4f} deg) "
+                f"encoder_cumulative_deg={encoder_cumulative_deg:.4f} deg "
+                f"divergence={divergence_deg:.4f} deg"
+            )
+        else:
+            # Conversion factor unavailable: print both raw values labeled so they can be differenced.
+            print(
+                f"[motor-ref] {protocol} seg {segment_index}: "
+                f"cumulative_commanded_steps={cumulative_commanded_steps} (steps) "
+                f"encoder_cumulative_deg={encoder_cumulative_deg:.4f} deg "
+                f"(deg_per_step unavailable -- raw values only)"
+            )
 
     def _run_force_length_steps(
         self,
@@ -3253,6 +3339,9 @@ class Bender:
                 'forcetorque': None,
                 'mean_xforce_stim': None,
             }
+            self._record_motor_position_reference(
+                entry, protocol=str(entry.get('test_type', 'isometric')), segment_index=i,
+            )
             if use_block_stim:
                 self._tag_block_trial_metadata(
                     entry,
@@ -4148,6 +4237,9 @@ class Bender:
                 'guard_triggered': bool(step_guard_triggered),
                 'guard_angle_deg': float(step_guard_angle),
             }
+            self._record_motor_position_reference(
+                entry, protocol=str(entry.get('test_type', 'isovelocity')), segment_index=i,
+            )
             if use_block_stim:
                 self._tag_block_trial_metadata(
                     entry,
