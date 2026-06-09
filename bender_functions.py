@@ -351,6 +351,16 @@ class Bender:
         # commanded position rather than blindly assuming the motor is already at 0 (1.5).
         self._last_commanded_angle_deg = 0.0
 
+        # Commanded continuous motor position (in microsteps) at the last AO sample of the most
+        # recent segment. make_motor_stepper_pulses() carries this across segment boundaries so the
+        # integer step quantization is one continuous process: each segment's emitted pulse count is
+        # referenced to the previous segment's commanded sub-step phase instead of being re-rounded
+        # from its own start. Without it, the fractional step dropped each segment (and the step lost
+        # to the np.arange endpoint exclusion) accumulates into open-loop drift that the per-segment
+        # encoder re-zero cannot detect. None means "first segment starts fresh" (no carry); it is
+        # re-anchored to 0.0 whenever the motor is driven and confirmed to neutral.
+        self._motor_continuous_step_pos = None
+
         # 5. Placeholders (to prevent NoneType/0-channel errors)
         self.t = np.array([0.0, 1.0/self.daq_ai_sample_rate_hz])
         self.S1stimcmd = np.zeros(len(self.t))
@@ -412,6 +422,13 @@ class Bender:
         # Canonical toggle: after each step's rest, drive the motor back to angle = 0° (resting
         # length) before the next step. OFF = motor stays at its current position. FL + FV only.
         self.reset_between_steps = False
+        # Canonical toggle: keep the stepper driver ENABLED (energized/braked) across the
+        # inter-segment gap so the motor holds position between steps. ON (default): the enable
+        # line stays high through the end of each segment's playback and run() reasserts it after
+        # the device reset, so the motor cannot coast/sag between segments (the open-loop drift the
+        # per-segment encoder re-zero cannot detect). OFF: legacy behavior -- the driver idles off
+        # between segments. Independent of DAQ pause/flush, which always happens in the gap.
+        self.hold_motor_between_steps = True
         # Width (ms) of each stimulation pulse (the high time of every carrier pulse), applied to
         # all stimulated protocols. Combined with stim_pulse_rate this sets the pulse high fraction.
         self.pulse_width_ms = 2.0
@@ -1505,7 +1522,20 @@ class Bender:
         self.filename = filename
         return filename
 
-   
+    def _pack_motor_do_word(self, *, enable, step, direction):
+        """Pack one motor DO port sample using the SAME column order as the stepper waveform.
+
+        Mirrors the ``np.packbits`` column order in :meth:`make_motor_stepper_pulses`:
+        ``[0, 0, 0, 0, 0, ENABLE (P0.2), STEP (P0.1), DIR (P0.0)]`` (MSB first). Used by
+        :meth:`run` to derive the enable-high idle word for the inter-segment motor hold so the
+        wiring is defined in one place (never a bare literal).
+        """
+        bits = np.array(
+            [[0, 0, 0, 0, 0, int(bool(enable)), int(bool(step)), int(bool(direction))]],
+            dtype=np.uint8,
+        )
+        return int(np.packbits(bits)[0])
+
     def make_motor_stepper_pulses(self, daq_ao_do_sample_rate_hz=1000,
                                 motor_gear_ratio=5,
                                 motor_full_steps_per_rev=6400.0):
@@ -1537,9 +1567,35 @@ class Bender:
         # negative displacements. np.floor would yield one extra step on every
         # negative ramp because it rounds toward −∞ (e.g. floor(−111.11)=−112
         # but floor(+111.11)=+111), causing a 1-step-per-trial systematic bias.
-        stepnum = np.round(poshi / stepsize)
-        dstep = np.diff(stepnum)
-        motorstep = np.concatenate((np.array([0], dtype='uint8'), (dstep != 0).astype('uint8')))
+        #
+        # Sub-step carry across segments: ``poshi / stepsize`` is the commanded motor
+        # position in microsteps along this segment. The motor's emitted integer position
+        # at the end of the previous segment is round(self._motor_continuous_step_pos).
+        # Prepending that value before rounding+diffing makes the quantization one
+        # continuous process: each segment's first diff emits the inter-segment catch-up
+        # STEP that the old ``motorstep[0]=0`` forced to zero (separate segments are never
+        # diffed against each other), and it also recovers the fractional step lost to the
+        # np.arange endpoint exclusion of ``tout`` above. By construction the cumulative
+        # emitted steps then equal round(commanded position) at every segment boundary, so
+        # the dropped fraction can no longer accumulate into open-loop drift that the
+        # per-segment encoder re-zero cannot detect.
+        continuous_steps = poshi / stepsize
+        prev_pos = self._motor_continuous_step_pos
+        if prev_pos is None:
+            # First segment of a protocol: no carry, so the first sample is never a step
+            # (matches the prior behavior of forcing motorstep[0] = 0).
+            prev_pos = float(continuous_steps[0])
+        stepnum_ext = np.round(np.concatenate(([float(prev_pos)], continuous_steps)))
+        # dstep[k] is the change that fires motorstep[k] (length == AO timeline). dstep[0]
+        # is the boundary catch-up relative to the previous segment's emitted position.
+        dstep = np.diff(stepnum_ext)
+        motorstep = (dstep != 0).astype('uint8')
+        # stepnum aligned to the AO samples (drop the prepended carry sample).
+        stepnum = stepnum_ext[1:]
+        # Remember the commanded continuous position so the next segment continues the same
+        # sub-step phase. Re-anchored to 0.0 at confirmed-neutral by _drive_to_zero_and_confirm.
+        if continuous_steps.size:
+            self._motor_continuous_step_pos = float(continuous_steps[-1])
         # Direction must track the actual step taken (sign of dstep), not commanded
         # velocity. velhi-derived direction mis-tags moves wherever commanded velocity
         # is ~0 or reverses: motordirection = (velhi <= 0) encodes REVERSE during every
@@ -1548,13 +1604,11 @@ class Bender:
         # encoder correction => that dropped/extra step accumulates across steps
         # (leftward isometric drift; isovelocity return landing left of 0).
         #
-        # stepnum has the same length as the AO timeline; dstep[k-1] is the change that
-        # fires motorstep[k]. Assign each step the sign of its own dstep, then back-fill
+        # dstep[k] fires motorstep[k], so each step's sign is sign(dstep[k]). Back-fill
         # that sign into the preceding idle samples so DIR is settled BEFORE each STEP
         # rising edge (drivers need DIR setup time; same-sample DIR gives zero lead).
         # Convention preserved: bit 0 = forward/positive, bit 1 = reverse/negative.
-        step_sign = np.zeros(stepnum.shape, dtype=np.int64)
-        step_sign[1:] = np.sign(dstep).astype(np.int64)        # +1 fwd, -1 rev, 0 idle
+        step_sign = np.sign(dstep).astype(np.int64)            # +1 fwd, -1 rev, 0 idle
         n_pts = step_sign.size
         nz_idx = np.where(step_sign != 0, np.arange(n_pts), n_pts)
         next_nz = np.minimum.accumulate(nz_idx[::-1])[::-1]    # nearest step at/after k
@@ -1563,9 +1617,12 @@ class Bender:
         lead_sign[has_future] = step_sign[next_nz[has_future]]
         motordirection = (lead_sign < 0).astype('uint8')
 
-        # High = enable on driver; last sample low so DO idles off after FINITE playback.
+        # High = enable on driver. When hold_motor_between_steps is ON (default), keep ENABLE
+        # asserted through the final sample so the driver stays energized/braked after FINITE
+        # playback (run() reasserts it across the inter-segment gap). When OFF, drop ENABLE on the
+        # last sample so the DO idles the driver off after playback (legacy behavior).
         motorenable = np.ones_like(motordirection, dtype='uint8')
-        if motorenable.size:
+        if motorenable.size and not getattr(self, 'hold_motor_between_steps', True):
             motorenable[-1] = 0
 
         # Ensure the columns match your wires:
@@ -2259,6 +2316,23 @@ class Bender:
                 except Exception:
                     pass
 
+        # Keep the motor energized/braked across the inter-segment gap (success path only). The
+        # device reset above clears the DO port, so once all four tasks are released (the `with`
+        # block has exited here) we reassert ENABLE-high via a short-lived on-demand DO task; the
+        # line then latches across the gap until the next run() drives the motor port. Failure
+        # never reaches this point (the exception propagates), leaving the motor de-energized and
+        # safe. DAQ acquisition still paused/flushed in the gap -- this adds no recording.
+        if getattr(self, 'hold_motor_between_steps', True):
+            try:
+                idle_word = self._pack_motor_do_word(enable=1, step=0, direction=0)
+                with Task() as hold_task:
+                    hold_task.do_channels.add_do_chan(motor_port, 'motor_hold')
+                    DigitalSingleChannelWriter(
+                        hold_task.out_stream, auto_start=True
+                    ).write_one_sample_port_uint32(idle_word)
+            except Exception:
+                pass
+
         return(self.aidata)
 
     def _normalize_recruitment(self, name):
@@ -2930,6 +3004,9 @@ class Bender:
         from_deg = float(getattr(self, '_last_commanded_angle_deg', 0.0) or 0.0)
         self._run_neutral_reset_segment(from_deg, ramp, dev)
         self._last_commanded_angle_deg = 0.0
+        # Confirmed at neutral: re-anchor the cross-segment step-quantization phase to 0 so the
+        # next protocol's first segment starts from a known sub-step reference.
+        self._motor_continuous_step_pos = 0.0
         return 0.0
 
     def command_start_position_zero(self, device_name=None, ramp_duration_s=None):
@@ -3210,6 +3287,7 @@ class Bender:
             'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),
+            'hold_motor_between_steps': bool(getattr(self, 'hold_motor_between_steps', True)),
             'pulse_width_ms': float(getattr(self, 'pulse_width_ms', 2.0)) if bool(is_stim) else None,
             'isometric_inter_step_interval_s': float(gap_s),
         })
@@ -4111,6 +4189,7 @@ class Bender:
             'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),
+            'hold_motor_between_steps': bool(getattr(self, 'hold_motor_between_steps', True)),
             'pulse_width_ms': float(getattr(self, 'pulse_width_ms', 2.0)) if bool(is_stim) else None,
         })
         return results
@@ -5050,7 +5129,7 @@ class Bender:
             ],
             'isometric_optional': [
                 'isometric_mode', 'randomize_step_order', 'isometric_random_seed',
-                'rest_between_steps_s', 'reset_between_steps',
+                'rest_between_steps_s', 'reset_between_steps', 'hold_motor_between_steps',
                 'isometric_stim_params',
             ],
             'isovelocity_required': [
@@ -5064,6 +5143,7 @@ class Bender:
                 'randomize_step_order',
                 'isovelocity_random_seed', 'isovelocity_iso_duration_s',
                 'isovelocity_pre_hold_s', 'rest_between_steps_s', 'reset_between_steps',
+                'hold_motor_between_steps',
                 'isovelocity_stim_params',
             ],
             'legacy_aliases_mirrored_to_canonical': {

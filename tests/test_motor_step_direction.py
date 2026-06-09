@@ -208,7 +208,66 @@ def test_direction_convention_unchanged():
     assert np.all(md[ms == 1] == 0)
     assert _net_steps(ms, md) == round(10.0 * GEAR / STEPSIZE)
 
+    # Second ramp is an independent trajectory starting from neutral, not a continuation
+    # of the first. Re-anchor the cross-segment step-quantization phase the same way a real
+    # protocol does at its start (command_start_position_zero), so the carry does not treat
+    # the +10 deg endpoint as the starting point of the reverse demo.
+    b._motor_continuous_step_pos = None
     t, angle, anglevel = _ramp_hold(b, 0.0, -10.0, ramp_s=0.5, hold_s=0.0)
     _, ms, md = _pulses(b, t, angle, anglevel)
     assert np.all(md[ms == 1] == 1)
     assert _net_steps(ms, md) == -round(10.0 * GEAR / STEPSIZE)
+
+
+# --- Cross-segment sub-step carry (Fix 2: no fractional-step accumulation) -------------
+
+def _flat_angle_for_microsteps(microsteps: float) -> float:
+    """Specimen angle (deg) whose commanded motor position equals ``microsteps`` microsteps."""
+    return float(microsteps) * STEPSIZE / GEAR
+
+
+def test_first_segment_has_no_boundary_step():
+    """A fresh phase (None) reproduces the old ``motorstep[0]=0``: the protocol's first
+    segment never emits a spurious boundary step (no carry to apply yet)."""
+    b = _bender()
+    b._motor_continuous_step_pos = None
+    angle = np.full(3, _flat_angle_for_microsteps(0.6))   # commanded = 0.6 microsteps
+    t = np.array([0.0, 0.001, 0.002])
+    _, ms, md = _pulses(b, t, angle, np.zeros(3))
+    assert ms[0] == 0
+    assert _net_steps(ms, md) == 0
+
+
+def test_carry_recovers_boundary_step_old_code_dropped():
+    """With a carried sub-step phase, the first diff emits the inter-segment catch-up step
+    that the old forced ``motorstep[0]=0`` silently dropped -- the cross-segment drift source.
+
+    Previous segment ended at 0.4 microsteps (emitted round(0.4)=0). This segment commands a
+    flat 0.6 microsteps; crossing the 0.5 boundary must clock exactly one forward microstep.
+    """
+    b = _bender()
+    b._motor_continuous_step_pos = 0.4
+    angle = np.full(3, _flat_angle_for_microsteps(0.6))
+    t = np.array([0.0, 0.001, 0.002])
+    _, ms, md = _pulses(b, t, angle, np.zeros(3))
+    assert ms[0] == 1
+    assert md[0] == 0                      # forward (bit 0)
+    assert _net_steps(ms, md) == 1
+    # Phase advanced to the new commanded continuous position for the next segment.
+    assert b._motor_continuous_step_pos == pytest.approx(0.6)
+
+
+def test_continuous_chain_emits_round_of_commanded_no_accumulation():
+    """Across a chain of continuous hold-ended segments on one Bender (mirrors the per-run()
+    protocol path), cumulative emitted steps equal round(commanded absolute position) at every
+    segment boundary. This is the driftless invariant the carry guarantees."""
+    b = _bender()
+    b._motor_continuous_step_pos = None
+    chain = [0.0, 3.3, 7.7, 1.1, 9.9, 0.4, 5.5]
+    cumulative = 0
+    for a0, a1 in zip(chain[:-1], chain[1:]):
+        t, angle, anglevel = _ramp_hold(b, a0, a1, ramp_s=0.4, hold_s=0.3)
+        _, ms, md = _pulses(b, t, angle, anglevel)
+        cumulative += _net_steps(ms, md)
+        expected = round(a1 * GEAR / STEPSIZE) - round(chain[0] * GEAR / STEPSIZE)
+        assert cumulative == expected, f"after segment ending {a1} deg: {cumulative} != {expected}"
