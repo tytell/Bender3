@@ -436,10 +436,32 @@ def _preview_concat_isovelocity_timeline(
     return t, angle, anglevel, s1, s2
 
 
+def _preview_neutral_reset_ramp_s(b: Any, from_deg: float, daq_hz: float) -> float:
+    """Speed-capped neutral-reset ramp duration for preview, mirroring the backend.
+
+    Prefers the backend helper :meth:`_neutral_reset_ramp_duration_s` (single source of truth) so
+    preview and run agree exactly. Falls back to the same |angle| / reset_max_speed_deg_per_s
+    formula (floored at two AI samples) if the helper is unavailable.
+    """
+    helper = getattr(b, '_neutral_reset_ramp_duration_s', None)
+    if callable(helper):
+        try:
+            return float(helper(from_deg))
+        except Exception:
+            pass
+    max_speed = float(getattr(b, 'reset_max_speed_deg_per_s', 15.0) or 15.0)
+    if not np.isfinite(max_speed) or max_speed <= 0:
+        max_speed = 15.0
+    min_ramp_s = 2.0 / float(daq_hz) if daq_hz and float(daq_hz) > 0 else 2.0 / 1000.0
+    ramp_s = abs(float(from_deg)) / max_speed
+    if not np.isfinite(ramp_s) or ramp_s < min_ramp_s:
+        ramp_s = min_ramp_s
+    return ramp_s
+
+
 def _preview_append_neutral_reset(
     b: Any,
     from_deg: float,
-    ramp_s: float,
     daq_hz: float,
     t_chunks: List[np.ndarray],
     a_chunks: List[np.ndarray],
@@ -448,24 +470,17 @@ def _preview_append_neutral_reset(
     s2_chunks: List[np.ndarray],
     toff: float,
 ) -> Tuple[float, float]:
-    """Append a neutral (0°) ramp segment to preview chunk lists."""
+    """Append a neutral (0°) ramp segment to preview chunk lists.
+
+    The ramp duration mirrors the backend: speed-capped via ``_neutral_reset_ramp_duration_s`` so
+    the preview shows the same slew rate (and descending velocity limb) the run will command.
+    """
     from_deg = float(from_deg)
-    ramp_s = float(ramp_s)
     # Already at neutral: no reset needed (ramping 0°->0° is a no-op that would collapse
-    # _timeline_ramp_hold to a single sample). Skip regardless of ramp.
+    # _timeline_ramp_hold to a single sample). Skip it.
     if abs(from_deg) < 1e-12:
         return toff, 0.0
-    # A real reset cannot happen in zero time; mirror the backend guard so preview and run agree.
-    if ramp_s <= 0:
-        raise ValueError(
-            f"block_reset_ramp_duration_s must be > 0 s to return the motor to neutral from "
-            f"{from_deg:.6g}° before the next block."
-        )
-    # Mirror the backend reset-ramp floor: a tiny-but-positive ramp must still span at least
-    # two AI samples so the preview and run agree and neither trips "timeline too short".
-    min_ramp_s = 2.0 / float(daq_hz)
-    if ramp_s < min_ramp_s:
-        ramp_s = min_ramp_s
+    ramp_s = float(_preview_neutral_reset_ramp_s(b, from_deg, daq_hz))
     tloc, aloc, wloc = b._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
     z = np.zeros_like(tloc)
     t_chunks.append(np.asarray(tloc, dtype=float) + toff)
@@ -668,24 +683,24 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
                 sp[k] = getattr(b, k)
         block_seq = b._normalize_block_sequence(getattr(b, 'block_sequence', None))
 
-        for i, v in enumerate(vals):
-            r['table'].append(
-                {
-                    'step_index': i,
-                    'sequence_index': int(seq_idx[i]),
-                    'target_value': float(v),
-                    'target_deg': float(targets_deg_raw[i]),
-                    'curvature_1_per_m': float(kappa[i]),
-                    'input_mode': _strain_mode_caption(mode),
-                }
-            )
+        # Step/sequence indices are shown 1-based for the operator (internal/H5 indices stay
+        # 0-based). For the block path the per-step rows are emitted inside the block loop so each
+        # row carries its block direction; the non-block path lists the sweep once here.
+        if not block_seq:
+            for i, v in enumerate(vals):
+                r['table'].append(
+                    {
+                        'step': i + 1,
+                        'sequence': int(seq_idx[i]) + 1,
+                        'target_value': float(v),
+                        'target_deg': float(targets_deg_raw[i]),
+                        'curvature_1_per_m': float(kappa[i]),
+                        'input_mode': _strain_mode_caption(mode),
+                    }
+                )
 
         try:
             if block_seq:
-                _reset_ramp_attr = getattr(b, 'block_reset_ramp_duration_s', None)
-                reset_ramp = float(
-                    _reset_ramp_attr if _reset_ramp_attr is not None else sp.get('ramp_duration_s', 2.0)
-                )
                 left_v = float(getattr(b, 'left_stim_voltage', 5.0) or 5.0)
                 right_v = float(getattr(b, 'right_stim_voltage', 5.0) or 5.0)
                 daq_hz = float(getattr(b, 'daq_ai_sample_rate_hz', 0.0) or 0.0)
@@ -698,9 +713,10 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
                 s2_chunks: List[np.ndarray] = []
                 toff = 0.0
                 last_deg = 0.0
+                global_step = 0
                 for bi, block in enumerate(block_seq):
                     toff, last_deg = _preview_append_neutral_reset(
-                        b, last_deg, reset_ramp, daq_hz,
+                        b, last_deg, daq_hz,
                         t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks, toff,
                     )
                     dir_idx = b._lateral_index_for_block_direction(block['direction'])
@@ -720,13 +736,22 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
                     s2_chunks.append(np.asarray(s2_b, dtype=float))
                     toff = float(t_chunks[-1][-1])
                     last_deg = float(a_b[-1])
-                    r['table'].append(
-                        {
-                            'block_index': bi,
-                            'block_direction': block['direction'],
-                            'block_stim_sides': block['stim_sides'],
-                        }
-                    )
+                    # One row per step in this block, each carrying the block direction so the
+                    # direction column populates for every step (not just a per-block summary row).
+                    for j in range(int(vals.size)):
+                        r['table'].append(
+                            {
+                                'block': bi + 1,
+                                'block_direction': block['direction'],
+                                'block_stim_sides': block['stim_sides'],
+                                'step': global_step + 1,
+                                'sequence': int(seq_idx[j]) + 1,
+                                'target_value': float(vals[j]),
+                                'target_deg': float(targets_block[j]),
+                                'curvature_1_per_m': float(kappa[j]),
+                            }
+                        )
+                        global_step += 1
                 t, angle, anglevel, s1, s2 = _preview_concat_timeline_chunks(
                     t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks,
                 )
@@ -752,13 +777,30 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
             daq_hz = 1000.0
         _wait_after = max(0.0, float(getattr(b, 'waitafter', 0.0)))
         if _wait_after > 0:
+            # Match the run: HOLD at the final commanded angle during waitafter (do not jump to 0).
             _n_wait = max(2, int(round(_wait_after * daq_hz)) + 1)
             _t_wait = float(t[-1]) + np.linspace(0.0, _wait_after, _n_wait)[1:]
+            _hold_ang = float(angle[-1]) if angle.size else 0.0
             t = np.concatenate([t, _t_wait])
-            angle = np.concatenate([angle, np.zeros(_t_wait.size)])
+            angle = np.concatenate([angle, np.full(_t_wait.size, _hold_ang)])
             anglevel = np.concatenate([anglevel, np.zeros(_t_wait.size)])
             s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
             s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
+        # Match the run's end-of-trial controlled return to neutral: isometric() calls
+        # _run_neutral_reset_segment after the steps, ramping the commanded angle from the final
+        # target back to 0 deg. Render that same ramp so the preview shows the smooth return and its
+        # velocity limb instead of a vertical drop drawn with zero velocity.
+        _final_ang = float(angle[-1]) if angle.size else 0.0
+        if abs(_final_ang) > 1e-12:
+            _reset_ramp = float(_preview_neutral_reset_ramp_s(b, _final_ang, daq_hz))
+            if np.isfinite(_reset_ramp) and _reset_ramp > 0:
+                _t_r, _a_r, _w_r = b._timeline_ramp_hold(_final_ang, 0.0, _reset_ramp, 0.0, daq_hz)
+                # Drop the duplicated first sample (t=0, angle=final) and offset onto the timeline.
+                t = np.concatenate([t, float(t[-1]) + np.asarray(_t_r, dtype=float)[1:]])
+                angle = np.concatenate([angle, np.asarray(_a_r, dtype=float)[1:]])
+                anglevel = np.concatenate([anglevel, np.asarray(_w_r, dtype=float)[1:]])
+                s1 = np.concatenate([s1, np.zeros(_t_r.size - 1)])
+                s2 = np.concatenate([s2, np.zeros(_t_r.size - 1)])
         r['t'] = t
         r['angle'] = angle
         r['anglevel'] = anglevel
@@ -843,17 +885,15 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
     for i, v in enumerate(vels):
         r['table'].append(
             {
-                'row': f'velocity step {i}',
+                'row': f'velocity step {i + 1}',
                 'value': float(v),
                 'unit': vel_caption,
                 'motor_deg_s': float(vels_deg[i]),
-                'sequence_index': int(seq_idx[i]),
+                'sequence': int(seq_idx[i]) + 1,
             }
         )
     try:
         if block_seq:
-            _reset_ramp_attr = getattr(b, 'block_reset_ramp_duration_s', None)
-            reset_ramp = float(_reset_ramp_attr if _reset_ramp_attr is not None else 2.0)
             left_v = float(getattr(b, 'left_stim_voltage', 5.0) or 5.0)
             right_v = float(getattr(b, 'right_stim_voltage', 5.0) or 5.0)
             daq_hz = float(getattr(b, 'daq_ai_sample_rate_hz', 0.0) or 0.0)
@@ -869,7 +909,7 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
             vels_mag = np.abs(vels_deg)
             for bi, block in enumerate(block_seq):
                 toff, last_deg = _preview_append_neutral_reset(
-                    b, last_deg, reset_ramp, daq_hz,
+                    b, last_deg, daq_hz,
                     t_chunks, a_chunks, w_chunks, s1_chunks, s2_chunks, toff,
                 )
                 dir_idx = b._lateral_index_for_block_direction(block['direction'])
@@ -892,7 +932,7 @@ def _preview_step_protocols(b: Any, req: str) -> PreviewResult:
                 last_deg = float(a_b[-1])
                 r['table'].append(
                     {
-                        'block_index': bi,
+                        'block': bi + 1,
                         'block_direction': block['direction'],
                         'block_stim_sides': block['stim_sides'],
                     }

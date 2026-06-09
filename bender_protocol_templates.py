@@ -313,7 +313,7 @@ def inject_procedure_value_into_session_state(
             session_state[widget_key('block_0_stim_sides')] = 'left'
         return
 
-    if key in ('left_stim_voltage', 'right_stim_voltage', 'block_reset_ramp_duration_s'):
+    if key in ('left_stim_voltage', 'right_stim_voltage', 'reset_max_speed_deg_per_s'):
         if value is not None:
             session_state[widget_key(key)] = float(value)
         return

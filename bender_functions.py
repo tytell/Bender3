@@ -376,6 +376,12 @@ class Bender:
         # segment), in lockstep with _motor_continuous_step_pos. Observability only -- never read by
         # the motion path, so it cannot change motion.
         self._encoder_cumulative_deg = 0.0
+        # Cumulative encoder displacement contributed by neutral-reset segments only. The per-trial
+        # _encoder_cumulative_deg accumulates step displacements but never sees reset moves, so a
+        # raw difference between commanded and cumulative-encoder mixes two accounting bases and
+        # makes divergence look like it grows every reset. Track reset displacement separately so a
+        # true net divergence (steps + resets vs. commanded) can be reported. Observability only.
+        self._reset_encoder_cumulative_deg = 0.0
 
         # 5. Placeholders (to prevent NoneType/0-channel errors)
         self.t = np.array([0.0, 1.0/self.daq_ai_sample_rate_hz])
@@ -455,7 +461,12 @@ class Bender:
         self.block_sequence = [{'direction': 'left', 'stim_sides': 'left'}]
         self.left_stim_voltage = 5.0
         self.right_stim_voltage = 5.0
-        self.block_reset_ramp_duration_s = 2.0
+        # Peak commanded speed for the open-loop return-to-neutral ramp. The reset is open-loop
+        # stepper motion: a fixed-duration ramp slews large resets too fast and loses steps, so the
+        # motor lands short of physical 0 (residual scales with speed). Sizing the ramp from this
+        # speed cap (duration = |from_deg| / reset_max_speed_deg_per_s) keeps the slew rate constant
+        # across amplitudes. Protocol/instance parameter only; not a hardware-config value.
+        self.reset_max_speed_deg_per_s = 15.0
 
         # Standard 2D shapes for NI-DAQmx (Channels, Samples)
         self.stimcmdhi = np.zeros((2, 2))
@@ -763,7 +774,7 @@ class Bender:
         bs = sp.get('block_sequence', getattr(self, 'block_sequence', None))
         if bs is not None:
             sp['block_sequence'] = bs
-        for k in ('left_stim_voltage', 'right_stim_voltage', 'block_reset_ramp_duration_s'):
+        for k in ('left_stim_voltage', 'right_stim_voltage', 'reset_max_speed_deg_per_s'):
             if k not in sp and getattr(self, k, None) is not None:
                 sp[k] = getattr(self, k)
         return sp
@@ -3020,35 +3031,55 @@ class Bender:
         anglevel = np.gradient(angle, t, edge_order=1)
         return t, angle, anglevel
 
-    def _run_neutral_reset_segment(self, from_deg, ramp_duration_s, device_name):
+    def _neutral_reset_ramp_duration_s(self, from_deg):
+        """Speed-capped ramp duration (s) for returning the commanded motor angle to 0°.
+
+        The neutral reset is open-loop stepper motion: a fixed duration regardless of amplitude
+        slews large resets too fast and loses steps, so the motor lands short of physical 0
+        (telemetry: residual scales with commanded speed). Size the ramp so the constant slew rate
+        of the linear ramp never exceeds ``reset_max_speed_deg_per_s``:
+
+            duration = |from_deg| / reset_max_speed_deg_per_s
+
+        Floored at two AI samples so :meth:`_timeline_ramp_hold` cannot collapse to a single sample
+        and trip "timeline too short". A no-op reset (``from_deg`` already at neutral) returns the
+        floor; callers skip running it.
+        """
+        amp = abs(float(from_deg))
+        max_speed = getattr(self, 'reset_max_speed_deg_per_s', 15.0)
+        # Only an unset (None) speed falls back to the default; an explicit 0 / negative /
+        # non-finite value is a real misconfiguration and must be rejected, not silently defaulted.
+        if max_speed is None:
+            max_speed = 15.0
+        max_speed = float(max_speed)
+        if not np.isfinite(max_speed) or max_speed <= 0:
+            raise ValueError(
+                f"reset_max_speed_deg_per_s must be finite and > 0 deg/s; got {max_speed!r}."
+            )
+        daq_hz = float(self.daq_ai_sample_rate_hz)
+        min_ramp_s = 2.0 / daq_hz
+        ramp_s = amp / max_speed
+        if not np.isfinite(ramp_s) or ramp_s < min_ramp_s:
+            ramp_s = min_ramp_s
+        return ramp_s
+
+    def _run_neutral_reset_segment(self, from_deg, device_name):
         """
         Ramp commanded motor angle to 0° (straight/center), acquire one DAQ segment, no stimulation.
+        The ramp duration is sized from :meth:`_neutral_reset_ramp_duration_s` so the slew rate is
+        capped at ``reset_max_speed_deg_per_s`` regardless of amplitude (open-loop step-loss guard).
         Returns ``0.0`` (commanded neutral angle).
         """
         from_deg = float(from_deg)
-        ramp_s = float(ramp_duration_s)
-        if not np.isfinite(ramp_s) or ramp_s < 0:
-            raise ValueError(f"block_reset_ramp_duration_s must be finite and >= 0; got {ramp_duration_s!r}.")
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
             raise ValueError("_run_neutral_reset_segment requires device_name or self.device_name.")
-        # Already at neutral: no reset needed regardless of ramp (ramping 0°->0° is a no-op that
-        # would collapse _timeline_ramp_hold to a single sample). Skip it.
+        # Already at neutral: no reset needed (ramping 0°->0° is a no-op that would collapse
+        # _timeline_ramp_hold to a single sample). Skip it.
         if abs(from_deg) < 1e-12:
             return 0.0
-        # A real reset (motor not at 0°) cannot happen in zero time: require a positive ramp so the
-        # motor is slewed back to neutral under control. Refuse to silently skip a needed reset.
-        if ramp_s <= 0:
-            raise ValueError(
-                f"block_reset_ramp_duration_s must be > 0 s to return the motor to neutral from "
-                f"{from_deg:.6g}° before the next block; got {ramp_duration_s!r}."
-            )
+        ramp_s = self._neutral_reset_ramp_duration_s(from_deg)
         daq_hz = float(self.daq_ai_sample_rate_hz)
-        # Floor the reset ramp so a tiny-but-positive duration still spans at least two
-        # AI samples; otherwise _timeline_ramp_hold can collapse and trip "timeline too short".
-        min_ramp_s = 2.0 / daq_hz
-        if ramp_s < min_ramp_s:
-            ramp_s = min_ramp_s
         t, angle, anglevel = self._timeline_ramp_hold(from_deg, 0.0, ramp_s, 0.0, daq_hz)
         s1 = np.zeros_like(t)
         s2 = np.zeros_like(t)
@@ -3060,35 +3091,67 @@ class Bender:
             motor_full_steps_per_rev=self.motor_full_steps_per_rev,
         )
         self.aidata = self.run(device_name=dev)
+        # Observability for the return-to-neutral ramp itself (Task 1 follow-up). The per-trial
+        # _record_motor_position_reference never sees reset segments, so the encoder cannot reveal
+        # whether the reset actually reaches physical 0. Print the commanded move (from_deg -> 0)
+        # against the encoder's net displacement so a short landing (open-loop step loss on a
+        # too-fast / too-abrupt reset ramp) is directly visible. Reads only; never alters motion and
+        # never raises (instrumentation must not break the run).
+        try:
+            am = np.asarray(getattr(self, 'angle_measured', np.array([])), dtype=float).reshape(-1)
+            cmd_speed = abs(from_deg) / ramp_s if ramp_s > 0 else float('inf')
+            if am.size >= 2 and np.all(np.isfinite(am[[0, -1]])):
+                commanded_disp = 0.0 - from_deg
+                encoder_disp = float(am[-1] - am[0])
+                residual_deg = from_deg + encoder_disp
+                shortfall_deg = commanded_disp - encoder_disp
+                # Fold this reset's encoder displacement into the reset-only accumulator so a true
+                # net divergence (steps + resets vs. commanded) is available; the step accumulator
+                # never sees reset moves and on its own would make divergence appear to grow.
+                self._reset_encoder_cumulative_deg = (
+                    float(getattr(self, '_reset_encoder_cumulative_deg', 0.0)) + encoder_disp
+                )
+                print(
+                    f"[motor-ref] neutral-reset: from {from_deg:.4f} deg -> 0 over {ramp_s:.4f} s "
+                    f"({cmd_speed:.4f} deg/s) | commanded_disp={commanded_disp:.4f} deg "
+                    f"encoder_disp={encoder_disp:.4f} deg residual={residual_deg:.4f} deg "
+                    f"shortfall={shortfall_deg:.4f} deg "
+                    f"reset_cumulative_encoder={self._reset_encoder_cumulative_deg:.4f} deg"
+                )
+            else:
+                print(
+                    f"[motor-ref] neutral-reset: from {from_deg:.4f} deg -> 0 over {ramp_s:.4f} s "
+                    f"({cmd_speed:.4f} deg/s) | encoder unavailable (angle_measured size={am.size})"
+                )
+        except Exception:
+            pass
         return 0.0
 
-    def _drive_to_zero_and_confirm(self, device_name=None, ramp_duration_s=None):
+    def _drive_to_zero_and_confirm(self, device_name=None):
         """Ramp the commanded motor angle to 0° from the last commanded angle and confirm the move.
 
         Shared by :meth:`command_start_position_zero` (1.5) and :meth:`return_to_resting_length`
         (1.7). Ramps from ``_last_commanded_angle_deg`` to 0° via the existing move-to-position
-        routine; the encoder read during that acquisition confirms position before returning.
+        routine (duration speed-capped by ``reset_max_speed_deg_per_s``); the encoder read during
+        that acquisition confirms position before returning.
         """
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
             # No DAQ device configured yet (e.g. early init): nothing to command safely.
             return 0.0
-        ramp = float(
-            ramp_duration_s if ramp_duration_s is not None
-            else getattr(self, 'block_reset_ramp_duration_s', 2.0) or 2.0
-        )
         from_deg = float(getattr(self, '_last_commanded_angle_deg', 0.0) or 0.0)
-        self._run_neutral_reset_segment(from_deg, ramp, dev)
+        self._run_neutral_reset_segment(from_deg, dev)
         self._last_commanded_angle_deg = 0.0
         # Confirmed at neutral: re-anchor the cross-segment step-quantization phase to 0 so the
         # next protocol's first segment starts from a known sub-step reference.
         self._motor_continuous_step_pos = 0.0
-        # Re-anchor the cumulative encoder drift reference at the same confirmed-neutral point so
+        # Re-anchor the cumulative encoder drift references at the same confirmed-neutral point so
         # the observability divergence is measured from this known home, not across protocols.
         self._encoder_cumulative_deg = 0.0
+        self._reset_encoder_cumulative_deg = 0.0
         return 0.0
 
-    def command_start_position_zero(self, device_name=None, ramp_duration_s=None):
+    def command_start_position_zero(self, device_name=None):
         """Explicitly drive the commanded motor angle to 0° (resting/start) and wait for the move.
 
         Call at apparatus initialization and at the start of every protocol. The motor's position
@@ -3096,15 +3159,15 @@ class Bender:
         the instance to 0° using the existing move-to-position routine, and the encoder read during
         that acquisition confirms the position before the protocol proceeds (1.5).
         """
-        return self._drive_to_zero_and_confirm(device_name, ramp_duration_s)
+        return self._drive_to_zero_and_confirm(device_name)
 
-    def return_to_resting_length(self, device_name=None, ramp_duration_s=None):
+    def return_to_resting_length(self, device_name=None):
         """Drive the motor back to angle = 0° (resting length) at the end of a protocol and confirm.
 
         Called after the final step (and any post-trial rest) of every protocol so the preparation
         is returned to neutral before the trial is marked complete (1.7).
         """
-        return self._drive_to_zero_and_confirm(device_name, ramp_duration_s)
+        return self._drive_to_zero_and_confirm(device_name)
 
     def _tag_block_trial_metadata(self, entry, *, block_index, block_direction, block_stim_sides,
                                   left_stim_voltage, right_stim_voltage):
@@ -3200,7 +3263,6 @@ class Bender:
         stim_duration_s=None,
         inter_step_interval_s=0.0,
         reset_between_steps=False,
-        reset_ramp_duration_s=None,
         is_stim=False,
         stim_pulse_rate=None,
         stim_voltage=5.0,
@@ -3260,18 +3322,15 @@ class Bender:
         if not np.isfinite(gap_s) or gap_s < 0:
             raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
         reset_steps = bool(reset_between_steps)
-        reset_ramp = float(
-            reset_ramp_duration_s if reset_ramp_duration_s is not None
-            else getattr(self, 'block_reset_ramp_duration_s', 2.0)
-        )
 
         for i in range(num_steps):
             if i > 0 and gap_s > 0:
                 time.sleep(gap_s)
             if i > 0 and reset_steps:
                 # Reset to resting length: drive the motor back to 0° from the previous hold
-                # angle and wait for the move to complete before the next step.
-                self._run_neutral_reset_segment(float(targets_deg[i - 1]), reset_ramp, dev)
+                # angle and wait for the move to complete before the next step. The reset ramp
+                # duration is speed-capped inside _run_neutral_reset_segment.
+                self._run_neutral_reset_segment(float(targets_deg[i - 1]), dev)
             target = float(targets_deg[i])
             if i > 0:
                 prev = 0.0 if reset_steps else float(targets_deg[i - 1])
@@ -3353,15 +3412,21 @@ class Bender:
                     s1 = np.zeros_like(t)
                     s2 = np.zeros_like(t)
 
-            # Post-experiment buffer on the final step, mirroring dynamic's waitafter: motor
-            # commanded to 0°, stim off, recording continues so the signal can settle.
+            # Post-experiment buffer on the final step, mirroring dynamic's waitafter: stim off,
+            # recording continues so the signal can settle. HOLD at the final commanded angle --
+            # do NOT command an instantaneous jump to 0 here. A target->0 step across one AI sample
+            # cannot be emitted by make_motor_stepper_pulses (one STEP pulse per AO sample), so the
+            # large catch-up is silently truncated: the motor is left bent while the bookkeeping
+            # reads 0, and the end-of-trial _run_neutral_reset_segment is then skipped (from_deg~0).
+            # The controlled return-to-neutral ramp runs AFTER the steps complete (see isometric()).
             if i == num_steps - 1:
                 _wait_after = max(0.0, float(getattr(self, 'waitafter', 0.0)))
                 if _wait_after > 0:
                     _n_wait = max(2, int(round(_wait_after * daq_hz)) + 1)
                     _t_wait = float(t[-1]) + np.linspace(0.0, _wait_after, _n_wait)[1:]
+                    _hold_ang = float(angle[-1])
                     t = np.concatenate([t, _t_wait])
-                    angle = np.concatenate([angle, np.zeros(_t_wait.size)])
+                    angle = np.concatenate([angle, np.full(_t_wait.size, _hold_ang)])
                     anglevel = np.concatenate([anglevel, np.zeros(_t_wait.size)])
                     s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
                     s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
@@ -3625,16 +3690,6 @@ class Bender:
                 )
             left_v = float(sp.get('left_stim_voltage', getattr(self, 'left_stim_voltage', 5.0)))
             right_v = float(sp.get('right_stim_voltage', getattr(self, 'right_stim_voltage', 5.0)))
-            reset_ramp = float(
-                sp.get(
-                    'block_reset_ramp_duration_s',
-                    getattr(self, 'block_reset_ramp_duration_s', sp.get('ramp_duration_s', 2.0)),
-                )
-            )
-            if not np.isfinite(reset_ramp) or reset_ramp < 0:
-                raise ValueError(
-                    f"block_reset_ramp_duration_s must be finite and >= 0; got {reset_ramp!r}."
-                )
             self._validate_block_sequence_voltages(block_seq, left_v, right_v)
             dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
             all_out = []
@@ -3643,7 +3698,7 @@ class Bender:
             step_order_blocks = []
             base_targets = np.abs(targets_deg_raw)
             for bi, block in enumerate(block_seq):
-                last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
+                last_deg = self._run_neutral_reset_segment(last_deg, dev)
                 dir_idx = self._lateral_index_for_block_direction(block['direction'])
                 ms = self.motor_command_sign_for_bend_toward_index(dir_idx)
                 order = self._shuffled_step_order(base_targets.size, randomize, random_seed, block_index=bi)
@@ -3686,7 +3741,7 @@ class Bender:
             # Return the motor to neutral once after the final block: block resets only
             # fire BEFORE each block, so without this the motor is left at the last hold
             # angle after the run ends.
-            last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
+            last_deg = self._run_neutral_reset_segment(last_deg, dev)
             uidx = None
             seq_frac = float(
                 sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5))
@@ -3701,7 +3756,9 @@ class Bender:
                 'step_order': step_order_blocks,
                 'left_stim_voltage': left_v,
                 'right_stim_voltage': right_v,
-                'block_reset_ramp_duration_s': reset_ramp,
+                'reset_max_speed_deg_per_s': float(
+                    sp.get('reset_max_speed_deg_per_s', getattr(self, 'reset_max_speed_deg_per_s', 15.0))
+                ),
                 'specimen_side_index_left': int(self.specimen_side_index_left),
                 'specimen_side_index_right': int(self.specimen_side_index_right),
                 'specimen_lateral_index_on_positive_motor_side': int(
@@ -3776,18 +3833,8 @@ class Bender:
         # path has no block boundaries, so without this the motor is left at the last
         # hold angle when the run ends.
         if out:
-            reset_ramp = float(
-                sp.get(
-                    'block_reset_ramp_duration_s',
-                    getattr(self, 'block_reset_ramp_duration_s', sp.get('ramp_duration_s', 2.0)),
-                )
-            )
-            if not np.isfinite(reset_ramp) or reset_ramp < 0:
-                raise ValueError(
-                    f"block_reset_ramp_duration_s must be finite and >= 0; got {reset_ramp!r}."
-                )
             dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
-            self._run_neutral_reset_segment(float(out[-1]['angle_cmd'][-1]), reset_ramp, dev)
+            self._run_neutral_reset_segment(float(out[-1]['angle_cmd'][-1]), dev)
         for i, e in enumerate(out):
             e['target_value_native'] = float(vals[i])
             e['curvature_1_per_m'] = float(kappa[i])
@@ -3798,6 +3845,9 @@ class Bender:
             'bilateral_sequential_left_frac': seq_frac,
             'randomize_step_order': bool(randomize),
             'step_order': [int(x) for x in seq_idx],
+            'reset_max_speed_deg_per_s': float(
+                sp.get('reset_max_speed_deg_per_s', getattr(self, 'reset_max_speed_deg_per_s', 15.0))
+            ),
             'specimen_side_index_left': int(self.specimen_side_index_left),
             'specimen_side_index_right': int(self.specimen_side_index_right),
             'specimen_lateral_index_on_positive_motor_side': int(
@@ -4074,7 +4124,6 @@ class Bender:
         stim_duration_s=None,
         inter_step_interval_s=0.0,
         reset_between_steps=False,
-        reset_ramp_duration_s=None,
         is_stim=False,
         stim_pulse_rate=None,
         stim_voltage=5.0,
@@ -4159,10 +4208,6 @@ class Bender:
         if not np.isfinite(gap_s) or gap_s < 0:
             raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
         reset_steps = bool(reset_between_steps)
-        reset_ramp = float(
-            reset_ramp_duration_s if reset_ramp_duration_s is not None
-            else getattr(self, 'block_reset_ramp_duration_s', 2.0)
-        )
         prev_end_deg = float(theta_start_deg)
 
         for i in range(n):
@@ -4171,8 +4216,9 @@ class Bender:
                 time.sleep(gap_s)
             if i > 0 and reset_steps:
                 # Reset to resting length: drive the motor back to 0° from the previous step's
-                # end angle and wait for the move to complete before the next step.
-                self._run_neutral_reset_segment(prev_end_deg, reset_ramp, dev)
+                # end angle and wait for the move to complete before the next step. The reset ramp
+                # duration is speed-capped inside _run_neutral_reset_segment.
+                self._run_neutral_reset_segment(prev_end_deg, dev)
             v_mag = abs(float(vels[i]))
             th0 = th0_fixed
             if mirror:
@@ -4491,13 +4537,6 @@ class Bender:
                 )
             left_v = float(sp.get('left_stim_voltage', getattr(self, 'left_stim_voltage', 5.0)))
             right_v = float(sp.get('right_stim_voltage', getattr(self, 'right_stim_voltage', 5.0)))
-            reset_ramp = float(
-                sp.get('block_reset_ramp_duration_s', getattr(self, 'block_reset_ramp_duration_s', 2.0))
-            )
-            if not np.isfinite(reset_ramp) or reset_ramp < 0:
-                raise ValueError(
-                    f"block_reset_ramp_duration_s must be finite and >= 0; got {reset_ramp!r}."
-                )
             self._validate_block_sequence_voltages(block_seq, left_v, right_v)
             dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
             all_out = []
@@ -4506,7 +4545,7 @@ class Bender:
             step_order_blocks = []
             vels_mag_base = np.abs(vels)
             for bi, block in enumerate(block_seq):
-                last_deg = self._run_neutral_reset_segment(last_deg, reset_ramp, dev)
+                last_deg = self._run_neutral_reset_segment(last_deg, dev)
                 dir_idx = self._lateral_index_for_block_direction(block['direction'])
                 ms = self.motor_command_sign_for_bend_toward_index(dir_idx)
                 theta0_block = abs(theta0_raw) * ms
@@ -4557,7 +4596,9 @@ class Bender:
                 'step_order': step_order_blocks,
                 'left_stim_voltage': left_v,
                 'right_stim_voltage': right_v,
-                'block_reset_ramp_duration_s': reset_ramp,
+                'reset_max_speed_deg_per_s': float(
+                    sp.get('reset_max_speed_deg_per_s', getattr(self, 'reset_max_speed_deg_per_s', 15.0))
+                ),
                 'specimen_side_index_left': int(self.specimen_side_index_left),
                 'specimen_side_index_right': int(self.specimen_side_index_right),
                 'specimen_lateral_index_on_positive_motor_side': int(
@@ -4622,6 +4663,9 @@ class Bender:
             'bilateral_sequential_left_frac': seq_frac,
             'randomize_step_order': bool(randomize),
             'step_order': [int(x) for x in seq_idx],
+            'reset_max_speed_deg_per_s': float(
+                sp.get('reset_max_speed_deg_per_s', getattr(self, 'reset_max_speed_deg_per_s', 15.0))
+            ),
             'specimen_side_index_left': int(self.specimen_side_index_left),
             'specimen_side_index_right': int(self.specimen_side_index_right),
             'specimen_lateral_index_on_positive_motor_side': int(
@@ -5283,7 +5327,7 @@ class Bender:
             'isometric_required': [
                 'isometric_initial', 'isometric_final', 'isometric_num_steps',
                 'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
-                'block_reset_ramp_duration_s',
+                'reset_max_speed_deg_per_s',
             ],
             'isometric_optional': [
                 'isometric_mode', 'randomize_step_order', 'isometric_random_seed',
@@ -5295,7 +5339,7 @@ class Bender:
                 'isovelocity_starting_strain', 'isovelocity_starting_strain_mode',
                 'isovelocity_velocity_mode', 'isovelocity_num_steps',
                 'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
-                'block_reset_ramp_duration_s',
+                'reset_max_speed_deg_per_s',
             ],
             'isovelocity_optional': [
                 'randomize_step_order',

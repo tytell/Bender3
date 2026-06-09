@@ -1793,8 +1793,16 @@ _BLOCK_SEQUENCE_PROCEDURE_KEYS = frozenset({
     'block_sequence',
     'left_stim_voltage',
     'right_stim_voltage',
-    'block_reset_ramp_duration_s',
 })
+
+# Shared label/help for the speed-capped neutral-reset parameter. Rendered in the left "Required"
+# column of BOTH isometric and isovelocity (parallel placement, same default 15.0 deg/s).
+RESET_MAX_SPEED_LABEL = 'Max reset speed (deg/s)'
+RESET_MAX_SPEED_HELP = (
+    'Peak speed of the open-loop return-to-neutral ramp. The reset duration is sized as '
+    '|angle| / this speed so large resets do not slew too fast and lose motor steps (which would '
+    'leave the specimen bent). Lower = gentler/slower return; must be > 0.'
+)
 
 
 def _seed_block_sequence_widget_state(b: Bender) -> None:
@@ -1824,10 +1832,6 @@ def _seed_block_sequence_widget_state(b: Bender) -> None:
     if _widget_key('right_stim_voltage') not in st.session_state:
         st.session_state[_widget_key('right_stim_voltage')] = float(
             getattr(b, 'right_stim_voltage', 5.0) or 5.0
-        )
-    if _widget_key('block_reset_ramp_duration_s') not in st.session_state:
-        st.session_state[_widget_key('block_reset_ramp_duration_s')] = float(
-            getattr(b, 'block_reset_ramp_duration_s', 2.0) or 2.0
         )
 
 
@@ -1867,16 +1871,6 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
             )
         blocks.append({'direction': direction, 'stim_sides': stim_sides})
 
-    reset_ramp = float(
-        st.number_input(
-            'Neutral reset ramp duration (s)',
-            key=_widget_key('block_reset_ramp_duration_s'),
-            format='%.6g',
-            min_value=0.0,
-            help='Motor ramp time from the previous angle back to 0° before each block.',
-        )
-    )
-
     # Voltage values are rendered in the Stimulation section above; read from session state
     # here only to cross-validate against which stim sides the blocks use.
     _left_v = float(st.session_state.get(_widget_key('left_stim_voltage'), 5.0) or 5.0)
@@ -1888,9 +1882,6 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
     if ('right' in sides_used or 'both' in sides_used) and not (np.isfinite(_right_v) and _right_v > 0):
         st.error('Right stim voltage must be finite and > 0 when any block uses RIGHT or BOTH stim.')
         return None
-    if not (np.isfinite(reset_ramp) and reset_ramp >= 0):
-        st.error('Neutral reset ramp duration must be finite and ≥ 0 s.')
-        return None
 
     try:
         b._validate_block_sequence_voltages(blocks, _left_v, _right_v)
@@ -1901,7 +1892,6 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
 
     return {
         'block_sequence': blocks,
-        'block_reset_ramp_duration_s': reset_ramp,
     }
 
 
@@ -2108,6 +2098,7 @@ def _seed_isometric_stim_widget_state(b: Bender) -> None:
         'isometric_stim_pulse_rate': spr_default,
         'isometric_stim_onset_s': onset,
         'isometric_stim_duration_s': duration,
+        'isometric_ramp_duration_s': float(sp.get('ramp_duration_s', 2.0)),
         'isometric_hold_duration_s': float(sp.get('hold_duration_s', 5.0)),
         'isometric_pre_baseline_s': float(sp.get('pre_baseline_s', 1.0) or 0.0),
         'isometric_post_baseline_s': float(sp.get('post_baseline_s', 1.0) or 0.0),
@@ -2118,6 +2109,37 @@ def _seed_isometric_stim_widget_state(b: Bender) -> None:
         sk = _widget_key(name)
         if sk not in st.session_state:
             st.session_state[sk] = val
+
+
+def _render_isometric_motion_timing_fields(b: Bender) -> None:
+    """Render isometric motion-timing widgets (ramp + hold duration) in the left column.
+
+    Values are consumed by :func:`_render_isometric_stim_fields` (Stimulation column, rendered
+    after this one) via their widget session-state keys, then packed into ``isometric_stim_params``.
+    These are motion parameters, so they live with the other motion fields, not under Stimulation.
+    """
+    _seed_isometric_stim_widget_state(b)
+    st.number_input(
+        'Ramp duration (s)',
+        key=_widget_key('isometric_ramp_duration_s'),
+        format='%.6g',
+        min_value=0.0,
+        help=(
+            'How long (seconds) the motor takes to ramp from the previous angle to each target '
+            'angle before the hold. Parallels isovelocity pre-hold; a negative stim onset is '
+            'measured back into this ramp.'
+        ),
+    )
+    st.number_input(
+        'Hold duration (s)',
+        key=_widget_key('isometric_hold_duration_s'),
+        format='%.6g',
+        min_value=0.0,
+        help=(
+            'How long (seconds) the motor holds at each target angle (the active segment). '
+            'Stim onset and duration are measured relative to the start of this hold.'
+        ),
+    )
 
 
 def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
@@ -2157,18 +2179,14 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     duration_sk = _widget_key('isometric_stim_duration_s')
     pr_sk = _widget_key('isometric_stim_pulse_rate')
 
-    hold_sk = _widget_key('isometric_hold_duration_s')
+    # Ramp / hold durations are motion parameters and are rendered in the left ("Required")
+    # column by _render_isometric_motion_timing_fields, which runs before this Stimulation column.
+    # Read their committed widget values here so the assembled stim_params still carries them.
+    ramp_duration = float(
+        st.session_state.get(_widget_key('isometric_ramp_duration_s'), 2.0)
+    )
     hold_duration = float(
-        st.number_input(
-            'Hold duration (s)',
-            key=hold_sk,
-            format='%.6g',
-            min_value=0.0,
-            help=(
-                'How long (seconds) the motor holds at each target angle (the active segment). '
-                'Stim onset and duration are measured relative to the start of this hold.'
-            ),
-        )
+        st.session_state.get(_widget_key('isometric_hold_duration_s'), 5.0)
     )
 
     pre_baseline_sk = _widget_key('isometric_pre_baseline_s')
@@ -2249,6 +2267,9 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     if not (np.isfinite(hold_duration) and hold_duration > 0):
         _st_error_actions('Hold duration invalid.', ['Enter a value > 0 s'])
         return None
+    if not (np.isfinite(ramp_duration) and ramp_duration >= 0):
+        _st_error_actions('Ramp duration invalid.', ['Enter a value >= 0 s'])
+        return None
     if not (np.isfinite(pre_baseline) and pre_baseline >= 0):
         _st_error_actions('Pre-stim baseline invalid.', ['Enter a value >= 0 s'])
         return None
@@ -2260,6 +2281,7 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
         'is_stim': enable,
         'stim_onset_s': onset if np.isfinite(onset) else 0.0,
         'stim_duration_s': duration,
+        'ramp_duration_s': ramp_duration,
         'hold_duration_s': hold_duration,
         'pre_baseline_s': pre_baseline,
         'post_baseline_s': post_baseline,
@@ -2590,6 +2612,34 @@ def _render_rest_between_steps_field(b: Bender) -> float:
             ),
         )
     )
+
+
+def _render_reset_max_speed_field(b: Bender) -> Optional[float]:
+    """Render the speed-capped neutral-reset field shared by isometric and isovelocity.
+
+    Returns the value to apply, or ``None`` if invalid (caller leaves the prior value in place).
+    """
+    sk = _widget_key('reset_max_speed_deg_per_s')
+    if sk not in st.session_state:
+        v0 = _get_session_value(b, 'reset_max_speed_deg_per_s', 15.0)
+        try:
+            st.session_state[sk] = float(v0) if v0 is not None else 15.0
+        except (TypeError, ValueError):
+            st.session_state[sk] = 15.0
+    val = float(
+        st.number_input(
+            RESET_MAX_SPEED_LABEL,
+            min_value=0.0,
+            step=1.0,
+            format='%.6g',
+            key=sk,
+            help=RESET_MAX_SPEED_HELP,
+        )
+    )
+    if not (np.isfinite(val) and val > 0):
+        st.error('Max reset speed must be finite and > 0 deg/s.')
+        return None
+    return val
 
 
 def _clear_fld_session_keys():
@@ -7890,6 +7940,11 @@ def main():
                         for key in schema['isometric_required']:
                             if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
                                 continue
+                            if key == 'reset_max_speed_deg_per_s':
+                                _rms = _render_reset_max_speed_field(b)
+                                if _rms is not None:
+                                    updates[key] = _rms
+                                continue
                             label = key.replace('_', ' ')
                             updates[key] = _render_field(
                                 b,
@@ -7900,6 +7955,9 @@ def main():
                             )
                         if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
                             updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
+                        # Motion timing (ramp + hold duration) lives in the left column with the
+                        # other motion fields; the Stimulation column reads their values back.
+                        _render_isometric_motion_timing_fields(b)
                         updates['randomize_step_order'] = _render_randomize_step_order_field(b)
                         for key in schema['isometric_optional']:
                             if key == 'randomize_step_order':
@@ -7963,6 +8021,11 @@ def main():
                         st.markdown('**Required**')
                         for key in schema['isovelocity_required']:
                             if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
+                                continue
+                            if key == 'reset_max_speed_deg_per_s':
+                                _rms = _render_reset_max_speed_field(b)
+                                if _rms is not None:
+                                    updates[key] = _rms
                                 continue
                             if key == 'isovelocity_starting_strain_mode':
                                 modes = list(ALL_AMPS_MODE_OPTIONS)
@@ -9042,11 +9105,12 @@ def main():
                     r = tr_qc[i]
                     stp = r.get('step_index', r.get('trial_index', r.get('cycle_index')))
                     ttp = str(r.get('test_type', '') or '')
-                    parts = [f'Trial {i}']
+                    # Display 1-based for the operator; the selection value stays 0-based.
+                    parts = [f'Trial {i + 1}']
                     if ttp:
                         parts.append(ttp)
                     if stp is not None:
-                        parts.append(f'step {stp}')
+                        parts.append(f'step {int(stp) + 1}')
                     return ' — '.join(parts) if len(parts) > 1 else parts[0]
 
                 st.selectbox(
