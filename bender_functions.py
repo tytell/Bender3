@@ -27,10 +27,16 @@ try:
     from nidaqmx.stream_readers import AnalogMultiChannelReader, CounterReader
     from nidaqmx.errors import DaqError
     from nidaqmx.constants import TerminalConfiguration
+    from nidaqmx.system import System
+    from nidaqmx.types import DOPowerUpState
+    from nidaqmx.constants import PowerUpStates
 except ImportError:
     logging.warning('No DAQmx available')
     Task = None  # type: ignore
     daq = None  # type: ignore
+    System = None  # type: ignore
+    DOPowerUpState = None  # type: ignore
+    PowerUpStates = None  # type: ignore
 
 import xml.etree.ElementTree as ElementTree
 
@@ -451,6 +457,13 @@ class Bender:
         # per-segment encoder re-zero cannot detect). OFF: legacy behavior -- the driver idles off
         # between segments. Independent of DAQ pause/flush, which always happens in the gap.
         self.hold_motor_between_steps = True
+        # Tracks the persistent NI digital power-up/reset state currently configured for the motor
+        # ENABLE line (P0.2). reset_device() (run after every run() to avoid back-to-back FINITE
+        # wedges) returns the device to its power-up state, which otherwise clears the DO port and
+        # de-energizes the driver between segments -> the loaded specimen visibly relaxes, then
+        # re-engages. Set to HIGH so reset_device() leaves ENABLE asserted (see
+        # _ensure_motor_enable_power_up_state). None = not yet configured this process.
+        self._motor_enable_power_up_high = None
         # Width (ms) of each stimulation pulse (the high time of every carrier pulse), applied to
         # all stimulated protocols. Combined with stim_pulse_rate this sets the pulse high fraction.
         self.pulse_width_ms = 2.0
@@ -2224,6 +2237,48 @@ class Bender:
         self.endTime = datetime.now()
         return self.aidata
 
+    def _ensure_motor_enable_power_up_state(self, device_name):
+        """Configure the NI digital power-up/reset state for the motor ENABLE line (P0.2).
+
+        ``run()`` resets the device after every segment (``daq_emergency_stop`` in its ``finally``)
+        to avoid back-to-back FINITE acquisitions wedging in ``wait_until_done``. ``reset_device()``
+        returns the device to its power-up state, which clears the DO port and de-energizes the
+        stepper driver between segments -> a loaded specimen visibly relaxes, then re-engages on the
+        next segment (open-loop drift the per-segment encoder re-zero cannot detect). Configuring
+        the ENABLE line's persistent power-up state to HIGH makes ``reset_device()`` leave ENABLE
+        asserted, so the motor stays energized/braked across every segment boundary and DAQ pause
+        while the wedge workaround is kept intact. STEP (P0.1) and DIR (P0.0) keep their default
+        (idle) power-up state, so no spurious motion is commanded.
+
+        Hardware assumption (verify on rig): ENABLE is ACTIVE-HIGH -- line value 1 energizes the
+        driver. This matches ``make_motor_stepper_pulses`` ("High = enable on driver") and the
+        ``enable=1`` energized inter-segment hold word. ENABLE is wired to P0.2, i.e.
+        ``<device>/<motor_port>/line2``.
+
+        The setting is persistent on the device, so this normally writes once per process and only
+        re-writes when the desired state changes (tracked by ``_motor_enable_power_up_high``). Fully
+        guarded: a failure logs a warning and never breaks the run.
+        """
+        if Task is None or System is None or DOPowerUpState is None or PowerUpStates is None:
+            return
+        if device_name is None:
+            return
+        want_high = bool(getattr(self, 'hold_motor_between_steps', True))
+        if getattr(self, '_motor_enable_power_up_high', None) == want_high:
+            return
+        line = f"{device_name}/{self.motor_port}/line2"
+        state = PowerUpStates.HIGH if want_high else PowerUpStates.TRISTATE
+        try:
+            System.local().set_digital_power_up_states(
+                device_name, [DOPowerUpState(physical_channel=line, power_up_state=state)]
+            )
+            self._motor_enable_power_up_high = want_high
+        except Exception as exc:
+            logging.warning(
+                f"Could not set motor ENABLE power-up state ({state}) on {line!r}: {exc}. "
+                "Motor may de-energize between segments after reset_device()."
+            )
+
     def run(self, device_name):
         if getattr(self, 'simulation_mode', False):
             return self._simulate_daq_acquisition()
@@ -2245,6 +2300,10 @@ class Bender:
             raise ValueError(
                 f"DAQ AO/DO sample rate daq_ao_do_sample_rate_hz must be finite and > 0; got {self.daq_ao_do_sample_rate_hz!r}."
             )
+
+        # Keep ENABLE asserted across the per-run reset_device() so the motor stays energized
+        # between segments (configures the device's persistent digital power-up state; idempotent).
+        self._ensure_motor_enable_power_up_state(device_name)
 
         input_channels = ['/'.join((device_name, c1)) for c1 in self.input_channels]
         S1stim_chan = '/'.join((device_name, self.S1stim_chan))

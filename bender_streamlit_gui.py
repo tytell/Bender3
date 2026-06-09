@@ -6490,11 +6490,26 @@ def _render_h5_explorer() -> None:
 
 
 def _trigger_emergency_stop() -> tuple[bool, str]:
-    """Run NI-DAQ emergency stop and return `(ok, message)`."""
+    """Run NI-DAQ emergency stop and return `(ok, message)`.
+
+    Always releases the motor: passes the ENABLE line (P0.2 -> ``<motor_port>/line2``) so the stop
+    forces that line's power-up state to TRISTATE before the device reset, overriding the run-time
+    energized power-up HIGH. An e-stop must never leave the motor powered/holding.
+    """
     dev = None
-    if st.session_state.get('bender') is not None:
-        dev = getattr(st.session_state['bender'], 'device_name', None)
-    return daq_emergency_stop(dev)
+    enable_line = None
+    b = st.session_state.get('bender')
+    if b is not None:
+        dev = getattr(b, 'device_name', None)
+        motor_port = getattr(b, 'motor_port', None)
+        if motor_port:
+            enable_line = f'{motor_port}/line2'
+    ok, msg = daq_emergency_stop(dev, release_motor_enable_line=enable_line)
+    # The stop set the ENABLE power-up state to TRISTATE; clear the cached flag so the next run
+    # re-asserts the energized power-up HIGH (otherwise the motor would stay de-energized).
+    if b is not None:
+        b._motor_enable_power_up_high = None
+    return ok, msg
 
 
 def _render_app_chrome() -> None:
