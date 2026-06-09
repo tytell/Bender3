@@ -1445,6 +1445,24 @@ class Bender:
             raise ValueError(
                 f"record_motor_signal: invalid spacing dt = t[1]-t[0] = {dt!r} (need finite dt > 0)."
             )
+        # Fail fast on a gapped / non-uniform timeline before it sizes the DAQ buffers. The AI
+        # FINITE buffer is len(t) samples clocked at 1/dt (dt = t[1]-t[0]), while the AO/DO buffer
+        # is built across the full t[0]..t[-1] span (make_motor_stepper_pulses). A uniform timeline
+        # satisfies t[-1]-t[0] == (len(t)-1)*dt; a gap (e.g. a collapsed ramp whose hold is still
+        # offset by ramp_s) makes the span exceed what len(t) covers, so the AO/DO generation runs
+        # longer than the acquisition and is stopped before completing (NI warning 200010). The
+        # tolerance allows a few samples of cross-segment rounding from concatenated linspace grids.
+        expected_span = (t_arr.size - 1) * dt
+        actual_span = float(t_arr[-1] - t_arr[0])
+        span_tol = max(8.0 * dt, 1e-9)
+        if abs(actual_span - expected_span) > span_tol:
+            raise ValueError(
+                "record_motor_signal: timeline is not uniformly sampled at dt = "
+                f"{dt!r} s (t[1]-t[0]). Spanned duration {actual_span!r} s differs from the "
+                f"{expected_span!r} s expected for {t_arr.size} samples, which indicates a gap "
+                "(a collapsed ramp or mis-offset segment). This would under-size the AI buffer "
+                "relative to the AO/DO buffer and stop the FINITE generation early (NI 200010)."
+            )
         # Must match uniform timeline spacing. Do not use round(1/dt): for dt >= 2 s, 1/dt <= 0.5 and
         # round() can return 0 (e.g. round(0.5)==0), which breaks DAQmx (SampClk_Rate 0.0).
         hz = float(1.0 / dt)
@@ -2969,14 +2987,25 @@ class Bender:
         ramp_s = float(ramp_s)
         hold_s = float(hold_s)
         a0, a1 = float(angle_start_deg), float(angle_end_deg)
-        if ramp_s <= 0.0 or abs(a1 - a0) < 1e-12:
+        if ramp_s <= 0.0:
             t_r = np.array([0.0])
             ang_r = np.array([a1])
         else:
             n_r = max(2, int(round(ramp_s / dt)) + 1)
             t_r = np.linspace(0.0, ramp_s, n_r)
-            u = np.linspace(0.0, 1.0, n_r)
-            ang_r = a0 + (a1 - a0) * u
+            if abs(a1 - a0) < 1e-12:
+                # No commanded angle change, but a finite ramp window: sample the ramp span flat
+                # at dt instead of collapsing to a single point. Collapsing left t_h offset by the
+                # full ramp_s (below), opening a ramp_s-wide gap as t[1]-t[0]. That gap makes
+                # record_motor_signal infer a ~1/ramp_s AI rate (snapped back to the config rate by
+                # the setter guard) and under-sizes the FINITE AI buffer (len(t)) relative to the
+                # AO/DO buffer, which is built over the full t[0]..t[-1] span. The motor/stim
+                # generation then runs longer than the acquisition and is stopped before completing
+                # (NI warning 200010). A flat, uniformly sampled segment keeps len(t) consistent.
+                ang_r = np.full(n_r, a1, dtype=float)
+            else:
+                u = np.linspace(0.0, 1.0, n_r)
+                ang_r = a0 + (a1 - a0) * u
         n_h = max(2, int(round(hold_s / dt)) + 1)
         if hold_s <= 0.0:
             t_h = np.array([])
