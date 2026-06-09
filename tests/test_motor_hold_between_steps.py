@@ -83,6 +83,21 @@ def test_idle_word_enable_bit_consistent_with_waveform_packing():
     assert idle == 4
 
 
+def test_idle_word_reflects_last_waveform_direction():
+    """Task B: the held idle word reuses the waveform's final DIR bit so an energized hold does
+    not toggle DIR across the gap. A reverse-ending waveform -> idle word DIR=reverse (word 5)."""
+    b = _bender()
+    t, a, v = b._timeline_ramp_hold(0.0, -10.0, 0.5, 0.5, DAQ_HZ)
+    b.record_motor_signal(t, a, v)
+    b.record_stim_signal(None, None)
+    b.make_motor_stepper_pulses(
+        daq_ao_do_sample_rate_hz=AO_HZ, motor_gear_ratio=GEAR, motor_full_steps_per_rev=STEPS_PER_REV,
+    )
+    assert b._last_motor_direction_bit == 1
+    idle = b._pack_motor_do_word(enable=1, step=0, direction=b._last_motor_direction_bit)
+    assert idle == 5                                  # ENABLE(4) | DIR(1), STEP clear
+
+
 # --- run() reassert across the gap (NI mocked) ----------------------------------------
 
 class _CtxTask:
@@ -164,11 +179,21 @@ def _run_dynamic_capturing_do_writes(hold):
     return one_sample_calls
 
 
+# STEP is P0.1 -> bit 1; DIR is P0.0 -> bit 0 in the same column order.
+STEP_BIT = 1
+DIR_BIT = 0
+
+
 def test_run_reasserts_enable_high_in_gap_when_holding():
-    """With the flag ON, run() reasserts the enable-high idle word (4) after the device reset."""
+    """With the flag ON, run() reasserts an enable-high, step-low idle word after the device
+    reset. The DIR bit now mirrors the waveform's final direction (Task B: no spurious DIR flip
+    across the gap), so it may be 0 or 1 -- assert ENABLE high and STEP low, not the literal 4."""
     calls = _run_dynamic_capturing_do_writes(hold=True)
     assert calls, 'expected at least one enable-high idle write when holding the motor'
-    assert all(w == 4 for w in calls), f'idle word must be enable-high (4), saw {calls}'
+    for w in calls:
+        assert (w >> ENABLE_BIT) & 1 == 1, f'idle word must keep ENABLE high, saw {w}'
+        assert (w >> STEP_BIT) & 1 == 0, f'idle word must keep STEP low (no pulse in gap), saw {w}'
+        assert (w >> DIR_BIT) & 1 in (0, 1), f'idle word DIR bit malformed, saw {w}'
 
 
 def test_run_does_not_reassert_when_not_holding():

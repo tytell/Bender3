@@ -361,6 +361,12 @@ class Bender:
         # re-anchored to 0.0 whenever the motor is driven and confirmed to neutral.
         self._motor_continuous_step_pos = None
 
+        # Last DO DIR bit emitted by make_motor_stepper_pulses (0=forward, 1=reverse). run()
+        # reasserts THIS direction (not a hardcoded forward) in the inter-segment idle word so an
+        # energized between-ramp hold does not toggle DIR; a hold-only segment also keeps it. 0 is
+        # a safe default before any motion has been generated.
+        self._last_motor_direction_bit = 0
+
         # Persistent, NON-re-zeroing cumulative encoder reference (specimen/output-shaft degrees).
         # The encoder counter task in run() is created fresh each segment (NI default
         # initial_angle=0.0), so angle_measured re-zeros every segment and cannot reveal cumulative
@@ -1599,9 +1605,18 @@ class Bender:
         # dstep[k] is the change that fires motorstep[k] (length == AO timeline). dstep[0]
         # is the boundary catch-up relative to the previous segment's emitted position.
         dstep = np.diff(stepnum_ext)
+        # DIR setup lead at the segment boundary: if the very first AO sample would emit the
+        # inter-segment catch-up STEP, defer it to the next sample. run() latches the idle DIR
+        # across the gap, so a step on sample 0 gives that direction zero setup time when the new
+        # segment reverses; deferring guarantees >=1 full AO sample of DIR lead before the first
+        # STEP edge. The step is MOVED, not dropped -- its position change folds into sample 1 -- so
+        # cumulative emitted steps still equal round(commanded position) at the boundary. Guarded to
+        # only fire when sample 1 is otherwise idle (always true at a boundary, where the ramp
+        # starts from rest), so two integer steps are never merged into a single DO pulse.
+        if dstep.size >= 2 and dstep[0] != 0 and dstep[1] == 0:
+            dstep[1] = dstep[0]
+            dstep[0] = 0.0
         motorstep = (dstep != 0).astype('uint8')
-        # stepnum aligned to the AO samples (drop the prepended carry sample).
-        stepnum = stepnum_ext[1:]
         # Remember the commanded continuous position so the next segment continues the same
         # sub-step phase. Re-anchored to 0.0 at confirmed-neutral by _drive_to_zero_and_confirm.
         if continuous_steps.size:
@@ -1625,7 +1640,25 @@ class Bender:
         lead_sign = np.zeros(n_pts, dtype=np.int64)
         has_future = next_nz < n_pts
         lead_sign[has_future] = step_sign[next_nz[has_future]]
-        motordirection = (lead_sign < 0).astype('uint8')
+        # Trailing idle samples (after the FINAL step) hold the last step's direction instead of
+        # snapping to forward (0). An energized between-ramp hold must not toggle DIR: snapping to
+        # forward during the hold (then back to reverse for a reverse continuation) is a spurious
+        # DIR transition near the step edges that creeps on a setup-time-sensitive driver. Holding
+        # the last direction keeps the held DIR both STABLE and CORRECT for a same-direction
+        # continuation and avoids a 1->0->1 round trip across the gap.
+        prev_dir_bit = int(getattr(self, '_last_motor_direction_bit', 0))
+        if (step_sign != 0).any():
+            last_nz = int(np.flatnonzero(step_sign != 0)[-1])
+            lead_sign[last_nz + 1:] = step_sign[last_nz]
+            motordirection = (lead_sign < 0).astype('uint8')
+        else:
+            # Hold-only segment (no steps at all): keep the previous segment's DIR; never snap to
+            # forward, which would be a spurious flip during an energized hold.
+            motordirection = np.full(n_pts, prev_dir_bit, dtype='uint8')
+        # Remember the final DIR bit so run() reasserts the SAME direction across the inter-segment
+        # gap (no spurious flip) and a following hold-only segment can keep it.
+        if motordirection.size:
+            self._last_motor_direction_bit = int(motordirection[-1])
 
         # High = enable on driver. When hold_motor_between_steps is ON (default), keep ENABLE
         # asserted through the final sample so the driver stays energized/braked after FINITE
@@ -2334,7 +2367,11 @@ class Bender:
         # safe. DAQ acquisition still paused/flushed in the gap -- this adds no recording.
         if getattr(self, 'hold_motor_between_steps', True):
             try:
-                idle_word = self._pack_motor_do_word(enable=1, step=0, direction=0)
+                # Reassert the SAME DIR the waveform ended on (not a hardcoded forward) so the
+                # energized hold does not toggle DIR across the gap; STEP stays 0 (no pulses).
+                idle_word = self._pack_motor_do_word(
+                    enable=1, step=0, direction=int(getattr(self, '_last_motor_direction_bit', 0))
+                )
                 with Task() as hold_task:
                     hold_task.do_channels.add_do_chan(motor_port, 'motor_hold')
                     DigitalSingleChannelWriter(

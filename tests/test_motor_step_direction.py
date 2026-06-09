@@ -238,20 +238,24 @@ def test_first_segment_has_no_boundary_step():
     assert _net_steps(ms, md) == 0
 
 
-def test_carry_recovers_boundary_step_old_code_dropped():
-    """With a carried sub-step phase, the first diff emits the inter-segment catch-up step
-    that the old forced ``motorstep[0]=0`` silently dropped -- the cross-segment drift source.
+def test_carry_recovers_boundary_step_deferred_one_sample():
+    """With a carried sub-step phase, the inter-segment catch-up step the old forced
+    ``motorstep[0]=0`` silently dropped is still emitted -- but DEFERRED one AO sample so the
+    held idle DIR gets setup lead before the first STEP edge (Task B). The step is moved, not
+    dropped: net steps stay 1 and the carried phase still advances.
 
     Previous segment ended at 0.4 microsteps (emitted round(0.4)=0). This segment commands a
-    flat 0.6 microsteps; crossing the 0.5 boundary must clock exactly one forward microstep.
+    flat 0.6 microsteps; crossing the 0.5 boundary clocks exactly one forward microstep, now at
+    sample 1 (sample 0 holds for DIR lead).
     """
     b = _bender()
     b._motor_continuous_step_pos = 0.4
     angle = np.full(3, _flat_angle_for_microsteps(0.6))
     t = np.array([0.0, 0.001, 0.002])
     _, ms, md = _pulses(b, t, angle, np.zeros(3))
-    assert ms[0] == 1
-    assert md[0] == 0                      # forward (bit 0)
+    assert ms[0] == 0                      # boundary sample emits no step (DIR setup lead)
+    assert ms[1] == 1                      # catch-up step deferred to the next sample
+    assert md[1] == 0                      # forward (bit 0)
     assert _net_steps(ms, md) == 1
     # Phase advanced to the new commanded continuous position for the next segment.
     assert b._motor_continuous_step_pos == pytest.approx(0.6)
@@ -271,3 +275,67 @@ def test_continuous_chain_emits_round_of_commanded_no_accumulation():
         cumulative += _net_steps(ms, md)
         expected = round(a1 * GEAR / STEPSIZE) - round(chain[0] * GEAR / STEPSIZE)
         assert cumulative == expected, f"after segment ending {a1} deg: {cumulative} != {expected}"
+
+
+# --- Task B: energized between-ramp hold must not creep ---------------------------------
+
+def test_trailing_hold_keeps_last_step_direction_reverse():
+    """After the final STEP of a reverse ramp, the trailing hold samples keep DIR=reverse (1)
+    instead of snapping to forward (0): an energized hold must not toggle DIR."""
+    b = _bender()
+    t, angle, anglevel = _ramp_hold(b, 0.0, -10.0, ramp_s=0.5, hold_s=1.0)
+    _, ms, md = _pulses(b, t, angle, anglevel)
+    last_step = int(np.flatnonzero(ms == 1)[-1])
+    assert md[last_step] == 1                       # last step was reverse
+    assert np.all(md[last_step + 1:] == 1)          # trailing hold holds reverse, no snap to 0
+
+
+def test_trailing_hold_keeps_last_step_direction_forward():
+    """Forward ramp: the trailing hold keeps DIR=forward (0)."""
+    b = _bender()
+    t, angle, anglevel = _ramp_hold(b, 0.0, 10.0, ramp_s=0.5, hold_s=1.0)
+    _, ms, md = _pulses(b, t, angle, anglevel)
+    last_step = int(np.flatnonzero(ms == 1)[-1])
+    assert md[last_step] == 0
+    assert np.all(md[last_step + 1:] == 0)
+
+
+def test_last_motor_direction_bit_tracks_final_dir():
+    """make_motor_stepper_pulses records the final DO DIR bit so run() can reassert it."""
+    b = _bender()
+    _pulses(b, *_ramp_hold(b, 0.0, 10.0, ramp_s=0.5, hold_s=0.5))
+    assert b._last_motor_direction_bit == 0
+    b._motor_continuous_step_pos = None
+    _pulses(b, *_ramp_hold(b, 0.0, -10.0, ramp_s=0.5, hold_s=0.5))
+    assert b._last_motor_direction_bit == 1
+
+
+def test_hold_only_segment_keeps_previous_direction():
+    """A segment with no steps (pure hold) keeps the previous segment's DIR -- it must never
+    snap the energized hold to forward when the last motion was reverse."""
+    b = _bender()
+    # Reverse ramp leaves the last direction bit at reverse (1).
+    _pulses(b, *_ramp_hold(b, 0.0, -10.0, ramp_s=0.5, hold_s=0.2))
+    assert b._last_motor_direction_bit == 1
+    # A flat hold (no commanded change -> no steps) must hold DIR=reverse, not snap to forward.
+    t = np.array([0.0, 0.001, 0.002, 0.003])
+    angle = np.full(t.size, -10.0)
+    _, ms, md = _pulses(b, t, angle, np.zeros(t.size))
+    assert np.all(ms == 0)                          # no step pulses during the hold
+    assert np.all(md == 1)                          # DIR held at reverse
+
+
+def test_reversed_continuation_first_step_has_dir_lead():
+    """When a new segment reverses relative to the held idle DIR, the first STEP is deferred so
+    DIR is settled (>=1 sample) before the step edge -- the boundary missed/extra-step source."""
+    b = _bender()
+    # First segment ends forward, leaving the carried phase just shy of a boundary so the next
+    # (reverse) segment would otherwise clock its catch-up step on sample 0.
+    b._motor_continuous_step_pos = 0.6                # emitted round(0.6)=1
+    angle = np.full(3, _flat_angle_for_microsteps(0.4))  # commanded 0.4 -> round 0 (reverse step)
+    t = np.array([0.0, 0.001, 0.002])
+    _, ms, md = _pulses(b, t, angle, np.zeros(3))
+    assert ms[0] == 0                               # sample 0 holds: DIR setup lead
+    assert ms[1] == 1                               # reverse catch-up step deferred to sample 1
+    assert md[1] == 1                               # reverse (bit 1)
+    assert _net_steps(ms, md) == -1                 # step moved, not dropped
