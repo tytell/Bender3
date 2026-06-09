@@ -1540,7 +1540,28 @@ class Bender:
         stepnum = np.round(poshi / stepsize)
         dstep = np.diff(stepnum)
         motorstep = np.concatenate((np.array([0], dtype='uint8'), (dstep != 0).astype('uint8')))
-        motordirection = (velhi <= 0).astype('uint8')
+        # Direction must track the actual step taken (sign of dstep), not commanded
+        # velocity. velhi-derived direction mis-tags moves wherever commanded velocity
+        # is ~0 or reverses: motordirection = (velhi <= 0) encodes REVERSE during every
+        # zero-velocity hold and at ramp/hold turnarounds, so the DIR line is in the
+        # wrong state when the next ramp's first STEP edge arrives. Open-loop with no
+        # encoder correction => that dropped/extra step accumulates across steps
+        # (leftward isometric drift; isovelocity return landing left of 0).
+        #
+        # stepnum has the same length as the AO timeline; dstep[k-1] is the change that
+        # fires motorstep[k]. Assign each step the sign of its own dstep, then back-fill
+        # that sign into the preceding idle samples so DIR is settled BEFORE each STEP
+        # rising edge (drivers need DIR setup time; same-sample DIR gives zero lead).
+        # Convention preserved: bit 0 = forward/positive, bit 1 = reverse/negative.
+        step_sign = np.zeros(stepnum.shape, dtype=np.int64)
+        step_sign[1:] = np.sign(dstep).astype(np.int64)        # +1 fwd, -1 rev, 0 idle
+        n_pts = step_sign.size
+        nz_idx = np.where(step_sign != 0, np.arange(n_pts), n_pts)
+        next_nz = np.minimum.accumulate(nz_idx[::-1])[::-1]    # nearest step at/after k
+        lead_sign = np.zeros(n_pts, dtype=np.int64)
+        has_future = next_nz < n_pts
+        lead_sign[has_future] = step_sign[next_nz[has_future]]
+        motordirection = (lead_sign < 0).astype('uint8')
 
         # High = enable on driver; last sample low so DO idles off after FINITE playback.
         motorenable = np.ones_like(motordirection, dtype='uint8')
