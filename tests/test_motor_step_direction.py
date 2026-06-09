@@ -144,6 +144,61 @@ def test_multi_step_isometric_accumulation_nets_zero():
     assert total == 0
 
 
+def _iso_block(b, th0, vel, approach_from_deg, post_baseline_s=1.0, mirror_stim_side=None):
+    return b._isovelocity_one_block(
+        th0, vel,
+        pre_hold_s=0.3, iso_duration_s=0.2,
+        stim_onset_s=None, stim_duration_s=None, is_stim=False,
+        spr=75.0, stim_voltage=5.0, daq_hz=DAQ_HZ,
+        recruitment='bilateral_simultaneous', sequential_left_frac=0.5,
+        mirror_stim_side=mirror_stim_side, post_baseline_s=post_baseline_s,
+        approach_from_deg=approach_from_deg,
+    )
+
+
+@pytest.mark.parametrize('th0', [0.0, 5.0, 10.0, -8.0])
+def test_isovelocity_from_rest_returns_to_center(th0):
+    """An isovelocity block that starts from rest (approach_from_deg=0) must begin and
+    end at 0 and net zero steps -- no leftward 'kickback' by the starting strain."""
+    b = _bender()
+    b.daq_ai_sample_rate_hz = DAQ_HZ
+    blk = _iso_block(b, th0, 20.0, approach_from_deg=0.0)
+    assert blk['angle'][0] == pytest.approx(0.0)
+    assert blk['angle'][-1] == pytest.approx(0.0)
+    _, ms, md = _pulses(b, blk['t'], blk['angle'], blk['anglevel'])
+    assert _net_steps(ms, md) == 0
+
+
+def test_isovelocity_continuation_segment_has_no_approach():
+    """The bilateral-mirror second segment continues from a mid-trajectory angle, so
+    approach_from_deg=None must leave the timeline starting at th0 (no spurious 0->th0)."""
+    b = _bender()
+    b.daq_ai_sample_rate_hz = DAQ_HZ
+    blk = _iso_block(b, 7.5, -20.0, approach_from_deg=None, mirror_stim_side='right')
+    assert blk['angle'][0] == pytest.approx(7.5)
+
+
+def test_isovelocity_multi_step_no_accumulated_drift():
+    """Several from-rest isovelocity steps in a row each net zero, so the prep does not
+    walk off center across steps."""
+    b = _bender()
+    b.daq_ai_sample_rate_hz = DAQ_HZ
+    total = 0
+    for vel in (8.0, 16.0, 24.0):
+        blk = _iso_block(b, 6.0, vel, approach_from_deg=0.0)
+        _, ms, md = _pulses(b, blk['t'], blk['angle'], blk['anglevel'])
+        total += _net_steps(ms, md)
+    assert total == 0
+
+
+def test_isovelocity_nonzero_start_requires_positive_pre_hold():
+    """A non-zero starting angle with no pre-hold time cannot ramp into position; fail loud."""
+    b = _bender()
+    b.daq_ai_sample_rate_hz = DAQ_HZ
+    with pytest.raises(ValueError, match='pre_hold_s must be > 0'):
+        b._timeline_prehold_isovelocity(5.0, 20.0, 0.0, 0.2, DAQ_HZ, approach_from_deg=0.0)
+
+
 def test_direction_convention_unchanged():
     """A pure forward ramp emits only forward (bit 0) steps; a pure reverse ramp emits
     only reverse (bit 1) steps."""

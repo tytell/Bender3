@@ -3594,8 +3594,16 @@ class Bender:
             **kwargs,
         )
 
-    def _timeline_prehold_isovelocity(self, theta_start_deg, vel_deg_per_s, pre_hold_s, iso_duration_s, daq_hz):
-        """Hold at fixed angle, then bend at constant ``vel_deg_per_s`` for ``iso_duration_s``."""
+    def _timeline_prehold_isovelocity(self, theta_start_deg, vel_deg_per_s, pre_hold_s, iso_duration_s, daq_hz,
+                                      approach_from_deg=None):
+        """Optionally ramp to the starting angle, hold there, then bend at constant ``vel_deg_per_s``.
+
+        ``approach_from_deg``: when not None, the caller guarantees the motor is at that angle
+        (e.g. 0° after a reset); a controlled ramp from there up to ``theta_start_deg`` is
+        prepended (duration = ``pre_hold_s``) so the open-loop pulse stream actually moves the
+        motor to the starting angle. When None (e.g. the second segment of a bilateral-mirror
+        block, which continues from a mid-trajectory angle), no approach ramp is added.
+        """
         dt = 1.0 / float(daq_hz)
         th0 = float(theta_start_deg)
         v = float(vel_deg_per_s)
@@ -3605,24 +3613,54 @@ class Bender:
             raise ValueError("iso_duration_s must be finite and > 0.")
         if ph < 0:
             raise ValueError("pre_hold_s must be non-negative.")
-        # Use a sub-threshold velocity during the pre-hold so the direction bit is
-        # pre-set to match the upcoming ramp. An exact zero would always encode as
-        # REVERSE (velhi <= 0), causing 300 ms of wrong coil energisation before
-        # every rightward ramp. 1e-10 deg/s is numerically zero for position but
-        # gives the sign needed by make_motor_stepper_pulses.
+        # Direction is derived from the sign of dstep in make_motor_stepper_pulses, so a
+        # zero-velocity pre-hold no longer mis-energises the coils. The tiny signed pre-hold
+        # velocity is retained only as a harmless sign hint (position contribution ~1e-11°).
         prehold_vel = np.copysign(1e-10, v) if v != 0.0 else 0.0
+        # Open-loop stepper: pulses are emitted only for commanded angle CHANGES. If the
+        # pre-hold simply sits at a non-zero starting angle (th0), the motor never receives
+        # the (approach->th0) pulses, yet the post-stim return ramps all the way to 0 -> each
+        # block nets -th0 and the prep walks left of centre (compounding across steps). When
+        # the caller knows the motor is at ``approach_from_deg`` (e.g. 0° after a reset), ramp
+        # from there up to th0 first so the timeline starts and ends at the same place.
+        seg_t, seg_a, seg_w = [], [], []
+        t_cursor = 0.0
+        need_approach = approach_from_deg is not None and abs(th0 - float(approach_from_deg)) > 1e-12
+        if need_approach:
+            a_start = float(approach_from_deg)
+            if ph <= 0:
+                raise ValueError(
+                    "isovelocity pre_hold_s must be > 0 when the starting angle is non-zero "
+                    f"({th0:.6g}°): the motor needs a finite ramp from {a_start:.6g}° to the "
+                    "starting angle before the constant-velocity segment."
+                )
+            n0 = max(2, int(round(ph * daq_hz)) + 1)
+            t0 = np.linspace(0.0, ph, n0)
+            a0 = np.linspace(a_start, th0, n0)
+            w0 = np.full(n0, (th0 - a_start) / ph)
+            seg_t.append(t0)
+            seg_a.append(a0)
+            seg_w.append(w0)
+            t_cursor = ph
         if ph > 0:
             n1 = max(2, int(round(ph * daq_hz)) + 1)
-            t1 = np.linspace(0.0, ph, n1)
+            t1 = t_cursor + np.linspace(0.0, ph, n1)
             a1 = np.full(n1, th0)
             w1 = np.full(n1, prehold_vel)
-        else:
-            t1 = np.array([0.0])
-            a1 = np.array([th0])
-            w1 = np.array([prehold_vel])
+            if need_approach:
+                # Drop the duplicate junction sample (approach end == hold start).
+                t1, a1, w1 = t1[1:], a1[1:], w1[1:]
+            seg_t.append(t1)
+            seg_a.append(a1)
+            seg_w.append(w1)
+            t_cursor = t_cursor + ph
+        elif not need_approach:
+            seg_t.append(np.array([0.0]))
+            seg_a.append(np.array([th0]))
+            seg_w.append(np.array([prehold_vel]))
         n2 = max(2, int(round(iso * daq_hz)) + 1)
-        t_edge = ph
-        t2 = np.linspace(t_edge, t_edge + iso, n2)[1:]
+        t_edge = t_cursor
+        t2 = t_edge + np.linspace(0.0, iso, n2)[1:]
         if t2.size < 1:
             t2 = np.array([t_edge + iso])
         a2 = th0 + v * (t2 - t_edge)
@@ -3648,9 +3686,9 @@ class Bender:
                 UserWarning,
                 stacklevel=2,
             )
-        t = np.concatenate([t1, t2])
-        angle = np.concatenate([a1, a2])
-        anglevel = np.concatenate([w1, w2])
+        t = np.concatenate(seg_t + [t2])
+        angle = np.concatenate(seg_a + [a2])
+        anglevel = np.concatenate(seg_w + [w2])
         if t.size < 2:
             raise ValueError("_timeline_prehold_isovelocity: timeline too short; increase durations or daq rate.")
         return t, angle, anglevel, float(t_edge), guard_triggered, guard_angle_deg
@@ -3677,6 +3715,7 @@ class Bender:
         settle_before_stim_s=None,
         pre_iso_stim_duration_s=None,
         post_baseline_s=1.0,
+        approach_from_deg=None,
     ):
         """
         Build one isovelocity timeline + stim commands.
@@ -3686,6 +3725,10 @@ class Bender:
 
         ``stim_onset_s`` is signed seconds relative to constant-velocity segment start (``t_iso0``).
         Legacy ``settle_before_stim_s`` / ``pre_iso_stim_duration_s`` kwargs are migrated when onset omitted.
+
+        ``approach_from_deg``: forwarded to :meth:`_timeline_prehold_isovelocity`. Pass the motor's
+        known resting angle (typically 0°) when the block starts from rest so a ramp to the starting
+        angle is prepended; leave None for a mid-trajectory continuation (mirror second segment).
         """
         stim_onset_s, stim_duration_s = self._resolve_stim_onset_duration_s(
             {
@@ -3697,7 +3740,8 @@ class Bender:
             segment_duration_s=iso_duration_s,
         )
         t, angle, anglevel, t_iso0, guard_triggered, guard_angle_deg = self._timeline_prehold_isovelocity(
-            float(theta_start_deg), float(vel_deg_per_s), float(pre_hold_s), float(iso_duration_s), daq_hz
+            float(theta_start_deg), float(vel_deg_per_s), float(pre_hold_s), float(iso_duration_s), daq_hz,
+            approach_from_deg=approach_from_deg,
         )
         t_seg_end = t_iso0 + float(iso_duration_s)
         # Post-stimulus baseline: ramp the motor back to neutral (0 deg) with stim off; recording
@@ -3905,6 +3949,7 @@ class Bender:
                     th0, v1,
                     mirror_stim_side='left',
                     post_baseline_s=0.0,
+                    approach_from_deg=0.0,
                     **iso_kw,
                 )
                 th_mid = float(d1['angle'][-1])
@@ -3945,6 +3990,7 @@ class Bender:
                 d0 = self._isovelocity_one_block(
                     th0, v_sign,
                     mirror_stim_side=None,
+                    approach_from_deg=0.0,
                     **iso_kw,
                 )
                 t = d0['t']
