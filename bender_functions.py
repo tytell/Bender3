@@ -3128,6 +3128,12 @@ class Bender:
         The ramp duration is sized from :meth:`_neutral_reset_ramp_duration_s` so the slew rate is
         capped at ``reset_max_speed_deg_per_s`` regardless of amplitude (open-loop step-loss guard).
         Returns ``0.0`` (commanded neutral angle).
+
+        No longer called by the isometric acquisition path: continuous isometric embeds the
+        inter-block / per-step / end-of-run return-to-zero ramps directly in the single waveform
+        (see :meth:`_build_isometric_continuous_timeline`). Still used by
+        :meth:`_drive_to_zero_and_confirm` (pre/post-protocol zero for every protocol) and by the
+        isovelocity acquisition path.
         """
         from_deg = float(from_deg)
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
@@ -3309,6 +3315,278 @@ class Bender:
                 f"(deg_per_step unavailable -- raw values only)"
             )
 
+    def _build_isometric_continuous_timeline(
+        self,
+        targets_deg,
+        *,
+        ramp_duration_s,
+        hold_duration_s,
+        pre_baseline_s,
+        post_baseline_s,
+        stim_onset_s,
+        settle_before_stim_s,
+        stim_duration_s,
+        is_stim,
+        stim_pulse_rate_hz,
+        stim_voltage,
+        daq_hz,
+        ramp_from_deg=None,
+        block_starts=None,
+        reset_steps=False,
+        inter_step_hold_s=0.0,
+        waitafter=0.0,
+        per_step_stim_sides=None,
+        left_stim_voltage=None,
+        right_stim_voltage=None,
+        recruitment=None,
+        sequential_left_frac=0.5,
+        mirror=False,
+        mirror_hold_deg_left=None,
+        mirror_hold_deg_right=None,
+    ):
+        """Stitch all isometric steps/blocks into ONE uniformly sampled acquisition timeline.
+
+        Replaces the legacy N-FINITE-task-per-step loop: every step plus the dead-time
+        return-to-zero ramps (per-block boundaries and ``reset_between_steps``), the inter-step
+        gap holds (formerly ``time.sleep``), and the final return-to-home ramp are appended to a
+        single continuous waveform. ``_run_force_length_steps`` runs it once via :meth:`run` and
+        slices the result back into per-step arrays. Reuses :meth:`_timeline_ramp_hold` /
+        :meth:`_timeline_mirror_two_holds` and the stim routing helpers unchanged.
+
+        Grid-snap (REQUIRED for uniformity): each appended segment's time axis is rebuilt as
+        ``(first_index + arange(n)) * dt`` from an integer ``cursor``, never by summing float
+        offsets, so ``t_all[k] == k * dt`` exactly and :meth:`record_motor_signal`'s ``8*dt`` span
+        guard passes for any number of asymmetric steps (error is index-derived, never compounds).
+
+        Junctions: the first appended segment keeps all its samples; every later segment drops its
+        first sample (the shared junction, equal in time and angle to the prior segment's last
+        sample). Per-step ``slice_bounds`` are OVERLAPPING -- ``(s_i, s_i + Li)`` of length
+        ``Li = len(local t)`` -- so each per-step entry array keeps the exact length the old
+        per-step flow produced. At each junction the shared AI sample is the last column of one
+        step's slice and the first of the next; under continuous acquisition it is one physical
+        read shared by both entries (faithful, shape-identical).
+
+        Open-loop home (conscious change vs the old per-step flow): the return-to-home ramp is the
+        tail of this single acquisition rather than a separate confirmed reset segment, so the
+        start/end posture is open-loop exactly like ``dynamic``. The pre-run
+        :meth:`command_start_position_zero` still provides the one encoder-confirmed correction.
+
+        Returns ``(t_all, angle_all, anglevel_all, s1_all, s2_all, slice_bounds, per_step_locals)``.
+        """
+        targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
+        n_steps = int(targets_deg.size)
+        if n_steps < 1:
+            raise ValueError("targets_deg must contain at least one step.")
+        dt = 1.0 / float(daq_hz)
+        block_starts = set(int(b) for b in (block_starts or set()))
+        gap_s = float(inter_step_hold_s)
+        if not np.isfinite(gap_s) or gap_s < 0:
+            raise ValueError(f"inter_step_hold_s must be finite and >= 0; got {inter_step_hold_s!r}.")
+        spr = float(stim_pulse_rate_hz)
+        lv = float(left_stim_voltage if left_stim_voltage is not None else stim_voltage)
+        rv = float(right_stim_voltage if right_stim_voltage is not None else stim_voltage)
+        use_block_stim = per_step_stim_sides is not None
+        if use_block_stim and len(per_step_stim_sides) != n_steps:
+            raise ValueError(
+                f"per_step_stim_sides length ({len(per_step_stim_sides)}) must match the number of "
+                f"steps ({n_steps})."
+            )
+
+        parts_t, parts_a, parts_w, parts_s1, parts_s2 = [], [], [], [], []
+        cursor = 0  # current stitched length (samples appended so far)
+
+        def append_segment(seg_t, seg_a, seg_w, seg_s1, seg_s2):
+            """Append one segment, grid-snapping its time axis. Returns ``(start_idx, length_full)``
+            where ``start_idx`` is the stitched index of the segment's first (possibly shared)
+            sample and ``length_full == len(seg_t)``. The same chunk slice is applied to all five
+            arrays so stim stays sample-aligned to motion at every junction."""
+            nonlocal cursor
+            seg_t = np.asarray(seg_t, dtype=float).reshape(-1)
+            l_full = int(seg_t.size)
+            if cursor == 0:
+                first_kept = 0
+                chunk = slice(0, l_full)        # very first segment keeps all samples
+                n_new = l_full
+                start_idx = 0
+            else:
+                first_kept = cursor
+                chunk = slice(1, l_full)        # drop the shared junction sample (index 0)
+                n_new = l_full - 1
+                start_idx = cursor - 1          # shared sample == previous segment's last
+            parts_t.append((first_kept + np.arange(n_new, dtype=float)) * dt)
+            parts_a.append(np.asarray(seg_a, dtype=float).reshape(-1)[chunk])
+            parts_w.append(np.asarray(seg_w, dtype=float).reshape(-1)[chunk])
+            parts_s1.append(np.asarray(seg_s1, dtype=float).reshape(-1)[chunk])
+            parts_s2.append(np.asarray(seg_s2, dtype=float).reshape(-1)[chunk])
+            cursor += n_new
+            return start_idx, l_full
+
+        slice_bounds = []
+        per_step_locals = []
+        for i in range(n_steps):
+            target = float(targets_deg[i])
+            returns_to_zero = (i > 0) and ((i in block_starts) or bool(reset_steps))
+            # Inter-step gap hold (dead time, replaces the old time.sleep). Within a block only:
+            # block boundaries had no gap in the old per-block flow (each block was its own call,
+            # so its first step was i==0 with no preceding gap). Held at the previous target, then
+            # the return-to-zero (if any) follows -- matching the old order (sleep, then reset).
+            if i > 0 and gap_s > 0 and (i not in block_starts):
+                gap_angle = float(targets_deg[i - 1])
+                n_gap = max(2, int(round(gap_s / dt)) + 1)
+                gt = np.linspace(0.0, gap_s, n_gap)
+                append_segment(gt, np.full(n_gap, gap_angle), np.zeros(n_gap),
+                               np.zeros(n_gap), np.zeros(n_gap))
+            # Return-to-zero before this step (dead time, embeds _run_neutral_reset_segment for both
+            # the per-block reset and reset_between_steps). Skipped when already at neutral.
+            if returns_to_zero:
+                prev_end = float(targets_deg[i - 1])
+                if abs(prev_end) > 1e-12:
+                    rs = self._neutral_reset_ramp_duration_s(prev_end)
+                    rt, ra, rw = self._timeline_ramp_hold(prev_end, 0.0, rs, 0.0, daq_hz)
+                    append_segment(rt, ra, rw, np.zeros_like(rt), np.zeros_like(rt))
+            # prev angle this step ramps FROM (reproduces old line 3394-3399 prev logic).
+            if returns_to_zero:
+                prev = 0.0
+            elif i > 0:
+                prev = float(targets_deg[i - 1])
+            elif ramp_from_deg is not None:
+                prev = float(ramp_from_deg)
+            else:
+                prev = float(targets_deg[0])
+
+            if mirror:
+                kw = {}
+                ml = self._mirror_hold_deg_at_step(mirror_hold_deg_left, i, n_steps)
+                mr = self._mirror_hold_deg_at_step(mirror_hold_deg_right, i, n_steps)
+                if ml is not None:
+                    kw['mirror_abs_deg_left'] = ml
+                if mr is not None:
+                    kw['mirror_abs_deg_right'] = mr
+                t_loc, a_loc, w_loc, h1, h2 = self._timeline_mirror_two_holds(
+                    prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz, **kw
+                )
+                active_l = (t_loc >= h1[0] + float(settle_before_stim_s)) & (t_loc < h1[1])
+                active_r = (t_loc >= h2[0] + float(settle_before_stim_s)) & (t_loc < h2[1])
+                if stim_duration_s is not None:
+                    active_l &= t_loc < (h1[0] + float(settle_before_stim_s) + float(stim_duration_s))
+                    active_r &= t_loc < (h2[0] + float(settle_before_stim_s) + float(stim_duration_s))
+                if is_stim and (np.any(active_l) or np.any(active_r)):
+                    p_l = self._pulse_carrier_volts(t_loc, active_l, spr, stim_voltage)
+                    p_r = self._pulse_carrier_volts(t_loc, active_r, spr, stim_voltage)
+                    s1_loc = np.zeros_like(t_loc)
+                    s2_loc = np.zeros_like(t_loc)
+                    self._deposit_stim_on_side(p_l, 'left', s1_loc, s2_loc)
+                    self._deposit_stim_on_side(p_r, 'right', s1_loc, s2_loc)
+                else:
+                    s1_loc = np.zeros_like(t_loc)
+                    s2_loc = np.zeros_like(t_loc)
+                t_stim0 = float(h1[0] + float(settle_before_stim_s))
+                t_stim1 = float(h2[1])
+                t_active_start = t_stim0
+                t_active_end = t_stim1
+                t_pre_baseline_start = t_pre_baseline_end = float(ramp_duration_s)
+                t_post_baseline_start = t_post_baseline_end = float(t_loc[-1])
+                sides_i = None
+                rec_i = recruitment if recruitment is not None else self._normalize_recruitment(
+                    getattr(self, 'recruitment', 'bilateral_simultaneous')
+                )
+            else:
+                pre_b = max(0.0, float(pre_baseline_s))
+                post_b = max(0.0, float(post_baseline_s))
+                total_hold = pre_b + float(hold_duration_s) + post_b
+                t_loc, a_loc, w_loc = self._timeline_ramp_hold(
+                    prev, target, float(ramp_duration_s), total_hold, daq_hz
+                )
+                onset, dur = self._resolve_stim_onset_duration_s(
+                    {
+                        'stim_onset_s': stim_onset_s,
+                        'stim_duration_s': stim_duration_s,
+                        'settle_before_stim_s': settle_before_stim_s,
+                    },
+                    segment_duration_s=float(hold_duration_s),
+                )
+                t_active_start = float(ramp_duration_s) + pre_b
+                t_active_end = t_active_start + float(hold_duration_s)
+                t_stim0 = t_active_start + onset
+                t_stim1 = t_stim0 + dur
+                t_stim1 = min(t_stim1, float(t_loc[-1]) + 1e-9)
+                active = (t_loc >= t_stim0) & (t_loc < t_stim1)
+                t_pre_baseline_start = float(ramp_duration_s)
+                t_pre_baseline_end = t_active_start
+                t_post_baseline_start = t_active_end
+                t_post_baseline_end = t_active_end + post_b
+                if use_block_stim:
+                    sides_i = self._normalize_stim_sides(per_step_stim_sides[i])
+                    rec_i = self._stim_sides_to_recruitment(sides_i)
+                else:
+                    sides_i = None
+                    rec_i = recruitment if recruitment is not None else self._normalize_recruitment(
+                        getattr(self, 'recruitment', 'bilateral_simultaneous')
+                    )
+                if is_stim and np.any(active):
+                    if use_block_stim:
+                        s1_loc, s2_loc = self._route_stim_sides_volts(t_loc, active, spr, sides_i, lv, rv)
+                    else:
+                        pulse = self._pulse_carrier_volts(t_loc, active, spr, stim_voltage)
+                        s1_loc, s2_loc = self._route_recruitment_stim(
+                            pulse, rec_i, sequential_left_frac=sequential_left_frac
+                        )
+                else:
+                    s1_loc = np.zeros_like(t_loc)
+                    s2_loc = np.zeros_like(t_loc)
+
+            # waitafter post-experiment buffer (stim off) on the GLOBAL final step only -- the
+            # signal settles once at the end of the whole continuous acquisition.
+            if i == n_steps - 1 and float(waitafter) > 0:
+                _wait = max(0.0, float(waitafter))
+                n_wait = max(2, int(round(_wait * daq_hz)) + 1)
+                t_wait = float(t_loc[-1]) + np.linspace(0.0, _wait, n_wait)[1:]
+                hold_ang = float(a_loc[-1])
+                t_loc = np.concatenate([t_loc, t_wait])
+                a_loc = np.concatenate([a_loc, np.full(t_wait.size, hold_ang)])
+                w_loc = np.concatenate([w_loc, np.zeros(t_wait.size)])
+                s1_loc = np.concatenate([s1_loc, np.zeros(t_wait.size)])
+                s2_loc = np.concatenate([s2_loc, np.zeros(t_wait.size)])
+
+            per_step_locals.append({
+                't': np.array(t_loc, copy=True),
+                'angle': np.array(a_loc, copy=True),
+                'anglevel': np.array(w_loc, copy=True),
+                's1': np.array(s1_loc, copy=True),
+                's2': np.array(s2_loc, copy=True),
+                'prev': float(prev),
+                'target': float(target),
+                'rec': rec_i,
+                'mirror': bool(mirror),
+                'sides_norm': sides_i,
+                't_stim0': float(t_stim0),
+                't_stim1': float(t_stim1),
+                't_active_start': float(t_active_start),
+                't_active_end': float(t_active_end),
+                't_pre_baseline_start': float(t_pre_baseline_start),
+                't_pre_baseline_end': float(t_pre_baseline_end),
+                't_post_baseline_start': float(t_post_baseline_start),
+                't_post_baseline_end': float(t_post_baseline_end),
+            })
+            start_idx, l_full = append_segment(t_loc, a_loc, w_loc, s1_loc, s2_loc)
+            slice_bounds.append((start_idx, start_idx + l_full))
+
+        # Final return-to-home ramp (dead time; open-loop home -- see docstring / Check C).
+        last_ang = float(per_step_locals[-1]['angle'][-1])
+        if abs(last_ang) > 1e-12:
+            fs = self._neutral_reset_ramp_duration_s(last_ang)
+            ft, fa, fw = self._timeline_ramp_hold(last_ang, 0.0, fs, 0.0, daq_hz)
+            append_segment(ft, fa, fw, np.zeros_like(ft), np.zeros_like(ft))
+
+        t_all = np.concatenate(parts_t)
+        angle_all = np.concatenate(parts_a)
+        s1_all = np.concatenate(parts_s1)
+        s2_all = np.concatenate(parts_s2)
+        # Clean global velocity for the AO/DO generation; per-step entries keep their local
+        # gradient (per_step_locals[i]['anglevel']), matching the old per-step entry contract.
+        anglevel_all = np.gradient(angle_all, t_all, edge_order=1)
+        return t_all, angle_all, anglevel_all, s1_all, s2_all, slice_bounds, per_step_locals
+
     def _run_force_length_steps(
         self,
         targets_deg,
@@ -3337,13 +3615,42 @@ class Bender:
         right_stim_voltage=None,
         block_direction=None,
         block_index=None,
+        per_step_stim_sides=None,
+        per_step_block_direction=None,
+        per_step_block_index=None,
+        block_starts=None,
     ):
-        """Execute ramp–hold–stim–acquire for each target angle in ``targets_deg`` (degrees)."""
+        """Build ONE continuous ramp-hold-stim timeline for all ``targets_deg`` (degrees), run a
+        single finite acquisition, then slice it into per-step trial entries.
+
+        All steps (and the dead-time return-to-zero ramps, inter-step gap holds, and the final
+        return-to-home ramp) are stitched by :meth:`_build_isometric_continuous_timeline` into one
+        uniform waveform, acquired with a single :meth:`run` call. Per-step entries are recovered
+        by overlapping slices of ``self.aidata`` / ``self.angle_measured`` so their shapes match
+        the legacy N-task-per-step flow exactly. Block runs pass ``per_step_stim_sides`` /
+        ``per_step_block_direction`` / ``per_step_block_index`` / ``block_starts`` (one entry per
+        global step); the contiguous force-length path (``run_force_length_series``) passes none.
+        ``reset_between_steps`` and the inter-step gap are honored as embedded dead-time segments.
+        """
         targets_deg = np.atleast_1d(np.asarray(targets_deg, dtype=float)).reshape(-1)
         num_steps = int(targets_deg.size)
         if num_steps < 1:
             raise ValueError("targets_deg must contain at least one sample.")
-        if stim_sides is not None and bool(bilateral_mirror_motor):
+        # Per-step block stim sides: one normalized side per GLOBAL step. The block path passes a
+        # list; the legacy single-side call broadcasts one side across all steps; the contiguous
+        # force-length path passes neither (recruitment routing).
+        if per_step_stim_sides is not None:
+            pss = list(per_step_stim_sides)
+        elif stim_sides is not None:
+            pss = [stim_sides] * num_steps
+        else:
+            pss = None
+        use_block_stim = pss is not None
+        if use_block_stim and len(pss) != num_steps:
+            raise ValueError(
+                f"per_step_stim_sides length ({len(pss)}) must match the number of steps ({num_steps})."
+            )
+        if use_block_stim and bool(bilateral_mirror_motor):
             raise ValueError("bilateral_mirror_motor cannot be used with per-block stim_sides.")
         dev = device_name if device_name is not None else getattr(self, 'device_name', None)
         if dev is None:
@@ -3352,23 +3659,20 @@ class Bender:
             getattr(self, 'stim_pulse_rate', 75.0)
         )
         daq_hz = float(self.daq_ai_sample_rate_hz)
-        results = []
-        use_block_stim = stim_sides is not None
         if use_block_stim:
             lv = float(left_stim_voltage if left_stim_voltage is not None else stim_voltage)
             rv = float(right_stim_voltage if right_stim_voltage is not None else stim_voltage)
-            sides_norm = self._normalize_stim_sides(stim_sides)
-            rec = self._stim_sides_to_recruitment(sides_norm)
+            rec_uniform = None      # recruitment is derived per step from each step's stim_sides
+            mirror = False
         else:
             lv = float(stim_voltage)
             rv = float(stim_voltage)
-            sides_norm = None
-            rec = self._normalize_recruitment(
+            rec_base = self._normalize_recruitment(
                 recruitment if recruitment is not None else getattr(self, 'recruitment', 'bilateral_simultaneous')
             )
-        bm = bool(bilateral_mirror_motor) and not use_block_stim
-        rec = self._recruitment_with_bilateral_mirror_motor(rec, bm)
-        mirror = bm and rec == 'bilateral_sequential'
+            bm = bool(bilateral_mirror_motor)
+            rec_uniform = self._recruitment_with_bilateral_mirror_motor(rec_base, bm)
+            mirror = bm and rec_uniform == 'bilateral_sequential'
         seq_frac = float(
             bilateral_sequential_left_frac
             if bilateral_sequential_left_frac is not None
@@ -3382,178 +3686,115 @@ class Bender:
             raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
         reset_steps = bool(reset_between_steps)
 
+        # Build the full continuous waveform (all steps plus dead-time reset/gap/home segments)
+        # and acquire it as ONE finite task -- no per-step run()/device-reset loop.
+        (t_all, angle_all, anglevel_all, s1_all, s2_all,
+         slice_bounds, per_step_locals) = self._build_isometric_continuous_timeline(
+            targets_deg,
+            ramp_duration_s=ramp_duration_s,
+            hold_duration_s=hold_duration_s,
+            pre_baseline_s=pre_baseline_s,
+            post_baseline_s=post_baseline_s,
+            stim_onset_s=stim_onset_s,
+            settle_before_stim_s=settle_before_stim_s,
+            stim_duration_s=stim_duration_s,
+            is_stim=is_stim,
+            stim_pulse_rate_hz=spr,
+            stim_voltage=stim_voltage,
+            daq_hz=daq_hz,
+            ramp_from_deg=ramp_from_deg,
+            block_starts=block_starts,
+            reset_steps=reset_steps,
+            inter_step_hold_s=gap_s,
+            waitafter=float(getattr(self, 'waitafter', 0.0)),
+            per_step_stim_sides=pss,
+            left_stim_voltage=lv,
+            right_stim_voltage=rv,
+            recruitment=rec_uniform,
+            sequential_left_frac=seq_frac,
+            mirror=mirror,
+            mirror_hold_deg_left=mirror_hold_deg_left,
+            mirror_hold_deg_right=mirror_hold_deg_right,
+        )
+        self.record_motor_signal(t_all, angle_all, anglevel_all, tnorm=np.zeros_like(t_all))
+        self.record_stim_signal(s1_all, s2_all)
+        self.make_motor_stepper_pulses(
+            daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
+            motor_gear_ratio=self.motor_gear_ratio,
+            motor_full_steps_per_rev=self.motor_full_steps_per_rev,
+        )
+        self.aidata = self.run(device_name=dev)
+        ai = self.aidata
+        am = np.asarray(getattr(self, 'angle_measured', np.array([])), dtype=float).reshape(-1)
+
+        # Slice the single acquisition back into per-step entries. Overlapping slice_bounds keep
+        # every per-step array at its full local length Li (identical to the old per-step flow);
+        # the shared junction sample is the last column of one step and the first of the next.
+        sg_names = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
+        results = []
         for i in range(num_steps):
-            if i > 0 and gap_s > 0:
-                time.sleep(gap_s)
-            if i > 0 and reset_steps:
-                # Reset to resting length: drive the motor back to 0° from the previous hold
-                # angle and wait for the move to complete before the next step. The reset ramp
-                # duration is speed-capped inside _run_neutral_reset_segment.
-                self._run_neutral_reset_segment(float(targets_deg[i - 1]), dev)
-            target = float(targets_deg[i])
-            if i > 0:
-                prev = 0.0 if reset_steps else float(targets_deg[i - 1])
-            elif ramp_from_deg is not None:
-                prev = float(ramp_from_deg)
-            else:
-                prev = float(targets_deg[0])
-            if mirror:
-                kw = {}
-                ml = self._mirror_hold_deg_at_step(mirror_hold_deg_left, i, num_steps)
-                mr = self._mirror_hold_deg_at_step(mirror_hold_deg_right, i, num_steps)
-                if ml is not None:
-                    kw['mirror_abs_deg_left'] = ml
-                if mr is not None:
-                    kw['mirror_abs_deg_right'] = mr
-                t, angle, anglevel, h1, h2 = self._timeline_mirror_two_holds(
-                    prev, target, float(ramp_duration_s), float(hold_duration_s), daq_hz, **kw
-                )
-                active_l = (t >= h1[0] + float(settle_before_stim_s)) & (t < h1[1])
-                active_r = (t >= h2[0] + float(settle_before_stim_s)) & (t < h2[1])
-                if stim_duration_s is not None:
-                    active_l &= t < (h1[0] + float(settle_before_stim_s) + float(stim_duration_s))
-                    active_r &= t < (h2[0] + float(settle_before_stim_s) + float(stim_duration_s))
-                if is_stim and (np.any(active_l) or np.any(active_r)):
-                    p_l = self._pulse_carrier_volts(t, active_l, spr, stim_voltage)
-                    p_r = self._pulse_carrier_volts(t, active_r, spr, stim_voltage)
-                    s1 = np.zeros_like(t)
-                    s2 = np.zeros_like(t)
-                    self._deposit_stim_on_side(p_l, 'left', s1, s2)
-                    self._deposit_stim_on_side(p_r, 'right', s1, s2)
-                else:
-                    s1 = np.zeros_like(t)
-                    s2 = np.zeros_like(t)
-                t_stim0 = float(h1[0] + float(settle_before_stim_s))
-                t_stim1 = float(h2[1])
-                # Mirror two-hold mode does not add silent baselines; report the active stim span
-                # and zero-length pre/post windows so the metadata keys are always present.
-                t_active_start = t_stim0
-                t_active_end = t_stim1
-                t_pre_baseline_start = t_pre_baseline_end = float(ramp_duration_s)
-                t_post_baseline_start = t_post_baseline_end = float(t[-1])
-            else:
-                pre_b = max(0.0, float(pre_baseline_s))
-                post_b = max(0.0, float(post_baseline_s))
-                # Bracket the active hold with silent baseline holds at the commanded angle: the
-                # motor holds for ``pre_b`` (stim off), then the active window (``hold_duration_s``),
-                # then ``post_b`` (stim off). All three are a single continuous hold at ``target``.
-                total_hold = pre_b + float(hold_duration_s) + post_b
-                t, angle, anglevel = self._timeline_ramp_hold(
-                    prev, target, float(ramp_duration_s), total_hold, daq_hz
-                )
-                onset, dur = self._resolve_stim_onset_duration_s(
-                    {
-                        'stim_onset_s': stim_onset_s,
-                        'stim_duration_s': stim_duration_s,
-                        'settle_before_stim_s': settle_before_stim_s,
-                    },
-                    segment_duration_s=float(hold_duration_s),
-                )
-                t_active_start = float(ramp_duration_s) + pre_b
-                t_active_end = t_active_start + float(hold_duration_s)
-                t_stim0 = t_active_start + onset
-                t_stim1 = t_stim0 + dur
-                t_stim1 = min(t_stim1, float(t[-1]) + 1e-9)
-                active = (t >= t_stim0) & (t < t_stim1)
-                t_pre_baseline_start = float(ramp_duration_s)
-                t_pre_baseline_end = t_active_start
-                t_post_baseline_start = t_active_end
-                t_post_baseline_end = t_active_end + post_b
-                if is_stim and np.any(active):
-                    if use_block_stim:
-                        s1, s2 = self._route_stim_sides_volts(
-                            t, active, spr, sides_norm, lv, rv
-                        )
-                    else:
-                        pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
-                        s1, s2 = self._route_recruitment_stim(pulse, rec, sequential_left_frac=seq_frac)
-                else:
-                    s1 = np.zeros_like(t)
-                    s2 = np.zeros_like(t)
-
-            # Post-experiment buffer on the final step, mirroring dynamic's waitafter: stim off,
-            # recording continues so the signal can settle. HOLD at the final commanded angle --
-            # do NOT command an instantaneous jump to 0 here. A target->0 step across one AI sample
-            # cannot be emitted by make_motor_stepper_pulses (one STEP pulse per AO sample), so the
-            # large catch-up is silently truncated: the motor is left bent while the bookkeeping
-            # reads 0, and the end-of-trial _run_neutral_reset_segment is then skipped (from_deg~0).
-            # The controlled return-to-neutral ramp runs AFTER the steps complete (see isometric()).
-            if i == num_steps - 1:
-                _wait_after = max(0.0, float(getattr(self, 'waitafter', 0.0)))
-                if _wait_after > 0:
-                    _n_wait = max(2, int(round(_wait_after * daq_hz)) + 1)
-                    _t_wait = float(t[-1]) + np.linspace(0.0, _wait_after, _n_wait)[1:]
-                    _hold_ang = float(angle[-1])
-                    t = np.concatenate([t, _t_wait])
-                    angle = np.concatenate([angle, np.full(_t_wait.size, _hold_ang)])
-                    anglevel = np.concatenate([anglevel, np.zeros(_t_wait.size)])
-                    s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
-                    s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
-
-            self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
-            self.record_stim_signal(s1, s2)
-            self.make_motor_stepper_pulses(
-                daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
-                motor_gear_ratio=self.motor_gear_ratio,
-                motor_full_steps_per_rev=self.motor_full_steps_per_rev,
-            )
-            self.aidata = self.run(device_name=dev)
-
+            loc = per_step_locals[i]
+            s_i, e_i = slice_bounds[i]
+            ai_step = np.array(ai[:, s_i:e_i], copy=True)
+            am_step = np.array(am[s_i:e_i], copy=True)
+            rec_i = loc['rec']
             entry = {
                 'test_type': 'isometric',
                 'step_index': i,
                 'trial_index': i,
                 'cycle_index': i,
-                'recruitment': rec,
-                'unilateral_posture_lateral_index': self.recruitment_unilateral_lateral_index(rec),
+                'recruitment': rec_i,
+                'unilateral_posture_lateral_index': self.recruitment_unilateral_lateral_index(rec_i),
                 'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
-                'bilateral_mirror_motor': bool(mirror),
-                'target_deg': target,
-                'ramp_from_deg': prev,
-                't': np.array(t, copy=True),
-                'angle_cmd': np.array(angle, copy=True),
-                'anglevel_cmd': np.array(anglevel, copy=True),
-                'tnorm': np.zeros_like(t),
-                'S1stimcmd': np.array(s1, copy=True),
-                'S2stimcmd': np.array(s2, copy=True),
-                'aidata': np.array(self.aidata, copy=True),
-                'angle_measured': np.array(self.angle_measured, copy=True),
-                'stim_t0': t_stim0,
-                'stim_t1': t_stim1,
-                't_pre_baseline_start': float(t_pre_baseline_start),
-                't_pre_baseline_end': float(t_pre_baseline_end),
-                't_active_start': float(t_active_start),
-                't_active_end': float(t_active_end),
-                't_post_baseline_start': float(t_post_baseline_start),
-                't_post_baseline_end': float(t_post_baseline_end),
+                'bilateral_mirror_motor': bool(loc['mirror']),
+                'target_deg': loc['target'],
+                'ramp_from_deg': loc['prev'],
+                't': np.array(loc['t'], copy=True),
+                'angle_cmd': np.array(loc['angle'], copy=True),
+                'anglevel_cmd': np.array(loc['anglevel'], copy=True),
+                'tnorm': np.zeros_like(loc['t']),
+                'S1stimcmd': np.array(loc['s1'], copy=True),
+                'S2stimcmd': np.array(loc['s2'], copy=True),
+                'aidata': ai_step,
+                'angle_measured': am_step,
+                'stim_t0': loc['t_stim0'],
+                'stim_t1': loc['t_stim1'],
+                't_pre_baseline_start': float(loc['t_pre_baseline_start']),
+                't_pre_baseline_end': float(loc['t_pre_baseline_end']),
+                't_active_start': float(loc['t_active_start']),
+                't_active_end': float(loc['t_active_end']),
+                't_post_baseline_start': float(loc['t_post_baseline_start']),
+                't_post_baseline_end': float(loc['t_post_baseline_end']),
                 'forcetorque': None,
-                'mean_xforce_stim': None,
             }
-            self._record_motor_position_reference(
-                entry, protocol=str(entry.get('test_type', 'isometric')), segment_index=i,
-            )
             if use_block_stim:
+                if per_step_block_index is not None:
+                    bidx = int(per_step_block_index[i])
+                elif block_index is not None:
+                    bidx = int(block_index)
+                else:
+                    bidx = 0
+                if per_step_block_direction is not None:
+                    bdir = per_step_block_direction[i]
+                else:
+                    bdir = block_direction or loc['sides_norm']
                 self._tag_block_trial_metadata(
                     entry,
-                    block_index=block_index if block_index is not None else 0,
-                    block_direction=block_direction or sides_norm,
-                    block_stim_sides=sides_norm,
+                    block_index=bidx,
+                    block_direction=bdir or loc['sides_norm'],
+                    block_stim_sides=loc['sides_norm'],
                     left_stim_voltage=lv,
                     right_stim_voltage=rv,
                 )
-            sg_names = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
             try:
                 idx = [self.input_channel_names.index(n) for n in sg_names if n in self.input_channel_names]
                 if len(idx) == 6:
-                    ft = self.apply_calibration_forcetorque(self.aidata[idx, :])
+                    ft = self.apply_calibration_forcetorque(ai_step[idx, :])
                     entry['forcetorque'] = ft
                     entry['forcetorque_raw'] = np.array(ft, copy=True)
                     idx_t = self._primary_torque_index()
                     # Raw primary torque only; inertial correction is applied post-hoc in R.
                     entry['primary_torque_raw'] = np.asarray(ft[idx_t, :], dtype=float).reshape(-1)
-                    m = active & np.isfinite(t)
-                    if np.any(m):
-                        entry['mean_xforce_stim'] = float(np.mean(ft[0, m]))
             except (ValueError, AttributeError):
                 pass
             results.append(entry)
@@ -3569,6 +3810,7 @@ class Bender:
             'hold_motor_between_steps': bool(getattr(self, 'hold_motor_between_steps', True)),
             'pulse_width_ms': float(getattr(self, 'pulse_width_ms', 2.0)) if bool(is_stim) else None,
             'isometric_inter_step_interval_s': float(gap_s),
+            'acquisition_mode': 'continuous',
         })
         return results
 
@@ -3746,56 +3988,63 @@ class Bender:
             right_v = float(sp.get('right_stim_voltage', getattr(self, 'right_stim_voltage', 5.0)))
             self._validate_block_sequence_voltages(block_seq, left_v, right_v)
             dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
-            all_out = []
-            last_deg = 0.0
-            global_step = 0
+            # Flatten every block into one ordered step list, then issue ONE continuous
+            # acquisition. Each block contributes its FULL num_steps sweep (so 3 steps x 2 blocks
+            # -> 6 trials), signed by the block's bend direction (right -> +, left -> -). The
+            # inter-block return-to-zero (formerly a separate _run_neutral_reset_segment before
+            # each block) and the final return-to-home are embedded as dead-time waveform segments
+            # by the helper via ``block_starts``.
             step_order_blocks = []
             base_targets = np.abs(targets_deg_raw)
+            all_targets = []
+            per_step_stim_sides = []
+            per_step_block_direction = []
+            per_step_block_index = []
+            block_starts = set()
+            seq_native = []
             for bi, block in enumerate(block_seq):
-                last_deg = self._run_neutral_reset_segment(last_deg, dev)
+                block_starts.add(len(all_targets))
                 dir_idx = self._lateral_index_for_block_direction(block['direction'])
                 ms = self.motor_command_sign_for_bend_toward_index(dir_idx)
                 order = self._shuffled_step_order(base_targets.size, randomize, random_seed, block_index=bi)
                 step_order_blocks.append([int(x) for x in order])
-                targets_block = base_targets[order] * ms
-                block_out = self._run_force_length_steps(
-                    targets_block,
-                    ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
-                    hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
-                    pre_baseline_s=float(sp.get('pre_baseline_s', 1.0) or 0.0),
-                    post_baseline_s=float(sp.get('post_baseline_s', 1.0) or 0.0),
-                    stim_onset_s=sp.get('stim_onset_s'),
-                    settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
-                    stim_duration_s=sp.get('stim_duration_s'),
-                    inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
-                    reset_between_steps=bool(sp.get('reset_between_steps', False)),
-                    is_stim=bool(sp.get('is_stim', False)),
-                    stim_pulse_rate=sp.get('stim_pulse_rate', None),
-                    stim_voltage=float(sp.get('stim_voltage', 5.0)),
-                    device_name=dev,
-                    ramp_from_deg=0.0,
-                    stim_sides=block['stim_sides'],
-                    left_stim_voltage=left_v,
-                    right_stim_voltage=right_v,
-                    block_direction=block['direction'],
-                    block_index=bi,
-                    bilateral_mirror_motor=False,
-                )
-                for j, e in enumerate(block_out):
-                    orig = int(order[j])
-                    e['target_value_native'] = float(vals[orig])
-                    e['curvature_1_per_m'] = float(kappa[orig])
-                    e['sequence_index'] = orig
-                    e['step_index'] = global_step
-                    e['trial_index'] = global_step
-                    e['cycle_index'] = global_step
-                    global_step += 1
-                last_deg = float(block_out[-1]['angle_cmd'][-1])
-                all_out.extend(block_out)
-            # Return the motor to neutral once after the final block: block resets only
-            # fire BEFORE each block, so without this the motor is left at the last hold
-            # angle after the run ends.
-            last_deg = self._run_neutral_reset_segment(last_deg, dev)
+                all_targets.extend((base_targets[order] * ms).tolist())
+                per_step_stim_sides.extend([block['stim_sides']] * base_targets.size)
+                per_step_block_direction.extend([block['direction']] * base_targets.size)
+                per_step_block_index.extend([bi] * base_targets.size)
+                seq_native.extend([int(o) for o in order])
+            all_targets = np.asarray(all_targets, dtype=float)
+            all_out = self._run_force_length_steps(
+                all_targets,
+                ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
+                hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
+                pre_baseline_s=float(sp.get('pre_baseline_s', 1.0) or 0.0),
+                post_baseline_s=float(sp.get('post_baseline_s', 1.0) or 0.0),
+                stim_onset_s=sp.get('stim_onset_s'),
+                settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
+                stim_duration_s=sp.get('stim_duration_s'),
+                inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
+                reset_between_steps=bool(sp.get('reset_between_steps', False)),
+                is_stim=bool(sp.get('is_stim', False)),
+                stim_pulse_rate=sp.get('stim_pulse_rate', None),
+                stim_voltage=float(sp.get('stim_voltage', 5.0)),
+                device_name=dev,
+                ramp_from_deg=0.0,
+                left_stim_voltage=left_v,
+                right_stim_voltage=right_v,
+                per_step_stim_sides=per_step_stim_sides,
+                per_step_block_direction=per_step_block_direction,
+                per_step_block_index=per_step_block_index,
+                block_starts=block_starts,
+                bilateral_mirror_motor=False,
+            )
+            # Tag native value / curvature / sequence index per step. step/trial/cycle indices are
+            # already the global step k assigned in the helper's post-acquisition loop.
+            for k, e in enumerate(all_out):
+                orig = seq_native[k]
+                e['target_value_native'] = float(vals[orig])
+                e['curvature_1_per_m'] = float(kappa[orig])
+                e['sequence_index'] = orig
             uidx = None
             seq_frac = float(
                 sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5))
