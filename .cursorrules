@@ -165,6 +165,120 @@ injection helpers.
 - GUI runs synchronously inside `st.spinner` during acquisition. 
   Do not introduce asyncio in the main GUI path.
 
+## Hardware and acquisition architecture (rig backend)
+
+Rig: NI USB-6361 DAQ + Teknic ClearPath (step/dir) + US Digital E6 encoder +
+ATI Mini40 F/T + Sonometrics DS3 (sonomicrometry) + Grass S88 stimulator. Numbers
+below are VERIFIED in code unless tagged [FLAG] (operator-provided,
+not enforced/encoded) or [GOTCHA].
+
+### Acquisition task model (NI USB-6361)
+- One trial = ONE finite acquisition. Stitch every step + dead-time/return-to-home
+  ramp into a single uniformly sampled timeline (`_build_isometric_continuous_timeline`),
+  run once via `run()`, then SLICE per step by sample index post-hoc. Never issue N
+  back-to-back finite tasks — the legacy per-step loop caused NI -200560
+  ("Wait Until Done … timeout").
+- `run()` resets the NI device ONCE at the END of each call (`daq_emergency_stop` in
+  `finally`) — the documented back-to-back-FINITE-wedge workaround. Never add a device
+  reset mid-timeline; never reset between the stitched steps of a trial.
+- AI is `AcquisitionType.FINITE`, `samps_per_chan=len(self.t)`. Selective-write = read an
+  array sub-range of `aidata`; never delete or segment the live acquisition.
+- Preserve the two co-clocked domains on any new acquisition:
+  - AI (F/T, sono, stim-monitor) + encoder counter share `ai/SampleClock` at
+    `daq_ai_sample_rate_hz`.
+  - AO (S1/S2 stim) + DO (motor step/dir/enable) share `ao/SampleClock` at
+    `daq_ao_do_sample_rate_hz`; one DO word per AO sample.
+  - AO and DO start on `ai/StartTrigger` (rising). Keep this chain: AI start → AO/DO start.
+- Configured rates (all rig configs): `daq_ai_sample_rate_hz = 1000.0`,
+  `daq_ao_do_sample_rate_hz = 60000.0`. `record_motor_signal` re-derives the AI rate from
+  the timeline `1/dt` and assigns it to `daq_ai_sample_rate_hz`; keep the timeline uniform
+  so it equals 1000 Hz.
+- [FLAG] USB-6361 device/buffer-rate ceiling is NOT checked in code. Do not assume
+  headroom when raising rates; verify against the device spec out-of-band.
+
+### Teknic ClearPath servo — step/dir, open-loop
+- Motor model number: CPM-SDSK-2310H-ELS
+- Every waveform must pass the `make_motor_stepper_pulses` guard:
+  `maxspeed = (360/motor_full_steps_per_rev) * daq_ao_do_sample_rate_hz / 2`; raises
+  `ValueError('Motion is too fast!')` if `|anglevel| > maxspeed` (≈ one step per 2 AO
+  samples). There is NO explicit acceleration limit in code.
+- `motor_gear_ratio = 5` (planetary gearbox); `poshi`/`velhi` are scaled by the gear ratio
+  before stepping. `motor_full_steps_per_rev = 1600` in every rig config.
+  [GOTCHA] The `make_motor_stepper_pulses` default arg is `6400.0` — always pass the config
+  value; never rely on the default.
+- OPEN-LOOP positioning: every protocol must START and END at home (angle 0). Return-to-home
+  ramps + `_drive_to_zero_and_confirm` re-anchor `_motor_continuous_step_pos` to 0.
+- Motor stays ENERGIZED/held across segment boundaries (`hold_motor_between_steps=True`;
+  ENABLE power-up state forced HIGH in `_ensure_motor_enable_power_up_state`; idle hold word
+  reasserted after each reset). De-energizing between segments was a drift source
+  (commit e7cee87). Do not drop ENABLE between stitched segments.
+- The ClearPath has its OWN internal encoder (motor feedback), SEPARATE from the E6.
+  Drive-level limits live on the drive, not in Python.
+- [FLAG] Clamp-geometry crash limit is NOT guarded in code. Commanded
+  angle is currently unchecked against any geometry-dependent crash limit.
+
+### US Digital E6 encoder
+- `encoder_pulses_per_rev = 10000` (E6 10000 CPR); read on `ctr0`, co-clocked to AI.
+- Mounted on the GEARBOX OUTPUT / specimen frame, NOT in the motor feedback loop. It is a
+  measurement channel, NOT a debugging target for motor open-loop drift (that lives in step
+  generation + the ENABLE hold).
+
+### Sonometrics DS3 (sonomicrometry)
+- The DS3 acquires 8-32 crystals and outputs an analog segment-length signal into NI
+  `ai6` (`sono_channel=['ai6']`, name `sono_right`). `sono` AI channels are wired
+  SINGLE-ENDED — `run()` forces `TerminalConfiguration.RSE` for any channel whose name
+  contains `sono` (not DIFF).
+- Calibration is a V→mm table in the config: `sono_cal_left` / `sono_cal_right` as
+  `[Low_V, High_V, Low_mm, High_mm]` (2-point linear), or a longer multi-point breakpoint
+  list. Apply the configured table; do not hardcode a slope.
+- [GOTCHA] `ai6` is clocked at the NI AI rate (`daq_ai_sample_rate_hz`, 1000 Hz), but the
+  DS3's true internal update rate is `sono_internal_samplefreq` (~241-242 Hz). The 1 kHz
+  stream OVERSAMPLES the DS3; the real measurement rate is the DS3 internal rate, not the
+  AI rate. Do not treat the AI rate as the sono sample rate.
+
+### ATI Mini40 force/torque + data integrity
+- RAW torque is NEVER modified. `forcetorque_raw` / `primary_torque_raw` are written raw to
+  `02_TimeSeries`. Inertial correction is post-hoc in R (authoritative); the GUI stores
+  correction PARAMETERS only (`inertial_calibration_profile`, MOI, flags in `01_Metadata`).
+  Never bake a corrected series into the file.
+- Calibration is REFERENCED, not embedded: config `forcetorque_calibration_file` (e.g.
+  `FT56491.cal`) → `01_Metadata/calibration_link` (path + availability flags).
+  [FLAG] There is no `01_Metadata/forcetorque_calibration_matrix` in `bender_h5_export.py`.
+
+### Grass S88 stimulator
+- S88 channels route through Grass SIU5 isolation units to platinum needle electrodes.
+  Driven by NI AO `S1stim`/`S2stim` (`ao0`/`ao1`); `stim_monitor` (`ai7`) records actual
+  stim on AI. Stim voltages must be finite and > 0 for any active side.
+
+### HDF5 schema contract (as written by bender_h5_export.py)
+- Root groups: `01_Metadata`, `02_TimeSeries`. Per-trial groups are
+  `02_TimeSeries/trial_XXXX`, ZERO-based (`trial_0000`, `trial_0001`, …).
+  [FLAG] NOT `step_XXXX` and NOT 1-based.
+- `01_Metadata` is NOT flat: subgroups `calibration_link`, `trial_index` (the manifest:
+  `trial_names`/`trial_index`/`cycle_index`/`test_type` + per-condition columns),
+  `inertial_calibration_profile`, `protocol_metadata`, `bender_settings`.
+  [FLAG] There is no `step_manifest` group.
+- [FLAG] No `03_Derived` group is written by this exporter. If `03_Derived`/`step_XXXX` are
+  R-pipeline conventions, they are downstream — not part of the Python writer.
+- `bender_gui_preview.py` is OFF the run path (independent timeline builder that "mirrors"
+  the motion branches). Run-path fixes must be ported to it SEPARATELY.
+
+### Known guard gaps (follow-ups — do NOT add asserts as part of a rulefile edit)
+- No clamp-geometry crash guard (see Teknic [FLAG] above).
+- Speed guard compares UN-geared `anglevel` to `maxspeed` while the motor sees
+  `gear_ratio×` velocity — verify whether it should compare the geared command.
+- No USB-6361 device/buffer-rate ceiling check.
+
+### Hardware inventory (operator-provided; not encoded in code — reference only)
+- DAQ: NI USB-6361. Motor: Teknic ClearPath CPM-SDSK-2310H-ELS, planetary gearbox 5:1,
+  Teknic IP-C power supply.
+- Encoder: US Digital E6-10000-375-IE-S-H-M-B (10000 CPR, 3/8" bore, index, single-ended,
+  through-hole cover, 3" bolt circle).
+- Force/torque: ATI Mini40 9105-TW-MINI40-R-1.8, calibrations SI-40-2 and SI-20-1.
+- Sonomicrometry: Sonometrics DS3 (8-32 crystal USB acquisition unit; combines crystal
+  segment lengths + auxiliary analog inputs into one file), analog out → NI `ai6`.
+- Stimulator: Grass S88 + Grass SIU5 isolation + platinum needle electrodes.
+
 ---
 
 ## Safety (hardware-affecting edits)
