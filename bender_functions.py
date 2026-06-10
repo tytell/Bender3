@@ -3667,11 +3667,10 @@ class Bender:
             Optional keys: ``ramp_duration_s``, ``hold_duration_s``, ``settle_before_stim_s``,
             ``stim_duration_s``, ``inter_step_interval_s`` (seconds of idle time after each step
             before the next begins; 0 = no pause), ``is_stim``, ``stim_pulse_rate``,
-            ``stim_voltage``, ``device_name``, ``recruitment``, ``bilateral_mirror_motor``,
-            ``isometric_mirror_target_left`` / ``isometric_mirror_target_right`` (same units as ``mode``;
-            when both set with bilateral mirror, per-hold magnitudes instead of the step sweep scalar).
+            ``stim_voltage``, ``device_name``, ``recruitment``.
             If ``inter_step_interval_s`` is omitted, :attr:`isometric_inter_step_interval_s` on
             the instance is used (default 0).
+            Per-block bend direction and stim side come from ``block_sequence``.
         **kwargs
             Merged into ``stim_params`` (stim_params takes precedence).
 
@@ -3709,9 +3708,6 @@ class Bender:
         # Pulse width comes from the stim panel; mirror onto self so the pulse carrier uses it (1.4).
         if sp.get('pulse_width_ms', None) is not None:
             self.pulse_width_ms = float(sp['pulse_width_ms'])
-        for k in ('isometric_mirror_target_left', 'isometric_mirror_target_right'):
-            if k not in sp and getattr(self, k, None) is not None:
-                sp[k] = getattr(self, k)
         # Negative stim onset for isometric is measured back into the pre-hold ramp: the ramp is
         # the only time before the hold (active segment) starts, so it bounds how negative onset
         # can go (stim may begin partway through the ramp, never before t=0).
@@ -3722,10 +3718,9 @@ class Bender:
             pre_hold_at_start_s=float(sp.get('ramp_duration_s', 2.0)),
             segment_duration_s=float(sp.get('hold_duration_s', 5.0)),
         )
-        # Base linspace in generated (un-shuffled) order. The non-block path below shuffles once
-        # and the block path shuffles each block independently (1.2 step-order randomization).
+        # Base linspace in generated (un-shuffled) order. The block path shuffles each block
+        # independently (1.2 step-order randomization).
         vals = np.linspace(float(initial), float(final), int(num_steps))
-        seq_idx = np.arange(vals.size, dtype=int)
         dc = self._effective_dclamp_mm()
         xw = getattr(self, 'xsec_width', None)
         md = float(getattr(self, 'target_muscle_depth_mm', 0.0) or 0.0)
@@ -3832,98 +3827,14 @@ class Bender:
             self.test_type = 'isometric'
             self.trial_records = list(all_out)
             return all_out
-        # Single (non-block) path: shuffle the step order once if requested (1.2).
-        order = self._shuffled_step_order(vals.size, randomize, random_seed)
-        seq_idx = order
-        vals = vals[order]
-        kappa = kappa[order]
-        targets_deg_raw = targets_deg_raw[order]
-        targets_deg = targets_deg_raw.copy()
-        rec = self._recruitment_with_bilateral_mirror_motor(rec, mirror_bm)
-        uidx = self.recruitment_unilateral_lateral_index(rec)
-        if uidx is not None:
-            targets_deg = targets_deg * self.motor_command_sign_for_bend_toward_index(uidx)
-        seq_frac = float(sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5)))
-        ml_n = sp.get('isometric_mirror_target_left')
-        mr_n = sp.get('isometric_mirror_target_right')
-        mhl = None
-        mhr = None
-        if mirror_bm and ml_n is not None and mr_n is not None:
-            try:
-                fL, fR = float(ml_n), float(mr_n)
-                if np.isfinite(fL) and np.isfinite(fR):
-                    kL = convert_to_curvature(
-                        np.asarray([fL]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, target_muscle_depth_mm=md
-                    )
-                    kR = convert_to_curvature(
-                        np.asarray([fR]), mode, dclamp_mm=float(dc), xsec_width_mm=xw, target_muscle_depth_mm=md
-                    )
-                    mhl = float(
-                        np.abs(np.rad2deg(float(np.asarray(kL, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
-                    )
-                    mhr = float(
-                        np.abs(np.rad2deg(float(np.asarray(kR, dtype=float).reshape(-1)[0]) * (float(dc) / 1000.0)))
-                    )
-            except (TypeError, ValueError):
-                mhl = None
-                mhr = None
-        out = self._run_force_length_steps(
-            targets_deg,
-            ramp_duration_s=float(sp.get('ramp_duration_s', 2.0)),
-            hold_duration_s=float(sp.get('hold_duration_s', 5.0)),
-            pre_baseline_s=float(sp.get('pre_baseline_s', 1.0) or 0.0),
-            post_baseline_s=float(sp.get('post_baseline_s', 1.0) or 0.0),
-            stim_onset_s=sp.get('stim_onset_s'),
-            settle_before_stim_s=float(sp.get('settle_before_stim_s', 0.5)),
-            stim_duration_s=sp.get('stim_duration_s'),
-            inter_step_interval_s=float(sp.get('inter_step_interval_s', 0.0) or 0.0),
-            reset_between_steps=bool(sp.get('reset_between_steps', False)),
-            is_stim=bool(sp.get('is_stim', False)),
-            stim_pulse_rate=sp.get('stim_pulse_rate', None),
-            stim_voltage=float(sp.get('stim_voltage', 5.0)),
-            device_name=sp.get('device_name', None),
-            recruitment=rec,
-            bilateral_mirror_motor=mirror_bm,
-            bilateral_sequential_left_frac=seq_frac,
-            mirror_hold_deg_left=mhl,
-            mirror_hold_deg_right=mhr,
+        # The legacy non-block (single-protocol) isometric path has been removed: no caller
+        # ever leaves block_sequence empty (the instance default and the GUI always supply at
+        # least one block), so block_seq is always populated and the block path above returns.
+        raise ValueError(
+            "isometric requires a non-empty block_sequence; the legacy non-block "
+            "(single-protocol) path has been removed. Provide block_sequence (the default "
+            "is a single LEFT block)."
         )
-        # Return the motor to neutral once after the final trial. The simple isometric
-        # path has no block boundaries, so without this the motor is left at the last
-        # hold angle when the run ends.
-        if out:
-            dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
-            self._run_neutral_reset_segment(float(out[-1]['angle_cmd'][-1]), dev)
-        for i, e in enumerate(out):
-            e['target_value_native'] = float(vals[i])
-            e['curvature_1_per_m'] = float(kappa[i])
-            e['sequence_index'] = int(seq_idx[i])
-        meta = {
-            'recruitment': rec,
-            'bilateral_mirror_motor': mirror_bm,
-            'bilateral_sequential_left_frac': seq_frac,
-            'randomize_step_order': bool(randomize),
-            'step_order': [int(x) for x in seq_idx],
-            'reset_max_speed_deg_per_s': float(
-                sp.get('reset_max_speed_deg_per_s', getattr(self, 'reset_max_speed_deg_per_s', 15.0))
-            ),
-            'specimen_side_index_left': int(self.specimen_side_index_left),
-            'specimen_side_index_right': int(self.specimen_side_index_right),
-            'specimen_lateral_index_on_positive_motor_side': int(
-                getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
-            ),
-            'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
-            'unilateral_posture_lateral_index': uidx,
-        }
-        if ml_n is not None:
-            meta['isometric_mirror_target_left'] = ml_n
-        if mr_n is not None:
-            meta['isometric_mirror_target_right'] = mr_n
-        if mhl is not None and mhr is not None:
-            meta['isometric_mirror_hold_deg_left'] = mhl
-            meta['isometric_mirror_hold_deg_right'] = mhr
-        self.h5_protocol_metadata.update(meta)
-        return out
 
     def test_force_length(self, initial, final, num_steps, mode='strain', stim_params=None, **kwargs):
         """Backward-compatible alias for :meth:`isometric`."""
