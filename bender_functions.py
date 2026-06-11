@@ -2279,7 +2279,7 @@ class Bender:
                 "Motor may de-energize between segments after reset_device()."
             )
 
-    def run(self, device_name):
+    def run(self, device_name, is_terminal_release=False):
         if getattr(self, 'simulation_mode', False):
             return self._simulate_daq_acquisition()
 
@@ -2441,9 +2441,19 @@ class Bender:
                 # On Windows/NI a second back-to-back FINITE acquisition wedges in
                 # wait_until_done() unless the device is released first. Fully guarded
                 # so teardown can never raise and mask the real error.
+                # On the terminal release run (clean finish), force the motor ENABLE line
+                # to TRISTATE BEFORE this reset so reset_device() leaves the driver
+                # de-energized (holding torque released) instead of returning it to the
+                # energized power-up HIGH. Same primitive KILL DAQ uses.
                 try:
                     from bender_daq_kill import daq_emergency_stop
-                    daq_emergency_stop(device_name)
+                    if is_terminal_release:
+                        daq_emergency_stop(
+                            device_name,
+                            release_motor_enable_line=f'{self.motor_port}/line2',
+                        )
+                    else:
+                        daq_emergency_stop(device_name)
                 except Exception:
                     pass
 
@@ -2453,7 +2463,14 @@ class Bender:
         # line then latches across the gap until the next run() drives the motor port. Failure
         # never reaches this point (the exception propagates), leaving the motor de-energized and
         # safe. DAQ acquisition still paused/flushed in the gap -- this adds no recording.
-        if getattr(self, 'hold_motor_between_steps', True):
+        if is_terminal_release:
+            # Terminal release run (clean finish): do NOT reassert the energized hold word.
+            # The finally above set the ENABLE power-up state to TRISTATE and reset the device,
+            # so the driver is de-energized and the motor has released its holding torque. Clear
+            # the cached power-up flag so the NEXT run re-asserts ENABLE HIGH (energized hold)
+            # via _ensure_motor_enable_power_up_state.
+            self._motor_enable_power_up_high = None
+        elif getattr(self, 'hold_motor_between_steps', True):
             try:
                 # Reassert the SAME DIR the waveform ended on (not a hardcoded forward) so the
                 # energized hold does not toggle DIR across the gap; STEP stays 0 (no pulses).
@@ -3230,9 +3247,48 @@ class Bender:
         """Drive the motor back to angle = 0° (resting length) at the end of a protocol and confirm.
 
         Called after the final step (and any post-trial rest) of every protocol so the preparation
-        is returned to neutral before the trial is marked complete (1.7).
+        is returned to neutral before the trial is marked complete (1.7). This is also the single
+        terminal gate where the motor RELEASES its holding torque: after the move is confirmed at
+        0°, :meth:`_run_terminal_release_segment` issues one flagged release run so the driver
+        de-energizes at clean finish (the motor held position through the return move, then lets go).
         """
-        return self._drive_to_zero_and_confirm(device_name)
+        result = self._drive_to_zero_and_confirm(device_name)
+        self._run_terminal_release_segment(device_name)
+        return result
+
+    def _run_terminal_release_segment(self, device_name=None):
+        """Final motor action of a protocol: hold briefly at 0°, then RELEASE holding torque.
+
+        Issues ONE short hold-at-0° acquisition flagged ``is_terminal_release=True`` so :meth:`run`
+        forces the motor ENABLE line to TRISTATE before its device reset (de-energizing the driver)
+        and skips the energized inter-segment hold. This is the ONLY place that sets the terminal
+        flag, and it is reached solely via :meth:`return_to_resting_length` at the end of every
+        protocol -- never inside a per-step/per-segment loop -- so an intermediate segment can never
+        be released. ``return_to_resting_length`` has already confirmed 0°, and trial data is
+        deep-copied into ``trial_records`` before this runs, so reusing ``self.aidata`` here cannot
+        affect the export. Fully guarded: a release hiccup must not break a completed run (it falls
+        back to the prior energized-hold behavior).
+        """
+        dev = device_name if device_name is not None else getattr(self, 'device_name', None)
+        if dev is None:
+            return
+        try:
+            daq_hz = float(self.daq_ai_sample_rate_hz)
+            t, angle, anglevel = self._timeline_ramp_hold(0.0, 0.0, 0.0, 0.05, daq_hz)
+            zeros = np.zeros_like(t)
+            self.record_motor_signal(t, angle, anglevel, tnorm=zeros)
+            self.record_stim_signal(zeros, zeros)
+            self.make_motor_stepper_pulses(
+                daq_ao_do_sample_rate_hz=self.daq_ao_do_sample_rate_hz,
+                motor_gear_ratio=self.motor_gear_ratio,
+                motor_full_steps_per_rev=self.motor_full_steps_per_rev,
+            )
+            self.aidata = self.run(device_name=dev, is_terminal_release=True)
+        except Exception as exc:
+            logging.warning(
+                f"Terminal motor release segment failed ({exc}); motor may remain energized/held. "
+                "Use KILL DAQ to release if needed."
+            )
 
     def _tag_block_trial_metadata(self, entry, *, block_index, block_direction, block_stim_sides,
                                   left_stim_voltage, right_stim_voltage):
@@ -3812,6 +3868,12 @@ class Bender:
             'isometric_inter_step_interval_s': float(gap_s),
             'acquisition_mode': 'continuous',
         })
+        # Single terminal gate for the isometric family: isometric does not otherwise call
+        # return_to_resting_length (its return-to-home is embedded in the continuous waveform).
+        # This engine runs once per protocol, and trial_records above already deep-copied the
+        # per-step data, so the release run reusing self.aidata is safe. Isometric ends at 0°
+        # (final return-to-home ramp), so the drive-to-zero no-ops and only the release fires.
+        self.return_to_resting_length(device_name=dev)
         return results
 
     def run_force_length_series(
