@@ -6493,8 +6493,9 @@ def _trigger_emergency_stop() -> tuple[bool, str]:
     """Run NI-DAQ emergency stop and return `(ok, message)`.
 
     Always releases the motor: passes the ENABLE line (P0.2 -> ``<motor_port>/line2``) so the stop
-    forces that line's power-up state to TRISTATE before the device reset, overriding the run-time
-    energized power-up HIGH. An e-stop must never leave the motor powered/holding.
+    forces the WHOLE motor port's power-up states to TRISTATE before the device reset (the
+    USB-6361 rejects per-line power-up states, NI -200652), overriding the run-time energized
+    power-up HIGH. An e-stop must never leave the motor powered/holding.
     """
     dev = None
     enable_line = None

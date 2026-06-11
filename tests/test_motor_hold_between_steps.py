@@ -156,7 +156,7 @@ def _run_dynamic_capturing_do_writes(hold):
         lambda word, *a, **k: one_sample_calls.append(int(word))
     )
 
-    def _fake_emergency_stop(device_name=None):
+    def _fake_emergency_stop(device_name=None, release_motor_enable_line=None):
         return True, 'mock reset'
 
     patches = [

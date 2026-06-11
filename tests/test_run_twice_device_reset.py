@@ -70,8 +70,8 @@ def _patched_daq_run(reset_counter):
     teardown fires, so callers can assert it ran once per run.
     """
 
-    def _fake_emergency_stop(device_name=None):
-        reset_counter.append(device_name)
+    def _fake_emergency_stop(device_name=None, release_motor_enable_line=None):
+        reset_counter.append({'device': device_name, 'release': release_motor_enable_line})
         return True, 'mock reset'
 
     dig_writer_instance = MagicMock()
@@ -114,11 +114,14 @@ def test_two_consecutive_dynamic_runs_each_reset_device():
         f'expected device reset on each run, saw {len(reset_calls)} reset(s)'
     )
     # It should target the configured device each time.
-    assert all(name == b.device_name for name in reset_calls[:2])
+    assert all(c['device'] == b.device_name for c in reset_calls[:2])
 
 
 def test_run_finally_resets_even_when_acquisition_raises():
-    """A failing acquisition must still reset the device in the finally."""
+    """A failing acquisition must still reset the device in the finally -- AND release the
+    motor (whole-port TRISTATE power-up). With the energized power-up HIGH now effective on
+    the device, a failure would otherwise leave the motor powered/holding; the documented
+    contract is that failure leaves the motor de-energized and safe."""
     b = _minimal_dynamic_bender()
     reset_calls: list = []
     patches = _patched_daq_run(reset_calls)
@@ -140,6 +143,11 @@ def test_run_finally_resets_even_when_acquisition_raises():
             p.stop()
 
     assert len(reset_calls) >= 1, 'device reset must run even when acquisition fails'
+    # The finally's reset on the failed run must carry the motor-release option so the
+    # driver ends de-energized (failure-safe), not held by the energized power-up state.
+    assert reset_calls[-1]['release'], (
+        f"failed run must release the motor in its final reset, saw {reset_calls[-1]}"
+    )
 
 
 def test_stimburstdur_no_divide_warning_when_stim_disabled():

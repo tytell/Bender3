@@ -473,9 +473,10 @@ class Bender:
         # wedges) returns the device to its power-up state, which otherwise clears the DO port and
         # de-energizes the driver between segments -> the loaded specimen visibly relaxes, then
         # re-engages. Set to HIGH so reset_device() leaves ENABLE asserted (see
-        # _ensure_motor_enable_power_up_state). None = not yet configured this process.
-        # NOTE: on the rig's USB-6361 the per-line set fails with NI -200652 (power-up states are
-        # port-granular on this device), so this stays None there; do not key behavior off it.
+        # _ensure_motor_enable_power_up_state, which specifies the WHOLE port because devices like
+        # the rig's USB-6361 reject per-line power-up states with NI -200652). None = not yet
+        # configured this process, or cleared after a release (terminal/KILL/failed run) forced
+        # the port back to TRISTATE.
         self._motor_enable_power_up_high = None
         # Truthful tracker of the stepper driver's energized state ACROSS run() calls. True only
         # when the post-run idle hold word was asserted and nothing has released the driver since.
@@ -2311,26 +2312,39 @@ class Bender:
         return self.aidata
 
     def _ensure_motor_enable_power_up_state(self, device_name):
-        """Configure the NI digital power-up/reset state for the motor ENABLE line (P0.2).
+        """Configure the NI digital power-up/reset states for the WHOLE motor port.
 
         ``run()`` resets the device after every segment (``daq_emergency_stop`` in its ``finally``)
         to avoid back-to-back FINITE acquisitions wedging in ``wait_until_done``. ``reset_device()``
-        returns the device to its power-up state, which clears the DO port and de-energizes the
-        stepper driver between segments -> a loaded specimen visibly relaxes, then re-engages on the
-        next segment (open-loop drift the per-segment encoder re-zero cannot detect). Configuring
-        the ENABLE line's persistent power-up state to HIGH makes ``reset_device()`` leave ENABLE
-        asserted, so the motor stays energized/braked across every segment boundary and DAQ pause
-        while the wedge workaround is kept intact. STEP (P0.1) and DIR (P0.0) keep their default
-        (idle) power-up state, so no spurious motion is commanded.
+        returns the device to its power-up state, which otherwise clears the DO port and
+        de-energizes the stepper driver between segments -> a loaded specimen visibly relaxes, then
+        re-engages on the next segment (open-loop drift the per-segment encoder re-zero cannot
+        detect). Configuring the ENABLE line's persistent power-up state to HIGH makes
+        ``reset_device()`` leave ENABLE asserted, so the motor stays energized/braked across every
+        segment boundary and DAQ pause while the wedge workaround is kept intact.
 
-        Hardware assumption (verify on rig): ENABLE is ACTIVE-HIGH -- line value 1 energizes the
+        WHOLE port, not just the ENABLE line: NI devices like the rig's USB-6361 reject per-line
+        power-up states with error -200652 ("must specify programmable powerup state for entire
+        ports"), so the original single-line set silently failed on every run and the motor
+        briefly de-energized at each reset (masked by the post-run idle hold word). Per-line
+        states in the one whole-port set:
+
+        - line0 (DIR) and line1 (STEP): LOW -- actively driven, not floating, so the energized
+          driver cannot see noise-induced STEP edges in the reset->hold-word window. A static
+          DIR=0 there is harmless (DIR only matters at STEP edges; the post-reset idle hold word
+          immediately rewrites the true last DIR).
+        - line2 (ENABLE): HIGH when ``hold_motor_between_steps`` (energized hold), else TRISTATE.
+        - remaining port lines (unused): TRISTATE (factory default behavior preserved).
+
+        Hardware assumption (verified on rig): ENABLE is ACTIVE-HIGH -- line value 1 energizes the
         driver. This matches ``make_motor_stepper_pulses`` ("High = enable on driver") and the
         ``enable=1`` energized inter-segment hold word. ENABLE is wired to P0.2, i.e.
         ``<device>/<motor_port>/line2``.
 
         The setting is persistent on the device, so this normally writes once per process and only
-        re-writes when the desired state changes (tracked by ``_motor_enable_power_up_high``). Fully
-        guarded: a failure logs a warning and never breaks the run.
+        re-writes when the desired state changes (tracked by ``_motor_enable_power_up_high``; the
+        cache is cleared whenever a release forces the port back to TRISTATE). Fully guarded: a
+        failure logs a warning and never breaks the run.
         """
         if Task is None or System is None or DOPowerUpState is None or PowerUpStates is None:
             return
@@ -2339,17 +2353,32 @@ class Bender:
         want_high = bool(getattr(self, 'hold_motor_between_steps', True))
         if getattr(self, '_motor_enable_power_up_high', None) == want_high:
             return
-        line = f"{device_name}/{self.motor_port}/line2"
-        state = PowerUpStates.HIGH if want_high else PowerUpStates.TRISTATE
+        port_path = f"{device_name}/{self.motor_port}"
+        enable_line = f"{port_path}/line2"
+        enable_state = PowerUpStates.HIGH if want_high else PowerUpStates.TRISTATE
         try:
-            System.local().set_digital_power_up_states(
-                device_name, [DOPowerUpState(physical_channel=line, power_up_state=state)]
-            )
+            port_lines = [
+                ch.name for ch in System.local().devices[device_name].do_lines
+                if ch.name.startswith(port_path + '/')
+            ]
+            if not port_lines:
+                raise ValueError(f"no DO lines found under {port_path!r}")
+            states = []
+            for ch in port_lines:
+                if ch == enable_line:
+                    state = enable_state
+                elif ch in (f"{port_path}/line0", f"{port_path}/line1"):
+                    state = PowerUpStates.LOW
+                else:
+                    state = PowerUpStates.TRISTATE
+                states.append(DOPowerUpState(physical_channel=ch, power_up_state=state))
+            System.local().set_digital_power_up_states(device_name, states)
             self._motor_enable_power_up_high = want_high
         except Exception as exc:
             logging.warning(
-                f"Could not set motor ENABLE power-up state ({state}) on {line!r}: {exc}. "
-                "Motor may de-energize between segments after reset_device()."
+                f"Could not set motor port power-up states (ENABLE {enable_state}) on "
+                f"{port_path!r}: {exc}. Motor may de-energize between segments after "
+                "reset_device()."
             )
 
     def run(self, device_name, is_terminal_release=False):
@@ -2486,6 +2515,7 @@ class Bender:
 
             # start everthing
             # make sure to start the output first, because it'll wait until the input starts
+            run_completed_ok = False
             try:
                 if not getattr(self, 'acquisition_start', None):
                     self.acquisition_start = datetime.now().replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%S')
@@ -2517,6 +2547,7 @@ class Bender:
                 reader.read_many_sample(self.aidata)
                 angle_reader.read_many_sample_double(self.angledata)
                 self.angle_measured = self.angledata
+                run_completed_ok = True
             except Exception:
                 time.sleep(0.05)
                 try:
@@ -2531,17 +2562,23 @@ class Bender:
                 # On Windows/NI a second back-to-back FINITE acquisition wedges in
                 # wait_until_done() unless the device is released first. Fully guarded
                 # so teardown can never raise and mask the real error.
-                # On the terminal release run (clean finish), force the motor ENABLE line
-                # to TRISTATE BEFORE this reset so reset_device() leaves the driver
-                # de-energized (holding torque released) instead of returning it to the
-                # energized power-up HIGH. Same primitive KILL DAQ uses.
+                # Force the motor port's power-up states to TRISTATE BEFORE this reset (so
+                # reset_device() leaves the driver de-energized, holding torque released --
+                # same primitive KILL DAQ uses) in two cases:
+                # - terminal release run (clean finish): the motor lets go by design;
+                # - FAILED acquisition: a failure must leave the motor de-energized and safe,
+                #   which the energized power-up HIGH would otherwise prevent.
+                # Either release overwrites the ENABLE-high power-up state, so the cache is
+                # cleared and the next run rewrites it (and pre-energizes + dwells, since
+                # _motor_driver_energized also stays False on these paths).
                 try:
                     from bender_daq_kill import daq_emergency_stop
-                    if is_terminal_release:
+                    if is_terminal_release or not run_completed_ok:
                         daq_emergency_stop(
                             device_name,
                             release_motor_enable_line=f'{self.motor_port}/line2',
                         )
+                        self._motor_enable_power_up_high = None
                     else:
                         daq_emergency_stop(device_name)
                 except Exception:
@@ -2553,17 +2590,14 @@ class Bender:
         # line then latches across the gap until the next run() drives the motor port. Failure
         # never reaches this point (the exception propagates), leaving the motor de-energized and
         # safe. DAQ acquisition still paused/flushed in the gap -- this adds no recording.
-        if is_terminal_release:
-            # Terminal release run (clean finish): do NOT reassert the energized hold word.
-            # The finally above set the ENABLE power-up state to TRISTATE and reset the device,
-            # so the driver is de-energized and the motor has released its holding torque. Clear
-            # the cached power-up flag so the NEXT run re-asserts ENABLE HIGH (energized hold)
-            # via _ensure_motor_enable_power_up_state. _motor_driver_energized stays False, so the
-            # next run pre-energizes the driver and dwells before its waveform starts.
-            self._motor_enable_power_up_high = None
-        elif getattr(self, 'hold_motor_between_steps', True):
+        if not is_terminal_release and getattr(self, 'hold_motor_between_steps', True):
             # Reassert the energized idle hold word (same DIR the waveform ended on, STEP=0) so
-            # the motor holds position across the inter-segment gap.
+            # the motor holds position across the inter-segment gap. Skipped on the terminal
+            # release run (clean finish): the finally above forced the motor port's power-up
+            # states to TRISTATE and reset the device, so the driver is de-energized and the
+            # motor has released its holding torque; the power-up cache was cleared there and
+            # _motor_driver_energized stays False, so the NEXT run rewrites the energized
+            # power-up state and pre-energizes + dwells before its waveform starts.
             if self._write_motor_idle_hold_word(motor_port):
                 self._motor_driver_energized = True
 

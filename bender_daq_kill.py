@@ -16,11 +16,18 @@ def daq_emergency_stop(
     Reset the named NI-DAQ device, or all local devices if ``device_name`` is empty.
 
     ``release_motor_enable_line`` (e.g. ``'port0/line2'``): when given with a named device, the
-    motor ENABLE line's persistent digital power-up state is forced to TRISTATE *before* the device
-    reset, so an emergency stop always RELEASES (de-energizes) the motor and it stays released --
-    overriding any power-up HIGH configured for normal runs (Bender._ensure_motor_enable_power_up_state).
-    Without this, reset_device() would return the line to a power-up HIGH state and leave the motor
-    energized/holding after an e-stop. An e-stop must never leave the motor powered.
+    persistent digital power-up state of the ENTIRE port containing that line is forced to
+    TRISTATE *before* the device reset, so an emergency stop always RELEASES (de-energizes) the
+    motor and it stays released -- overriding any power-up HIGH configured for normal runs
+    (Bender._ensure_motor_enable_power_up_state). Without this, reset_device() would return the
+    ENABLE line to a power-up HIGH state and leave the motor energized/holding after an e-stop.
+    An e-stop must never leave the motor powered.
+
+    Whole port, not just the one line: NI devices like the USB-6361 reject per-line power-up
+    states with error -200652 ("must specify programmable powerup state for entire ports"), so a
+    single-line set silently failed and the release depended on the factory-default TRISTATE.
+    All lines of the motor port go TRISTATE here -- STEP/DIR floating is harmless with the driver
+    de-energized.
 
     Returns ``(ok, message)``. ``ok`` is True if at least one reset was attempted without
     fatal import errors; peripheral errors are summarized in the message.
@@ -38,15 +45,30 @@ def daq_emergency_stop(
             if release_motor_enable_line:
                 # Release the motor: make the device's power-up state de-energize ENABLE so the
                 # reset below lands on (and stays at) TRISTATE, not the run-time energized HIGH.
+                # The device requires the WHOLE port (-200652), so every line of the motor port
+                # is specified.
                 try:
                     from nidaqmx.types import DOPowerUpState
                     from nidaqmx.constants import PowerUpStates
                     line = f"{name}/{str(release_motor_enable_line).strip().lstrip('/')}"
+                    port_path = line.rsplit('/', 1)[0]            # e.g. 'Dev1/port0'
+                    port_lines = [
+                        ch.name for ch in local.devices[name].do_lines
+                        if ch.name.startswith(port_path + '/')
+                    ]
+                    if not port_lines:
+                        raise ValueError(f'no DO lines found under {port_path!r}')
                     local.set_digital_power_up_states(
                         name,
-                        [DOPowerUpState(physical_channel=line, power_up_state=PowerUpStates.TRISTATE)],
+                        [
+                            DOPowerUpState(physical_channel=ch, power_up_state=PowerUpStates.TRISTATE)
+                            for ch in port_lines
+                        ],
                     )
-                    release_msg = ' Motor ENABLE released (tristate).'
+                    release_msg = (
+                        f' Motor port {port_path!r} power-up forced TRISTATE '
+                        f'({len(port_lines)} lines) -- motor released.'
+                    )
                 except Exception as e:
                     release_msg = f' WARNING: could not release motor ENABLE line: {e}'
             dev = local.devices[name]
