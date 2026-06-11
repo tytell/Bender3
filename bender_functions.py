@@ -48,6 +48,17 @@ import h5py
 # the angle to or past this magnitude, the ramp is stopped and the motor is returned to 0° (2.1).
 ISOVELOCITY_ANGLE_LIMIT_DEG = 45.0
 
+# --- DIR hold-after-step (motor reversal timing) ------------------------------
+# Number of idle AO samples after each STEP pulse during which the DIR line must keep that step's
+# direction before it may flip to the next step's direction. Flipping DIR on the very next sample
+# put the flip coincident with the STEP FALLING edge; a drive/optocoupler input that registers
+# that edge (or has asymmetric DIR rise/fall times) then latches the last step before a reversal
+# with the flipped direction. The race resolves differently for DIR 0->1 vs 1->0, so the errors at
+# a sine's top and bottom reversals do not cancel: dynamic runs walked ~2 microsteps per cycle off
+# center. 2 samples at 60 kHz = ~33 us of hold; reversal gaps are thousands of samples, so the
+# next step's DIR setup lead is unaffected.
+DIR_HOLD_AFTER_STEP_SAMPLES = 2
+
 # --- Specimen lateral frame (signed indices) ---------------------------------
 # Live values come from config ``specimen_lateral_index_on_positive_motor_side`` (non-zero)
 # paired with ``positive_motor_direction``; assigned on :class:`Bender` construction.
@@ -1671,28 +1682,52 @@ class Bender:
         # encoder correction => that dropped/extra step accumulates across steps
         # (leftward isometric drift; isovelocity return landing left of 0).
         #
-        # dstep[k] fires motorstep[k], so each step's sign is sign(dstep[k]). Back-fill
-        # that sign into the preceding idle samples so DIR is settled BEFORE each STEP
-        # rising edge (drivers need DIR setup time; same-sample DIR gives zero lead).
+        # dstep[k] fires motorstep[k], so each step's sign is sign(dstep[k]). Two timing
+        # guarantees for the DIR line, both relative to the STEP edges the drive latches:
+        #   LEAD: back-fill each step's sign into the idle samples before it so DIR is
+        #     settled BEFORE the STEP rising edge (drivers need DIR setup time;
+        #     same-sample DIR gives zero lead).
+        #   HOLD: keep DIR at a step's own sign for DIR_HOLD_AFTER_STEP_SAMPLES idle
+        #     samples AFTER its pulse so a reversal's DIR flip never lands on that step's
+        #     FALLING edge (see DIR_HOLD_AFTER_STEP_SAMPLES for the per-cycle drift this
+        #     race caused). LEAD wins at the sample directly before a step, so a step's
+        #     setup lead is never sacrificed to the previous step's hold.
         # Convention preserved: bit 0 = forward/positive, bit 1 = reverse/negative.
         step_sign = np.sign(dstep).astype(np.int64)            # +1 fwd, -1 rev, 0 idle
         n_pts = step_sign.size
-        nz_idx = np.where(step_sign != 0, np.arange(n_pts), n_pts)
-        next_nz = np.minimum.accumulate(nz_idx[::-1])[::-1]    # nearest step at/after k
-        lead_sign = np.zeros(n_pts, dtype=np.int64)
+        idx = np.arange(n_pts)
+        next_nz = np.minimum.accumulate(
+            np.where(step_sign != 0, idx, n_pts)[::-1]
+        )[::-1]                                                # nearest step at/after k
+        prev_nz = np.maximum.accumulate(
+            np.where(step_sign != 0, idx, -1)
+        )                                                      # nearest step at/before k
         has_future = next_nz < n_pts
-        lead_sign[has_future] = step_sign[next_nz[has_future]]
+        has_past = prev_nz >= 0
+        # LEAD fill (step samples take their own sign here, since next_nz[k] == k there).
+        dir_sign = np.zeros(n_pts, dtype=np.int64)
+        dir_sign[has_future] = step_sign[next_nz[has_future]]
         # Trailing idle samples (after the FINAL step) hold the last step's direction instead of
         # snapping to forward (0). An energized between-ramp hold must not toggle DIR: snapping to
         # forward during the hold (then back to reverse for a reverse continuation) is a spurious
         # DIR transition near the step edges that creeps on a setup-time-sensitive driver. Holding
         # the last direction keeps the held DIR both STABLE and CORRECT for a same-direction
         # continuation and avoids a 1->0->1 round trip across the gap.
+        trailing = ~has_future & has_past
+        dir_sign[trailing] = step_sign[prev_nz[trailing]]
+        # HOLD fill: idle samples within the hold window after a step keep that step's sign.
+        # Excludes step samples and the sample directly before the next step (next_nz - idx >= 2),
+        # so LEAD always gets >= 1 sample. At real reversals the gap is thousands of samples
+        # (velocity ~0 at a turnaround), so both margins are comfortably met.
+        in_hold = (
+            has_past & has_future
+            & ((idx - prev_nz) <= DIR_HOLD_AFTER_STEP_SAMPLES)
+            & ((next_nz - idx) >= 2)
+        )
+        dir_sign[in_hold] = step_sign[prev_nz[in_hold]]
         prev_dir_bit = int(getattr(self, '_last_motor_direction_bit', 0))
         if (step_sign != 0).any():
-            last_nz = int(np.flatnonzero(step_sign != 0)[-1])
-            lead_sign[last_nz + 1:] = step_sign[last_nz]
-            motordirection = (lead_sign < 0).astype('uint8')
+            motordirection = (dir_sign < 0).astype('uint8')
         else:
             # Hold-only segment (no steps at all): keep the previous segment's DIR; never snap to
             # forward, which would be a spurious flip during an energized hold.
