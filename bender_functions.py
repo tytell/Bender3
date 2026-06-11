@@ -474,7 +474,22 @@ class Bender:
         # de-energizes the driver between segments -> the loaded specimen visibly relaxes, then
         # re-engages. Set to HIGH so reset_device() leaves ENABLE asserted (see
         # _ensure_motor_enable_power_up_state). None = not yet configured this process.
+        # NOTE: on the rig's USB-6361 the per-line set fails with NI -200652 (power-up states are
+        # port-granular on this device), so this stays None there; do not key behavior off it.
         self._motor_enable_power_up_high = None
+        # Truthful tracker of the stepper driver's energized state ACROSS run() calls. True only
+        # when the post-run idle hold word was asserted and nothing has released the driver since.
+        # False/None after a terminal release, KILL DAQ, a failed run, or at process start (state
+        # unknown). When not True, run() pre-energizes the driver and dwells motor_enable_dwell_s
+        # BEFORE starting the waveform: ENABLE otherwise rises on DO sample 0 -- the same instant
+        # STEP pulses begin -- and the ClearPath ignores step input until its enable sequence
+        # completes, silently losing the first segment's early steps (isovelocity first-step
+        # mismatch after a clean-finish release).
+        self._motor_driver_energized = False
+        # How long run() waits after pre-energizing a de-energized driver before starting the
+        # waveform (drive enable-to-ready time; HLFB is not wired on this rig, so use a
+        # conservative fixed dwell). Software timing parameter, not a hardware-config value.
+        self.motor_enable_dwell_s = 0.5
         # Width (ms) of each stimulation pulse (the high time of every carrier pulse), applied to
         # all stimulated protocols. Combined with stim_pulse_rate this sets the pulse high fraction.
         self.pulse_width_ms = 2.0
@@ -1605,6 +1620,29 @@ class Bender:
         )
         return int(np.packbits(bits)[0])
 
+    def _write_motor_idle_hold_word(self, motor_port_full):
+        """Write the energized idle word (ENABLE=1, STEP=0, DIR=last) via an on-demand DO task.
+
+        Shared primitive for the two places the driver must be energized while no waveform is
+        playing: the post-run inter-segment hold and the pre-run energize of a released driver
+        (see ``_motor_driver_energized``). Reasserts the SAME DIR the last waveform ended on so
+        the hold never toggles DIR. Returns True on success; failures are logged and swallowed
+        (the waveform's own sample-0 ENABLE still energizes the driver, just without dwell).
+        """
+        try:
+            idle_word = self._pack_motor_do_word(
+                enable=1, step=0, direction=int(getattr(self, '_last_motor_direction_bit', 0))
+            )
+            with Task() as hold_task:
+                hold_task.do_channels.add_do_chan(motor_port_full, 'motor_hold')
+                DigitalSingleChannelWriter(
+                    hold_task.out_stream, auto_start=True
+                ).write_one_sample_port_uint32(idle_word)
+            return True
+        except Exception as exc:
+            logging.warning(f"Could not write motor idle hold word on {motor_port_full!r}: {exc}")
+            return False
+
     def make_motor_stepper_pulses(self, daq_ao_do_sample_rate_hz=1000,
                                 motor_gear_ratio=5,
                                 motor_full_steps_per_rev=6400.0):
@@ -2346,6 +2384,23 @@ class Bender:
         motor_port = '/'.join((device_name, self.motor_port))
         encoder_chan = '/'.join((device_name, self.encoder_chan))
 
+        # Pre-energize dwell: if the driver may be de-energized (first run after a terminal
+        # release / KILL DAQ / failed run / process start), assert the idle hold word NOW and give
+        # the drive time to complete its enable sequence before the waveform starts. Without this,
+        # ENABLE rises on DO sample 0 -- the same instant STEP pulses begin -- and the drive
+        # ignores step input until it is energized, silently losing the first segment's early
+        # steps (open-loop offset for the rest of the protocol).
+        if not getattr(self, '_motor_driver_energized', False):
+            if self._write_motor_idle_hold_word(motor_port):
+                dwell_s = float(getattr(self, 'motor_enable_dwell_s', 0.5) or 0.0)
+                if dwell_s > 0:
+                    time.sleep(dwell_s)
+        # Pessimistic until proven otherwise: the finally below resets the device after playback
+        # (de-energizing the driver until the post-run hold word). Only the success-path hold
+        # reassert at the end of this method flips it back to True; a raised exception or a
+        # terminal release leaves it False, so the NEXT run pre-energizes and dwells.
+        self._motor_driver_energized = False
+
         with Task() as analog_in, Task() as analog_out, \
                 Task() as digital_out, Task() as angle_in:
             def _stop_run_tasks():
@@ -2503,22 +2558,14 @@ class Bender:
             # The finally above set the ENABLE power-up state to TRISTATE and reset the device,
             # so the driver is de-energized and the motor has released its holding torque. Clear
             # the cached power-up flag so the NEXT run re-asserts ENABLE HIGH (energized hold)
-            # via _ensure_motor_enable_power_up_state.
+            # via _ensure_motor_enable_power_up_state. _motor_driver_energized stays False, so the
+            # next run pre-energizes the driver and dwells before its waveform starts.
             self._motor_enable_power_up_high = None
         elif getattr(self, 'hold_motor_between_steps', True):
-            try:
-                # Reassert the SAME DIR the waveform ended on (not a hardcoded forward) so the
-                # energized hold does not toggle DIR across the gap; STEP stays 0 (no pulses).
-                idle_word = self._pack_motor_do_word(
-                    enable=1, step=0, direction=int(getattr(self, '_last_motor_direction_bit', 0))
-                )
-                with Task() as hold_task:
-                    hold_task.do_channels.add_do_chan(motor_port, 'motor_hold')
-                    DigitalSingleChannelWriter(
-                        hold_task.out_stream, auto_start=True
-                    ).write_one_sample_port_uint32(idle_word)
-            except Exception:
-                pass
+            # Reassert the energized idle hold word (same DIR the waveform ended on, STEP=0) so
+            # the motor holds position across the inter-segment gap.
+            if self._write_motor_idle_hold_word(motor_port):
+                self._motor_driver_energized = True
 
         return(self.aidata)
 

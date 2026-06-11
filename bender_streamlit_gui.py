@@ -6507,8 +6507,11 @@ def _trigger_emergency_stop() -> tuple[bool, str]:
     ok, msg = daq_emergency_stop(dev, release_motor_enable_line=enable_line)
     # The stop set the ENABLE power-up state to TRISTATE; clear the cached flag so the next run
     # re-asserts the energized power-up HIGH (otherwise the motor would stay de-energized).
+    # Also mark the driver de-energized so the next run pre-energizes it and dwells before
+    # starting its waveform (steps sent during the drive's enable sequence are lost).
     if b is not None:
         b._motor_enable_power_up_high = None
+        b._motor_driver_energized = False
     return ok, msg
 
 

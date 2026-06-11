@@ -3,6 +3,8 @@
 Two independent behaviors:
 - Motor side: with the flag ON (default), the ENABLE line stays high through the last DO
   sample and run() reasserts ENABLE-high in the inter-segment gap via a short-lived DO task.
+  Regardless of the flag, run() also PRE-energizes a de-energized driver (idle word + dwell)
+  before starting a waveform, so STEP pulses are never sent during the drive's enable sequence.
 - DAQ side: acquisition pause/flush/device-reset is unchanged regardless of the flag.
 
 The make_motor_stepper_pulses checks are hardware-free (pure signal math, runs on Mac); the
@@ -138,6 +140,8 @@ def _minimal_dynamic_bender(hold):
     b.is_stim = False
     b.simulation_mode = False
     b.hold_motor_between_steps = hold
+    # Keep the mocked acquisition fast: the pre-energize dwell is real wall-clock sleep.
+    b.motor_enable_dwell_s = 0.01
     return b
 
 
@@ -196,7 +200,14 @@ def test_run_reasserts_enable_high_in_gap_when_holding():
         assert (w >> DIR_BIT) & 1 in (0, 1), f'idle word DIR bit malformed, saw {w}'
 
 
-def test_run_does_not_reassert_when_not_holding():
-    """With the flag OFF, run() leaves the motor de-energized between segments (no idle write)."""
+def test_run_legacy_mode_writes_are_pre_energize_only():
+    """With the flag OFF, run() still leaves the motor de-energized BETWEEN segments (the
+    waveform's last sample drops ENABLE -- covered above), but it now PRE-energizes the driver
+    before each waveform starts (lost-step guard: the drive ignores STEP input while its enable
+    sequence runs). So single-sample DO writes exist, every one is the enable-high/step-low idle
+    form, and none marks the driver as held across the gap."""
     calls = _run_dynamic_capturing_do_writes(hold=False)
-    assert calls == [], f'expected no idle write in legacy mode, saw {calls}'
+    assert calls, 'expected pre-energize idle writes in legacy mode'
+    for w in calls:
+        assert (w >> ENABLE_BIT) & 1 == 1, f'pre-energize word must set ENABLE, saw {w}'
+        assert (w >> STEP_BIT) & 1 == 0, f'pre-energize word must keep STEP low, saw {w}'
