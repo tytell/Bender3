@@ -1682,6 +1682,8 @@ class Bender:
         (the waveform's own sample-0 ENABLE still energizes the driver, just without dwell).
         """
         try:
+            if getattr(self, 'simulation_mode', False):
+                return False
             idle_word = self._pack_motor_do_word(
                 enable=1, step=0, direction=int(getattr(self, '_last_motor_direction_bit', 0))
             )
@@ -2397,6 +2399,8 @@ class Bender:
         cache is cleared whenever a release forces the port back to TRISTATE). Fully guarded: a
         failure logs a warning and never breaks the run.
         """
+        if getattr(self, 'simulation_mode', False):
+            return
         if Task is None or System is None or DOPowerUpState is None or PowerUpStates is None:
             return
         if device_name is None:
@@ -2452,6 +2456,17 @@ class Bender:
         if not np.isfinite(ao_hz) or ao_hz <= 0:
             raise ValueError(
                 f"DAQ AO/DO sample rate daq_ao_do_sample_rate_hz must be finite and > 0; got {self.daq_ao_do_sample_rate_hz!r}."
+            )
+
+        # Drift guard: if simulation_mode is True, the early-return at the top of run() must have
+        # been bypassed (future code path error). Raise loudly here rather than silently touching
+        # real hardware.
+        if getattr(self, 'simulation_mode', False):
+            raise RuntimeError(
+                'Hardware acquisition path reached with simulation_mode=True. '
+                '_simulate_daq_acquisition() should have returned before this point. '
+                'Check that all acquisition entry points call Bender.run() rather than '
+                'reaching NI Task creation directly.'
             )
 
         # Keep ENABLE asserted across the per-run reset_device() so the motor stays energized

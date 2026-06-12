@@ -243,6 +243,14 @@ def export_primary_h5(
     if not out_path:
         raise ValueError("export_primary_h5 requires bender.outputfile or outputfile=...")
 
+    # Prefix all sim-mode files so they sort separately and the analysis pipeline can quarantine
+    # them by name alone (belt-and-suspenders alongside 01_Metadata.attrs['simulated']).
+    # Idempotent: never double-prefixes if the caller has already named the file sim_*.
+    if bool(getattr(bender, 'simulation_mode', False)):
+        _d, _base = os.path.split(str(out_path))
+        if not _base.startswith('sim_'):
+            out_path = os.path.join(_d, 'sim_' + _base) if _d else 'sim_' + _base
+
     final_path = unique_filepath(out_path)
 
     test_type = str(getattr(bender, 'test_type', 'unknown') or 'unknown')
@@ -319,6 +327,8 @@ def export_primary_h5(
         g_meta.attrs['starting_angle_deg'] = float(getattr(bender, 'starting_angle_deg', 0.0))
         g_meta.attrs['session_date'] = str(getattr(bender, 'session_date', '') or '')
         g_meta.attrs['apparatus_id'] = str(getattr(bender, 'apparatus_id', '') or '')
+        # Explicit boolean on every file — True for sim runs, False for real. Absent means legacy.
+        g_meta.attrs['simulated'] = bool(getattr(bender, 'simulation_mode', False))
 
         g_cal_link = g_meta.create_group('calibration_link')
         g_cal_link.attrs['use_inertial_calibration'] = bool(use_cal)

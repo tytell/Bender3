@@ -3907,15 +3907,15 @@ def _build_checklist_fix_lines(
     return lines
 
 
-def _render_simulation_sidebar() -> None:
-    """Simulation mode: numpy stand-in for DAQ; material affects cantilever stiffness in :meth:`Bender.run`."""
+def _render_simulation_controls() -> None:
+    """Simulation toggle + material picker — the SINGLE source of truth (key ``gui_simulation_mode``).
+
+    Rendered either in the sidebar (offline / non-experiment routes) or inline on the Run experiment
+    page, but never both in the same rerun, so the shared widget keys cannot collide. Syncs the
+    chosen values onto the live :class:`Bender` so ``run()`` sees the flag it checks.
+    """
     st.session_state.setdefault('gui_simulation_mode', False)
     st.session_state.setdefault('gui_simulation_material', 'polyurethane')
-    st.markdown('### Simulation mode')
-    st.caption(
-        'Run the app **without NI hardware**: a solid 25.4 mm OD tube cantilever model drives synthetic '
-        'force/torque channels (polyurethane vs silicone Young\'s modulus).'
-    )
     with st.container(border=True):
         st.markdown('<div class="bnd-simulation-panel" aria-hidden="true"></div>', unsafe_allow_html=True)
         st.checkbox(
@@ -3939,6 +3939,16 @@ def _render_simulation_sidebar() -> None:
     if b is not None:
         b.simulation_mode = bool(st.session_state.get('gui_simulation_mode', False))
         b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
+
+
+def _render_simulation_sidebar() -> None:
+    """Simulation mode: numpy stand-in for DAQ; material affects cantilever stiffness in :meth:`Bender.run`."""
+    st.markdown('### Simulation mode')
+    st.caption(
+        'Run the app **without NI hardware**: a solid 25.4 mm OD tube cantilever model drives synthetic '
+        'force/torque channels (polyurethane vs silicone Young\'s modulus).'
+    )
+    _render_simulation_controls()
     st.divider()
 
 
@@ -6632,13 +6642,18 @@ def _render_sidebar() -> None:
             st.caption('This path does not use NI-DAQ or the live experiment stack. Use **Settings** for display options.')
             _render_sidebar_settings_expander(leading_divider=False)
             return
-        # No simulation-mode toggle on NI-DAQ experiment workflows (real hardware path only).
         _route = _nav_route()
-        if _route in ('stepwise', 'scratch', 'templates'):
+        # Deferred training routes (stepwise/templates) stay real-hardware only: keep forcing
+        # simulation off there. The Run experiment route (scratch) now hosts its own toggle on the
+        # page itself (single source of truth, key gui_simulation_mode), so it is neither rendered
+        # nor reset here.
+        if _route in ('stepwise', 'templates'):
             st.session_state['gui_simulation_mode'] = False
             _b = st.session_state.get('bender')
             if _b is not None:
                 _b.simulation_mode = False
+        elif _route == 'scratch':
+            pass
         else:
             _render_simulation_sidebar()
         _render_sidebar_settings_expander(leading_divider=False)
@@ -7033,6 +7048,17 @@ def main():
         _render_simulation_comparison_page()
         _autosave_tick()
         return
+
+    # Persistent sim-mode banner — rendered at the very top of the Run experiment body so it
+    # is always visible regardless of scroll position. Only on the scratch route because
+    # stepwise/templates still force-disable simulation mode.
+    if _nav_route() == 'scratch' and bool(st.session_state.get('gui_simulation_mode', False)):
+        st.warning(
+            '**Simulation mode active** — NI-DAQ hardware will NOT be accessed. '
+            'Acquisition uses a synthetic cantilever model. '
+            'Output files will be prefixed `sim_` and tagged `simulated=True` in `01_Metadata`.',
+            icon='⚠️',
+        )
 
     st.caption('Sections follow the numbered order on the page.')
 
@@ -8658,8 +8684,8 @@ def main():
 
         st.divider()
         st.markdown('### Run controls')
-        if bool(st.session_state.get('gui_simulation_mode', False)):
-            st.info('Simulation mode active: run uses numpy only (no NI-DAQ).')
+        st.markdown('**Acquisition source**')
+        _render_simulation_controls()
         if _procedure_apply_dirty() or _morpho_apply_dirty():
             _soft_apply_reminder()
 
