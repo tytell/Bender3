@@ -3959,6 +3959,7 @@ def _seed_cfg_build_from_source_config(source_config: str) -> None:
         d = read_base_defaults(base_stem)
     except Exception:
         return
+    st.session_state['gui_cfg_bld_apparatus_id'] = str(d['apparatus_id'])
     st.session_state['gui_cfg_bld_forcetorque_calibration_file'] = str(d['forcetorque_calibration_file'])
     st.session_state['gui_cfg_bld_positive_motor_direction'] = str(d['positive_motor_direction'])
     st.session_state['gui_cfg_bld_specimen_lateral_index'] = int(d['specimen_lateral_index_on_positive_motor_side'])
@@ -4062,9 +4063,16 @@ def _ensure_gui_data_path_session_keys():
 
 
 def _sync_genus_species_to_bender(b: Bender) -> None:
-    """Store identity, notebook-style specimen metadata, and protocol IDs for HDF5 export."""
+    """Store identity, notebook-style specimen metadata, and protocol IDs for HDF5 export.
+
+    Called before and after every run so GUI-set identity fields (genus_species, prep_condition,
+    specimen_sex, specimen_muscle_type, session_analyst) survive the h5_protocol_metadata
+    overwrite that happens inside run_experiment when master_logger.as_dict() is applied.
+    """
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
-    meta['genus_species'] = str(st.session_state.get('gui_genus_species') or '').strip()
+    gs = str(st.session_state.get('gui_genus_species') or '').strip()
+    meta['genus_species'] = gs
+    b.genus_species = gs
     sid = str(st.session_state.get('gui_specimen_id') or '').strip()
     meta['specimen_id'] = sid
     setattr(b, 'fishcode', sid)
@@ -4092,7 +4100,9 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
     _float_attr('morpho_fishlen_SL', 'fishlen_SL')
     _float_attr('morpho_xsec_height', 'xsec_height')
     if 'morpho_prep_condition' in st.session_state:
-        meta['prep_condition'] = str(st.session_state.get('morpho_prep_condition') or '').strip()
+        pc = str(st.session_state.get('morpho_prep_condition') or '').strip()
+        meta['prep_condition'] = pc
+        b.prep_condition = pc
     if 'morpho_temp_room' in st.session_state:
         try:
             meta['temp_C_room'] = float(st.session_state['morpho_temp_room'])
@@ -4113,20 +4123,31 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
             meta['dhoriz'] = float(st.session_state['morpho_dhoriz'])
         except (TypeError, ValueError):
             pass
+    # Extended biological identity / session provenance — also sync Bender attrs
+    if 'gui_specimen_sex' in st.session_state:
+        b.specimen_sex = str(st.session_state.get('gui_specimen_sex') or '').strip()
+    if 'gui_specimen_muscle_type' in st.session_state:
+        b.specimen_muscle_type = str(st.session_state.get('gui_specimen_muscle_type') or '').strip()
+    if 'gui_session_analyst' in st.session_state:
+        b.session_analyst = str(st.session_state.get('gui_session_analyst') or '').strip()
 
     b.h5_protocol_metadata = meta
 
 
 def _apply_specimen_identity_to_bender(b: Bender) -> None:
-    """Copy genus/species, specimen ID, ``fishcode``, and ``segment`` from section 3 onto ``b`` and ``h5_protocol_metadata``."""
+    """Copy genus/species, specimen ID, ``fishcode``, segment, sex, muscle type, and analyst from section 3 onto ``b`` and ``h5_protocol_metadata``."""
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['genus_species'] = str(st.session_state.get('gui_genus_species') or '').strip()
+    b.genus_species = meta['genus_species']
     sid = str(st.session_state.get('gui_specimen_id') or '').strip()
     meta['specimen_id'] = sid
     b.fishcode = sid
     seg = str(st.session_state.get('morpho_segment') or '').strip()
     meta['segment'] = seg
     b.segment = seg
+    b.specimen_sex = str(st.session_state.get('gui_specimen_sex') or '').strip()
+    b.specimen_muscle_type = str(st.session_state.get('gui_specimen_muscle_type') or '').strip()
+    b.session_analyst = str(st.session_state.get('gui_session_analyst') or '').strip()
     b.h5_protocol_metadata = meta
     _mark_morpho_applied()
 
@@ -4275,6 +4296,8 @@ def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
     meta['dhoriz'] = float(st.session_state['morpho_dhoriz'])
     meta['target_muscle_depth_mm'] = md
     meta['clamp_plate_extension_mm'] = b.clamp_plate_extension_mm
+    meta['xsec_width'] = xw
+    meta['xsec_height'] = float(st.session_state['morpho_xsec_height'])
     b.h5_protocol_metadata = meta
     _mark_morpho_applied()
     return True
@@ -4382,6 +4405,14 @@ def _sync_morphometric_flags_from_session(b: Bender):
         b.fishlen_TL = float(st.session_state['morpho_fishlen_TL'])
     if 'morpho_fishlen_SL' in st.session_state:
         b.fishlen_SL = float(st.session_state['morpho_fishlen_SL'])
+    if 'morpho_clamp_plate_extension' in st.session_state:
+        b.clamp_plate_extension_mm = float(st.session_state.get('morpho_clamp_plate_extension', 0.0) or 0.0)
+    if 'gui_specimen_sex' in st.session_state:
+        b.specimen_sex = str(st.session_state.get('gui_specimen_sex') or '')
+    if 'gui_specimen_muscle_type' in st.session_state:
+        b.specimen_muscle_type = str(st.session_state.get('gui_specimen_muscle_type') or '')
+    if 'gui_session_analyst' in st.session_state:
+        b.session_analyst = str(st.session_state.get('gui_session_analyst') or '')
 
 
 def _morpho_geometry_strings_from_bender(b: Bender) -> tuple[str, str, str]:
@@ -7180,6 +7211,12 @@ def main():
                 c_cfg_l = c_cfg_r = st.container()
                 with c_cfg_l:
                     with st.expander('Calibration, direction & axis labels', expanded=False):
+                        st.text_input(
+                            'Apparatus ID',
+                            key='gui_cfg_bld_apparatus_id',
+                            placeholder='e.g. bender',
+                            help='Rig identity label written to `01_Metadata/apparatus_id`. Empty value accepted.',
+                        )
                         st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
                         st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
                         st.number_input(
@@ -7335,6 +7372,9 @@ def main():
                                     if rm not in ('linear', 'exponential'):
                                         rm = 'linear'
                                     assignments = {
+                                        'apparatus_id': str(
+                                            st.session_state.get('gui_cfg_bld_apparatus_id') or ''
+                                        ),
                                         'forcetorque_calibration_file': str(
                                             st.session_state.get('gui_cfg_bld_forcetorque_calibration_file') or 'FT56491.cal'
                                         ),
@@ -7642,6 +7682,30 @@ def main():
                     key='morpho_prep_condition',
                     placeholder='e.g. anesthetized, recovered 24 h, fasted',
                     help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+                )
+                if 'gui_specimen_sex' not in st.session_state:
+                    st.session_state['gui_specimen_sex'] = ''
+                st.text_input(
+                    'Sex',
+                    key='gui_specimen_sex',
+                    placeholder='e.g. M / F / unknown',
+                    help='Biological sex of the specimen. Saved as `specimen_sex` in the experiment object.',
+                )
+                if 'gui_specimen_muscle_type' not in st.session_state:
+                    st.session_state['gui_specimen_muscle_type'] = ''
+                st.text_input(
+                    'Muscle type / region',
+                    key='gui_specimen_muscle_type',
+                    placeholder='e.g. epaxial, hypaxial, red, white',
+                    help='Muscle identity or preparation region. Saved as `specimen_muscle_type`.',
+                )
+                if 'gui_session_analyst' not in st.session_state:
+                    st.session_state['gui_session_analyst'] = ''
+                st.text_input(
+                    'Analyst / operator',
+                    key='gui_session_analyst',
+                    placeholder='e.g. YJ',
+                    help='Initials or name of person running the session. Saved as `session_analyst`.',
                 )
 
                 st.divider()
@@ -8606,6 +8670,10 @@ def main():
             st.session_state['gui_run_in_progress'] = True
             _rehydrate_missing_morphometrics_from_bender(b)
             _sync_genus_species_to_bender(b)
+            # Re-read starting angle directly from the widget so any edit made after the
+            # last Apply procedure is captured (the widget value is always current in
+            # session_state; there is no need to force another Apply click for a scalar).
+            b.starting_angle_deg = float(st.session_state.get('gui_starting_angle_deg') or 0.0)
             outp = _compose_output_h5_path().strip()
             if outp:
                 b.outputfile = outp

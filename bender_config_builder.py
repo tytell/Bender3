@@ -81,6 +81,7 @@ def read_base_defaults(base_module: str) -> Dict[str, Any]:
     sono_l = list(getattr(m, 'sono_cal_left', [1.1, 4.5, 11.8, 47.0]))
     sono_r = list(getattr(m, 'sono_cal_right', [1.1, 4.5, 11.8, 47.0]))
     return {
+        'apparatus_id': str(getattr(m, 'apparatus_id', '') or ''),
         'forcetorque_calibration_file': getattr(m, 'forcetorque_calibration_file', 'FT56491.cal'),
         'positive_motor_direction': getattr(m, 'positive_motor_direction', 'left'),
         'specimen_lateral_index_on_positive_motor_side': int(

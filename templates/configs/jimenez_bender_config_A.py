@@ -12,6 +12,9 @@ positive_motor_direction = "right"
 # positive_motor_direction="left" and -1 here, specimen LEFT = -1 and RIGHT = +1.
 specimen_lateral_index_on_positive_motor_side = -1
 
+# Rig identity — appears in 01_Metadata as apparatus_id. Empty string is accepted.
+apparatus_id = 'bender'
+
 # User Configuration
 motor_axis = "z"           # Motor physically rotates along global 'Y' axis
 bending_axis_sensor = "z" # Sensor's 'X' is actually the motor's rotation

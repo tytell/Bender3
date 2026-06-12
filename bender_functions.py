@@ -251,6 +251,8 @@ class Bender:
 
         # 2. Assign Hardware settings from cfg
         self.device_name = cfg.device_name
+        # Rig identity label; empty string accepted. Written to 01_Metadata/apparatus_id.
+        self.apparatus_id = str(getattr(cfg, 'apparatus_id', '') or '')
         self.motor_port = cfg.motor_port 
         self.encoder_chan = cfg.encoder_chan
         self.stim_channels = cfg.stim_channels  
@@ -484,6 +486,42 @@ class Bender:
         # Standard 2D shapes for NI-DAQmx (Channels, Samples)
         self.stimcmdhi = np.zeros((2, 2))
         self.dig = np.zeros((1, 2), dtype='uint32')
+
+        # Specimen / session identity — set by GUI before run and exported via the
+        # bender_settings catch-all in bender_h5_export.py. Defaults ensure these keys
+        # are always present in the file even when the GUI Apply buttons are skipped.
+        self.fishcode = ''
+        self.genus_species = ''
+        self.prep_condition = ''
+        self.fishlen_TL = 0.0
+        self.fishlen_SL = 0.0
+        self.fishmass = 0.0
+        self.segment = ''
+        self.temp_C_room = 22.0
+        self.temp_C_tank = 22.0
+        self.dclamp = None
+        self.dbend = 0.0
+        self.xsec_width = None
+        self.xsec_height = None
+        self.dvert = 0.0
+        self.dhoriz = 0.0
+        self.clamp_plate_extension_mm = 0.0
+        self.starting_angle_deg = 0.0
+        # Extended biological identity — schema specimen_sex / specimen_muscle_type
+        self.specimen_sex = ''
+        self.specimen_muscle_type = ''
+        # Session provenance — schema session_analyst / session_date
+        self.session_analyst = ''
+        # Populated at the start of run_experiment; empty until then.
+        self.session_date = ''
+        # Mounted-profile geometry (optional inertial model). Empty lists ensure the
+        # exporter always writes these keys even when the GUI geometry panel is not used,
+        # making the R pipeline's read path consistent across all session files.
+        self.specimen_geometry_heights_mm = []
+        self.specimen_geometry_depths_mm = []
+        self.specimen_geometry_positions_mm = []
+        self.specimen_geometry_density_g_per_mm3 = None
+        self.specimen_profile_clamp_offset_mm = 0.0
 
         print(f"Bender initialized using: {config_module_name}.py")
 
@@ -810,6 +848,9 @@ class Bender:
         self.trial_records = []
         self.acquisition_start = None
         self.stim_clamp_notices = []
+        # Capture run-start timestamp once per run_experiment call so every trial in
+        # this session shares the same session_date value in the H5 metadata.
+        self.session_date = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
         # Now, if the DAQ fails, you won't accidentally save old data!
         # Set input and output names/channels
@@ -966,7 +1007,17 @@ class Bender:
         self.S2stimcmd = S2stimcmd
 
         self.master_logger.record(test_type=requested_test_type, motion_test_type=motion_test_type)
-        self.h5_protocol_metadata = self.master_logger.as_dict()
+        # Build protocol metadata from the logger, then overlay any keys already set by the GUI
+        # (e.g. genus_species, prep_condition, specimen_id, temp_C_*) so they survive for every
+        # protocol type. Logger-computed keys are written first; GUI keys win on collision because
+        # they carry operator-entered values that the logger never touches.
+        _proto_from_logger = self.master_logger.as_dict()
+        _proto_from_logger.update(self.h5_protocol_metadata)
+        self.h5_protocol_metadata = _proto_from_logger
+        # Stamp run-start timestamp and rig identity into protocol_metadata so they
+        # appear directly in 01_Metadata/protocol_metadata (not just bender_settings).
+        self.h5_protocol_metadata.setdefault('session_date', str(self.session_date))
+        self.h5_protocol_metadata.setdefault('apparatus_id', str(getattr(self, 'apparatus_id', '') or ''))
         # Pulse width applies only when stim fires; log null otherwise (1.4).
         self.h5_protocol_metadata['pulse_width_ms'] = (
             float(getattr(self, 'pulse_width_ms', 2.0)) if bool(self.is_stim) else None
