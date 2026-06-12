@@ -12,7 +12,7 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from bender_functions import Bender
+from bender_functions import Bender, DIR_HOLD_AFTER_STEP_SAMPLES
 
 AO_HZ = 60000.0
 GEAR = 5
@@ -323,6 +323,67 @@ def test_hold_only_segment_keeps_previous_direction():
     _, ms, md = _pulses(b, t, angle, np.zeros(t.size))
     assert np.all(ms == 0)                          # no step pulses during the hold
     assert np.all(md == 1)                          # DIR held at reverse
+
+
+# --- DIR hold-after-step: a reversal's DIR flip must not land on a STEP falling edge ----
+
+def test_dir_holds_after_last_step_at_reversal():
+    """At a turnaround, DIR keeps the previous step's direction for at least
+    DIR_HOLD_AFTER_STEP_SAMPLES samples after that step's pulse: flipping DIR on the very
+    next sample coincides with the STEP falling edge and mis-latches the last step before
+    a reversal on edge-sensitive drive inputs (~2-microsteps-per-cycle dynamic drift)."""
+    b = _bender()
+    t, angle, anglevel = _concat(
+        _ramp_hold(b, 0.0, 20.0, ramp_s=0.4, hold_s=1.0),
+        _ramp_hold(b, 20.0, 0.0, ramp_s=0.4, hold_s=1.0),
+    )
+    _, ms, md = _pulses(b, t, angle, anglevel)
+    step_idx = np.flatnonzero(ms == 1)
+    rev_steps = step_idx[md[step_idx] == 1]
+    fwd_steps = step_idx[md[step_idx] == 0]
+    assert rev_steps.size > 0 and fwd_steps.size > 0
+    first_rev = int(rev_steps[0])
+    last_fwd_before = int(fwd_steps[fwd_steps < first_rev][-1])
+    for off in range(1, DIR_HOLD_AFTER_STEP_SAMPLES + 1):
+        assert md[last_fwd_before + off] == md[last_fwd_before], (
+            f"DIR flipped {off} sample(s) after the last forward step at {last_fwd_before} "
+            f"(falling-edge race window)"
+        )
+    # LEAD is preserved: DIR is already reverse on the sample before the first reverse step.
+    assert md[first_rev - 1] == md[first_rev] == 1
+
+
+def test_dir_never_flips_within_hold_window_sine():
+    """Across a multi-cycle sine (the dynamic waveform shape), DIR never changes on the
+    DIR_HOLD_AFTER_STEP_SAMPLES samples following any STEP pulse."""
+    b = _bender()
+    tt = np.arange(0.0, 4.0, 1.0 / DAQ_HZ)
+    angle = 6.0 * np.sin(2 * np.pi * 1.0 * tt)
+    anglevel = np.gradient(angle, tt)
+    _, ms, md = _pulses(b, tt, angle, anglevel)
+    step_idx = np.flatnonzero(ms == 1)
+    assert step_idx.size > 0
+    n = md.size
+    for k in step_idx:
+        for off in range(1, DIR_HOLD_AFTER_STEP_SAMPLES + 1):
+            if k + off < n:
+                assert md[k + off] == md[k], (
+                    f"DIR flipped {off} sample(s) after step at {k}"
+                )
+
+
+def test_sine_cycles_net_zero_steps():
+    """Each full sine cycle nets zero signed steps (the per-cycle drift invariant the
+    DIR hold protects at the drive input is already true at the emission level)."""
+    b = _bender()
+    # End exactly on the cycle boundary (inclusive endpoint) so the commanded final
+    # position is exactly 0; an arange-exclusive end lands mid-cycle and legitimately
+    # rounds to a nonzero final step.
+    tt = np.arange(int(4.0 * DAQ_HZ) + 1) / DAQ_HZ
+    angle = 6.0 * np.sin(2 * np.pi * 1.0 * tt)
+    anglevel = np.gradient(angle, tt)
+    _, ms, md = _pulses(b, tt, angle, anglevel)
+    assert _net_steps(ms, md) == 0
 
 
 def test_reversed_continuation_first_step_has_dir_lead():

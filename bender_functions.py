@@ -48,6 +48,17 @@ import h5py
 # the angle to or past this magnitude, the ramp is stopped and the motor is returned to 0° (2.1).
 ISOVELOCITY_ANGLE_LIMIT_DEG = 45.0
 
+# --- DIR hold-after-step (motor reversal timing) ------------------------------
+# Number of idle AO samples after each STEP pulse during which the DIR line must keep that step's
+# direction before it may flip to the next step's direction. Flipping DIR on the very next sample
+# put the flip coincident with the STEP FALLING edge; a drive/optocoupler input that registers
+# that edge (or has asymmetric DIR rise/fall times) then latches the last step before a reversal
+# with the flipped direction. The race resolves differently for DIR 0->1 vs 1->0, so the errors at
+# a sine's top and bottom reversals do not cancel: dynamic runs walked ~2 microsteps per cycle off
+# center. 2 samples at 60 kHz = ~33 us of hold; reversal gaps are thousands of samples, so the
+# next step's DIR setup lead is unaffected.
+DIR_HOLD_AFTER_STEP_SAMPLES = 2
+
 # --- Specimen lateral frame (signed indices) ---------------------------------
 # Live values come from config ``specimen_lateral_index_on_positive_motor_side`` (non-zero)
 # paired with ``positive_motor_direction``; assigned on :class:`Bender` construction.
@@ -464,8 +475,24 @@ class Bender:
         # wedges) returns the device to its power-up state, which otherwise clears the DO port and
         # de-energizes the driver between segments -> the loaded specimen visibly relaxes, then
         # re-engages. Set to HIGH so reset_device() leaves ENABLE asserted (see
-        # _ensure_motor_enable_power_up_state). None = not yet configured this process.
+        # _ensure_motor_enable_power_up_state, which specifies the WHOLE port because devices like
+        # the rig's USB-6361 reject per-line power-up states with NI -200652). None = not yet
+        # configured this process, or cleared after a release (terminal/KILL/failed run) forced
+        # the port back to TRISTATE.
         self._motor_enable_power_up_high = None
+        # Truthful tracker of the stepper driver's energized state ACROSS run() calls. True only
+        # when the post-run idle hold word was asserted and nothing has released the driver since.
+        # False/None after a terminal release, KILL DAQ, a failed run, or at process start (state
+        # unknown). When not True, run() pre-energizes the driver and dwells motor_enable_dwell_s
+        # BEFORE starting the waveform: ENABLE otherwise rises on DO sample 0 -- the same instant
+        # STEP pulses begin -- and the ClearPath ignores step input until its enable sequence
+        # completes, silently losing the first segment's early steps (isovelocity first-step
+        # mismatch after a clean-finish release).
+        self._motor_driver_energized = False
+        # How long run() waits after pre-energizing a de-energized driver before starting the
+        # waveform (drive enable-to-ready time; HLFB is not wired on this rig, so use a
+        # conservative fixed dwell). Software timing parameter, not a hardware-config value.
+        self.motor_enable_dwell_s = 0.5
         # Width (ms) of each stimulation pulse (the high time of every carrier pulse), applied to
         # all stimulated protocols. Combined with stim_pulse_rate this sets the pulse high fraction.
         self.pulse_width_ms = 2.0
@@ -1645,6 +1672,29 @@ class Bender:
         )
         return int(np.packbits(bits)[0])
 
+    def _write_motor_idle_hold_word(self, motor_port_full):
+        """Write the energized idle word (ENABLE=1, STEP=0, DIR=last) via an on-demand DO task.
+
+        Shared primitive for the two places the driver must be energized while no waveform is
+        playing: the post-run inter-segment hold and the pre-run energize of a released driver
+        (see ``_motor_driver_energized``). Reasserts the SAME DIR the last waveform ended on so
+        the hold never toggles DIR. Returns True on success; failures are logged and swallowed
+        (the waveform's own sample-0 ENABLE still energizes the driver, just without dwell).
+        """
+        try:
+            idle_word = self._pack_motor_do_word(
+                enable=1, step=0, direction=int(getattr(self, '_last_motor_direction_bit', 0))
+            )
+            with Task() as hold_task:
+                hold_task.do_channels.add_do_chan(motor_port_full, 'motor_hold')
+                DigitalSingleChannelWriter(
+                    hold_task.out_stream, auto_start=True
+                ).write_one_sample_port_uint32(idle_word)
+            return True
+        except Exception as exc:
+            logging.warning(f"Could not write motor idle hold word on {motor_port_full!r}: {exc}")
+            return False
+
     def make_motor_stepper_pulses(self, daq_ao_do_sample_rate_hz=1000,
                                 motor_gear_ratio=5,
                                 motor_full_steps_per_rev=6400.0):
@@ -1722,28 +1772,52 @@ class Bender:
         # encoder correction => that dropped/extra step accumulates across steps
         # (leftward isometric drift; isovelocity return landing left of 0).
         #
-        # dstep[k] fires motorstep[k], so each step's sign is sign(dstep[k]). Back-fill
-        # that sign into the preceding idle samples so DIR is settled BEFORE each STEP
-        # rising edge (drivers need DIR setup time; same-sample DIR gives zero lead).
+        # dstep[k] fires motorstep[k], so each step's sign is sign(dstep[k]). Two timing
+        # guarantees for the DIR line, both relative to the STEP edges the drive latches:
+        #   LEAD: back-fill each step's sign into the idle samples before it so DIR is
+        #     settled BEFORE the STEP rising edge (drivers need DIR setup time;
+        #     same-sample DIR gives zero lead).
+        #   HOLD: keep DIR at a step's own sign for DIR_HOLD_AFTER_STEP_SAMPLES idle
+        #     samples AFTER its pulse so a reversal's DIR flip never lands on that step's
+        #     FALLING edge (see DIR_HOLD_AFTER_STEP_SAMPLES for the per-cycle drift this
+        #     race caused). LEAD wins at the sample directly before a step, so a step's
+        #     setup lead is never sacrificed to the previous step's hold.
         # Convention preserved: bit 0 = forward/positive, bit 1 = reverse/negative.
         step_sign = np.sign(dstep).astype(np.int64)            # +1 fwd, -1 rev, 0 idle
         n_pts = step_sign.size
-        nz_idx = np.where(step_sign != 0, np.arange(n_pts), n_pts)
-        next_nz = np.minimum.accumulate(nz_idx[::-1])[::-1]    # nearest step at/after k
-        lead_sign = np.zeros(n_pts, dtype=np.int64)
+        idx = np.arange(n_pts)
+        next_nz = np.minimum.accumulate(
+            np.where(step_sign != 0, idx, n_pts)[::-1]
+        )[::-1]                                                # nearest step at/after k
+        prev_nz = np.maximum.accumulate(
+            np.where(step_sign != 0, idx, -1)
+        )                                                      # nearest step at/before k
         has_future = next_nz < n_pts
-        lead_sign[has_future] = step_sign[next_nz[has_future]]
+        has_past = prev_nz >= 0
+        # LEAD fill (step samples take their own sign here, since next_nz[k] == k there).
+        dir_sign = np.zeros(n_pts, dtype=np.int64)
+        dir_sign[has_future] = step_sign[next_nz[has_future]]
         # Trailing idle samples (after the FINAL step) hold the last step's direction instead of
         # snapping to forward (0). An energized between-ramp hold must not toggle DIR: snapping to
         # forward during the hold (then back to reverse for a reverse continuation) is a spurious
         # DIR transition near the step edges that creeps on a setup-time-sensitive driver. Holding
         # the last direction keeps the held DIR both STABLE and CORRECT for a same-direction
         # continuation and avoids a 1->0->1 round trip across the gap.
+        trailing = ~has_future & has_past
+        dir_sign[trailing] = step_sign[prev_nz[trailing]]
+        # HOLD fill: idle samples within the hold window after a step keep that step's sign.
+        # Excludes step samples and the sample directly before the next step (next_nz - idx >= 2),
+        # so LEAD always gets >= 1 sample. At real reversals the gap is thousands of samples
+        # (velocity ~0 at a turnaround), so both margins are comfortably met.
+        in_hold = (
+            has_past & has_future
+            & ((idx - prev_nz) <= DIR_HOLD_AFTER_STEP_SAMPLES)
+            & ((next_nz - idx) >= 2)
+        )
+        dir_sign[in_hold] = step_sign[prev_nz[in_hold]]
         prev_dir_bit = int(getattr(self, '_last_motor_direction_bit', 0))
         if (step_sign != 0).any():
-            last_nz = int(np.flatnonzero(step_sign != 0)[-1])
-            lead_sign[last_nz + 1:] = step_sign[last_nz]
-            motordirection = (lead_sign < 0).astype('uint8')
+            motordirection = (dir_sign < 0).astype('uint8')
         else:
             # Hold-only segment (no steps at all): keep the previous segment's DIR; never snap to
             # forward, which would be a spurious flip during an energized hold.
@@ -2289,26 +2363,39 @@ class Bender:
         return self.aidata
 
     def _ensure_motor_enable_power_up_state(self, device_name):
-        """Configure the NI digital power-up/reset state for the motor ENABLE line (P0.2).
+        """Configure the NI digital power-up/reset states for the WHOLE motor port.
 
         ``run()`` resets the device after every segment (``daq_emergency_stop`` in its ``finally``)
         to avoid back-to-back FINITE acquisitions wedging in ``wait_until_done``. ``reset_device()``
-        returns the device to its power-up state, which clears the DO port and de-energizes the
-        stepper driver between segments -> a loaded specimen visibly relaxes, then re-engages on the
-        next segment (open-loop drift the per-segment encoder re-zero cannot detect). Configuring
-        the ENABLE line's persistent power-up state to HIGH makes ``reset_device()`` leave ENABLE
-        asserted, so the motor stays energized/braked across every segment boundary and DAQ pause
-        while the wedge workaround is kept intact. STEP (P0.1) and DIR (P0.0) keep their default
-        (idle) power-up state, so no spurious motion is commanded.
+        returns the device to its power-up state, which otherwise clears the DO port and
+        de-energizes the stepper driver between segments -> a loaded specimen visibly relaxes, then
+        re-engages on the next segment (open-loop drift the per-segment encoder re-zero cannot
+        detect). Configuring the ENABLE line's persistent power-up state to HIGH makes
+        ``reset_device()`` leave ENABLE asserted, so the motor stays energized/braked across every
+        segment boundary and DAQ pause while the wedge workaround is kept intact.
 
-        Hardware assumption (verify on rig): ENABLE is ACTIVE-HIGH -- line value 1 energizes the
+        WHOLE port, not just the ENABLE line: NI devices like the rig's USB-6361 reject per-line
+        power-up states with error -200652 ("must specify programmable powerup state for entire
+        ports"), so the original single-line set silently failed on every run and the motor
+        briefly de-energized at each reset (masked by the post-run idle hold word). Per-line
+        states in the one whole-port set:
+
+        - line0 (DIR) and line1 (STEP): LOW -- actively driven, not floating, so the energized
+          driver cannot see noise-induced STEP edges in the reset->hold-word window. A static
+          DIR=0 there is harmless (DIR only matters at STEP edges; the post-reset idle hold word
+          immediately rewrites the true last DIR).
+        - line2 (ENABLE): HIGH when ``hold_motor_between_steps`` (energized hold), else TRISTATE.
+        - remaining port lines (unused): TRISTATE (factory default behavior preserved).
+
+        Hardware assumption (verified on rig): ENABLE is ACTIVE-HIGH -- line value 1 energizes the
         driver. This matches ``make_motor_stepper_pulses`` ("High = enable on driver") and the
         ``enable=1`` energized inter-segment hold word. ENABLE is wired to P0.2, i.e.
         ``<device>/<motor_port>/line2``.
 
         The setting is persistent on the device, so this normally writes once per process and only
-        re-writes when the desired state changes (tracked by ``_motor_enable_power_up_high``). Fully
-        guarded: a failure logs a warning and never breaks the run.
+        re-writes when the desired state changes (tracked by ``_motor_enable_power_up_high``; the
+        cache is cleared whenever a release forces the port back to TRISTATE). Fully guarded: a
+        failure logs a warning and never breaks the run.
         """
         if Task is None or System is None or DOPowerUpState is None or PowerUpStates is None:
             return
@@ -2317,17 +2404,32 @@ class Bender:
         want_high = bool(getattr(self, 'hold_motor_between_steps', True))
         if getattr(self, '_motor_enable_power_up_high', None) == want_high:
             return
-        line = f"{device_name}/{self.motor_port}/line2"
-        state = PowerUpStates.HIGH if want_high else PowerUpStates.TRISTATE
+        port_path = f"{device_name}/{self.motor_port}"
+        enable_line = f"{port_path}/line2"
+        enable_state = PowerUpStates.HIGH if want_high else PowerUpStates.TRISTATE
         try:
-            System.local().set_digital_power_up_states(
-                device_name, [DOPowerUpState(physical_channel=line, power_up_state=state)]
-            )
+            port_lines = [
+                ch.name for ch in System.local().devices[device_name].do_lines
+                if ch.name.startswith(port_path + '/')
+            ]
+            if not port_lines:
+                raise ValueError(f"no DO lines found under {port_path!r}")
+            states = []
+            for ch in port_lines:
+                if ch == enable_line:
+                    state = enable_state
+                elif ch in (f"{port_path}/line0", f"{port_path}/line1"):
+                    state = PowerUpStates.LOW
+                else:
+                    state = PowerUpStates.TRISTATE
+                states.append(DOPowerUpState(physical_channel=ch, power_up_state=state))
+            System.local().set_digital_power_up_states(device_name, states)
             self._motor_enable_power_up_high = want_high
         except Exception as exc:
             logging.warning(
-                f"Could not set motor ENABLE power-up state ({state}) on {line!r}: {exc}. "
-                "Motor may de-energize between segments after reset_device()."
+                f"Could not set motor port power-up states (ENABLE {enable_state}) on "
+                f"{port_path!r}: {exc}. Motor may de-energize between segments after "
+                "reset_device()."
             )
 
     def run(self, device_name, is_terminal_release=False):
@@ -2361,6 +2463,23 @@ class Bender:
         S2stim_chan = '/'.join((device_name, self.S2stim_chan))
         motor_port = '/'.join((device_name, self.motor_port))
         encoder_chan = '/'.join((device_name, self.encoder_chan))
+
+        # Pre-energize dwell: if the driver may be de-energized (first run after a terminal
+        # release / KILL DAQ / failed run / process start), assert the idle hold word NOW and give
+        # the drive time to complete its enable sequence before the waveform starts. Without this,
+        # ENABLE rises on DO sample 0 -- the same instant STEP pulses begin -- and the drive
+        # ignores step input until it is energized, silently losing the first segment's early
+        # steps (open-loop offset for the rest of the protocol).
+        if not getattr(self, '_motor_driver_energized', False):
+            if self._write_motor_idle_hold_word(motor_port):
+                dwell_s = float(getattr(self, 'motor_enable_dwell_s', 0.5) or 0.0)
+                if dwell_s > 0:
+                    time.sleep(dwell_s)
+        # Pessimistic until proven otherwise: the finally below resets the device after playback
+        # (de-energizing the driver until the post-run hold word). Only the success-path hold
+        # reassert at the end of this method flips it back to True; a raised exception or a
+        # terminal release leaves it False, so the NEXT run pre-energizes and dwells.
+        self._motor_driver_energized = False
 
         with Task() as analog_in, Task() as analog_out, \
                 Task() as digital_out, Task() as angle_in:
@@ -2447,6 +2566,7 @@ class Bender:
 
             # start everthing
             # make sure to start the output first, because it'll wait until the input starts
+            run_completed_ok = False
             try:
                 if not getattr(self, 'acquisition_start', None):
                     self.acquisition_start = datetime.now().replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%S')
@@ -2478,6 +2598,7 @@ class Bender:
                 reader.read_many_sample(self.aidata)
                 angle_reader.read_many_sample_double(self.angledata)
                 self.angle_measured = self.angledata
+                run_completed_ok = True
             except Exception:
                 time.sleep(0.05)
                 try:
@@ -2492,17 +2613,23 @@ class Bender:
                 # On Windows/NI a second back-to-back FINITE acquisition wedges in
                 # wait_until_done() unless the device is released first. Fully guarded
                 # so teardown can never raise and mask the real error.
-                # On the terminal release run (clean finish), force the motor ENABLE line
-                # to TRISTATE BEFORE this reset so reset_device() leaves the driver
-                # de-energized (holding torque released) instead of returning it to the
-                # energized power-up HIGH. Same primitive KILL DAQ uses.
+                # Force the motor port's power-up states to TRISTATE BEFORE this reset (so
+                # reset_device() leaves the driver de-energized, holding torque released --
+                # same primitive KILL DAQ uses) in two cases:
+                # - terminal release run (clean finish): the motor lets go by design;
+                # - FAILED acquisition: a failure must leave the motor de-energized and safe,
+                #   which the energized power-up HIGH would otherwise prevent.
+                # Either release overwrites the ENABLE-high power-up state, so the cache is
+                # cleared and the next run rewrites it (and pre-energizes + dwells, since
+                # _motor_driver_energized also stays False on these paths).
                 try:
                     from bender_daq_kill import daq_emergency_stop
-                    if is_terminal_release:
+                    if is_terminal_release or not run_completed_ok:
                         daq_emergency_stop(
                             device_name,
                             release_motor_enable_line=f'{self.motor_port}/line2',
                         )
+                        self._motor_enable_power_up_high = None
                     else:
                         daq_emergency_stop(device_name)
                 except Exception:
@@ -2514,27 +2641,16 @@ class Bender:
         # line then latches across the gap until the next run() drives the motor port. Failure
         # never reaches this point (the exception propagates), leaving the motor de-energized and
         # safe. DAQ acquisition still paused/flushed in the gap -- this adds no recording.
-        if is_terminal_release:
-            # Terminal release run (clean finish): do NOT reassert the energized hold word.
-            # The finally above set the ENABLE power-up state to TRISTATE and reset the device,
-            # so the driver is de-energized and the motor has released its holding torque. Clear
-            # the cached power-up flag so the NEXT run re-asserts ENABLE HIGH (energized hold)
-            # via _ensure_motor_enable_power_up_state.
-            self._motor_enable_power_up_high = None
-        elif getattr(self, 'hold_motor_between_steps', True):
-            try:
-                # Reassert the SAME DIR the waveform ended on (not a hardcoded forward) so the
-                # energized hold does not toggle DIR across the gap; STEP stays 0 (no pulses).
-                idle_word = self._pack_motor_do_word(
-                    enable=1, step=0, direction=int(getattr(self, '_last_motor_direction_bit', 0))
-                )
-                with Task() as hold_task:
-                    hold_task.do_channels.add_do_chan(motor_port, 'motor_hold')
-                    DigitalSingleChannelWriter(
-                        hold_task.out_stream, auto_start=True
-                    ).write_one_sample_port_uint32(idle_word)
-            except Exception:
-                pass
+        if not is_terminal_release and getattr(self, 'hold_motor_between_steps', True):
+            # Reassert the energized idle hold word (same DIR the waveform ended on, STEP=0) so
+            # the motor holds position across the inter-segment gap. Skipped on the terminal
+            # release run (clean finish): the finally above forced the motor port's power-up
+            # states to TRISTATE and reset the device, so the driver is de-energized and the
+            # motor has released its holding torque; the power-up cache was cleared there and
+            # _motor_driver_energized stays False, so the NEXT run rewrites the energized
+            # power-up state and pre-energizes + dwells before its waveform starts.
+            if self._write_motor_idle_hold_word(motor_port):
+                self._motor_driver_energized = True
 
         return(self.aidata)
 
