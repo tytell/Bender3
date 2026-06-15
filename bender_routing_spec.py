@@ -14,9 +14,11 @@ Three public objects:
 
 * ``EXCLUDED`` : set[str]
     Attributes that are intentionally NOT written to the raw file (internal caches,
-    machine-specific paths, objects, legacy aliases, derived series that belong in
-    the research-hub ``derived`` group, and pure hardware-config provenance already
-    written verbatim by the config-provenance writer).
+    machine-specific paths, objects, legacy aliases, and derived series that belong in
+    the research-hub ``derived`` group). All config-sourced hardware/wiring/timing
+    provenance is now routed canonically under daq_/calibration_/protocol_ in
+    ``BENDER_ROUTING`` (the verbatim config-provenance writer is retired); the only
+    config fields intentionally dropped are the legacy ``units`` / ``unit_rules`` dicts.
 
 * ``MISSING_REQUIRED`` : list[dict]
     Schema fields with NO Bender source today. These need a GUI/config wire-up (or
@@ -71,10 +73,9 @@ class Route(TypedDict, total=False):
 BENDER_ROUTING: Dict[str, Route] = {
 
     # === metadata / specimen_ (non-spatial identity) =======================
-    "fishcode":             {"tier": "metadata", "key": "specimen_id",            "required": True,  "source": "GUI"},
-    "genus_species":        {"tier": "metadata", "key": "specimen_genusspecies",  "required": False, "source": "GUI",
-                             "note": "rename pending in code (FLAG E)"},
-    "prep_condition":       {"tier": "metadata", "key": "specimen_prep_condition", "required": False, "source": "GUI"},
+    "specimen_id":              {"tier": "metadata", "key": "specimen_id",            "required": True,  "source": "GUI"},
+    "specimen_genusspecies":    {"tier": "metadata", "key": "specimen_genusspecies",  "required": False, "source": "GUI"},
+    "specimen_prep_condition":  {"tier": "metadata", "key": "specimen_prep_condition", "required": False, "source": "GUI"},
     "specimen_sex":         {"tier": "metadata", "key": "specimen_sex",           "required": False, "source": "GUI"},
     "specimen_muscle_type": {"tier": "metadata", "key": "specimen_muscle_type",   "required": False, "source": "GUI"},
     "segment":              {"tier": "metadata", "key": "specimen_segment",       "required": False, "source": "GUI",
@@ -123,16 +124,57 @@ BENDER_ROUTING: Dict[str, Route] = {
     # === metadata / calibration_ ===========================================
     "calibration":   {"tier": "metadata", "key": "calibration_forcetorque_matrix", "required": True,  "source": "config",
                       "note": "ATI 6x6, raw volts -> newton / newton_meter"},
-    "sono_cal_left":  {"tier": "metadata", "key": "calibration_sono_left",  "required": False, "source": "config"},
-    "sono_cal_right": {"tier": "metadata", "key": "calibration_sono_right", "required": False, "source": "config"},
+    "forcetorque_calibration_file": {"tier": "metadata", "key": "calibration_forcetorque_file", "required": False, "source": "config",
+                                     "note": "referenced .cal filename; pairs with calibration_forcetorque_matrix"},
+    "sono_cal_left":  {"tier": "metadata", "key": "calibration_sono_left_millimeter_per_volt",  "required": False, "source": "config",
+                       "note": "V->mm breakpoint table [Low_V,High_V,Low_mm,High_mm] (or longer multi-point)"},
+    "sono_cal_right": {"tier": "metadata", "key": "calibration_sono_right_millimeter_per_volt", "required": False, "source": "config",
+                       "note": "V->mm breakpoint table [Low_V,High_V,Low_mm,High_mm] (or longer multi-point)"},
 
-    # === metadata / daq_ ===================================================
+    # === metadata / daq_ (acquisition + rig wiring/hardware) ================
+    # Per PI decision: all config-sourced hardware/wiring provenance is routed canonically
+    # under daq_ (no separate hardware_ group). Nothing from the config is excluded except
+    # the legacy units / unit_rules dicts (redundant with spelled-out unit suffixes).
     "daq_ai_sample_rate_hz":    {"tier": "metadata", "key": "daq_ai_sample_rate_hertz",    "required": True, "source": "config"},
     "daq_ao_do_sample_rate_hz": {"tier": "metadata", "key": "daq_ao_do_sample_rate_hertz", "required": True, "source": "config"},
     "input_channels":      {"tier": "metadata", "key": "daq_ai_channel_map",   "required": True,  "source": "computed",
                             "note": "zipped with input_channel_names -> index:identity map"},
     "input_channel_names": {"tier": "metadata", "key": "daq_instrumentation",  "required": False, "source": "computed",
                             "note": "active sensor list; also feeds daq_ai_channel_map"},
+    # --- DAQ wiring (NI device + channels + ports) ---
+    "device_name":     {"tier": "metadata", "key": "daq_device_name",            "required": False, "source": "config"},
+    "motor_port":      {"tier": "metadata", "key": "daq_motor_port",             "required": False, "source": "config"},
+    "encoder_chan":    {"tier": "metadata", "key": "daq_encoder_channel",        "required": False, "source": "config"},
+    "stim_channels":   {"tier": "metadata", "key": "daq_stim_channels",          "required": False, "source": "config", "note": "list (ao0, ao1)"},
+    "S1stim_chan":     {"tier": "metadata", "key": "daq_stim_channel1",          "required": False, "source": "config", "note": "derived from stim_channels[0]"},
+    "S2stim_chan":     {"tier": "metadata", "key": "daq_stim_channel2",          "required": False, "source": "config", "note": "derived from stim_channels[1]"},
+    "sg_channels":     {"tier": "metadata", "key": "daq_forcetorque_channels",       "required": False, "source": "config"},
+    "sg_names":        {"tier": "metadata", "key": "daq_forcetorque_channel_names",  "required": False, "source": "config"},
+    "sono_channels":   {"tier": "metadata", "key": "daq_sono_channels",          "required": False, "source": "config"},
+    "sono_names":      {"tier": "metadata", "key": "daq_sono_channel_names",     "required": False, "source": "config"},
+    "stim_monitor_chan": {"tier": "metadata", "key": "daq_stim_monitor_channel", "required": False, "source": "config",
+                          "note": "config-file-only; loaded onto Bender in __init__ so the ledger can route it"},
+    "stim_monitor_name": {"tier": "metadata", "key": "daq_stim_monitor_name",    "required": False, "source": "config",
+                          "note": "config-file-only; loaded onto Bender in __init__ so the ledger can route it"},
+    "use_sono":        {"tier": "metadata", "key": "daq_sono_enabled",           "required": False, "source": "config", "note": "bool"},
+    "sono_internal_rate": {"tier": "metadata", "key": "daq_sono_internal_sample_rate_hertz", "required": False, "source": "config",
+                           "note": "DS3 internal update rate (~241-242 Hz); distinct from daq_ai_sample_rate_hertz"},
+    # --- rig hardware / mechanics ---
+    "motor_gear_ratio":        {"tier": "metadata", "key": "daq_motor_gear_ratio",             "required": False, "source": "config", "note": "dimensionless ratio"},
+    "motor_full_steps_per_rev": {"tier": "metadata", "key": "daq_motor_full_steps_per_revolution", "required": False, "source": "config"},
+    "encoder_pulses_per_rev":  {"tier": "metadata", "key": "daq_encoder_pulses_per_revolution", "required": False, "source": "config"},
+    "motor_axis":              {"tier": "metadata", "key": "daq_motor_axis_sensor",            "required": False, "source": "config", "note": "categorical"},
+    "bending_axis_sensor":     {"tier": "metadata", "key": "daq_bending_axis_sensor",          "required": False, "source": "config", "note": "categorical"},
+    "bending_axis_specimen":   {"tier": "metadata", "key": "daq_bending_axis_specimen",        "required": False, "source": "config",
+                                "note": "config-file-only; loaded onto Bender in __init__ so the ledger can route it"},
+    "primary_bending_axis":    {"tier": "metadata", "key": "daq_primary_bending_axis",         "required": False, "source": "config", "note": "categorical"},
+    "positive_motor_direction": {"tier": "metadata", "key": "daq_positive_motor_direction",    "required": False, "source": "config", "note": "categorical (left/right)"},
+    "S1side":                  {"tier": "metadata", "key": "daq_stim_channel1_side",           "required": False, "source": "config"},
+    "S2side":                  {"tier": "metadata", "key": "daq_stim_channel2_side",           "required": False, "source": "config"},
+    "specimen_lateral_index_on_positive_motor_side": {"tier": "metadata", "key": "daq_specimen_lateral_index_on_positive_motor_side", "required": False, "source": "config",
+                                "note": "signed index, dimensionless"},
+    "specimen_side_index_left":  {"tier": "metadata", "key": "daq_specimen_side_index_left",   "required": False, "source": "config", "note": "derived"},
+    "specimen_side_index_right": {"tier": "metadata", "key": "daq_specimen_side_index_right",  "required": False, "source": "config", "note": "derived"},
 
     # === metadata / inertial_ (parameters + provenance only; series -> hub) =
     "i_total_system":      {"tier": "metadata", "key": "inertial_total_moi",    "required": False, "source": "computed",
@@ -188,7 +230,18 @@ BENDER_ROUTING: Dict[str, Route] = {
     "left_stim_voltage":      {"tier": "metadata", "key": "protocol_stim_voltage_left_volt",   "required": False, "source": "GUI"},
     "right_stim_voltage":     {"tier": "metadata", "key": "protocol_stim_voltage_right_volt",  "required": False, "source": "GUI"},
     "block_sequence":         {"tier": "metadata", "key": "protocol_block_sequence",           "required": False, "source": "GUI",
-                               "note": "list-of-dict; serialized as JSON or parallel arrays"},
+                               "note": "list-of-dict block plan; serialized as a JSON string (json.dumps) by the exporter"},
+
+    # --- protocol_ : config-sourced timing defaults ------------------------
+    "waitbefore":        {"tier": "metadata", "key": "protocol_wait_before_second",          "required": False, "source": "config"},
+    "waitafter":         {"tier": "metadata", "key": "protocol_wait_after_second",           "required": False, "source": "config"},
+    "rampdur":           {"tier": "metadata", "key": "protocol_ramp_duration_second",        "required": False, "source": "config"},
+    "prepoststim_dur":   {"tier": "metadata", "key": "protocol_prepoststim_duration_second", "required": False, "source": "config"},
+    "prepoststim_sep":   {"tier": "metadata", "key": "protocol_prepoststim_separation_second", "required": False, "source": "config"},
+    "prestim_time":      {"tier": "metadata", "key": "protocol_prestim_time_second",         "required": False, "source": "config"},
+    "poststim_time":     {"tier": "metadata", "key": "protocol_poststim_time_second",        "required": False, "source": "config"},
+    "ramp_mode_default": {"tier": "metadata", "key": "protocol_ramp_mode",                   "required": False, "source": "config", "note": "categorical (linear/exponential)"},
+    "amp_step_vel":      {"tier": "metadata", "key": "protocol_amplitude_step_velocity_degree_per_second", "required": False, "source": "config"},
 
     # --- protocol_ : dynamic / frequency_sweep param families --------------
     # value + _unit pattern: the value field holds the numbers; a sibling _unit holds the
@@ -258,19 +311,29 @@ BENDER_ROUTING: Dict[str, Route] = {
     "aidata":         {"tier": "timeseries", "key": "aidata",                                        "required": True,  "source": "DAQ",
                        "note": "IMMUTABLE raw 8xN; channel identity in daq_ai_channel_map"},
     "forcetorque_raw": {"tier": "timeseries", "key": "forcetorque_raw",                              "required": True,  "source": "computed",
-                        "note": "IMMUTABLE decoded 6xN (newton / newton_meter)"},
-    "forcetorque":    {"tier": "timeseries", "key": "force_x_newton|force_y_newton|force_z_newton|torque_x_newton_meter|torque_y_newton_meter|torque_z_newton_meter",
-                       "required": True, "source": "computed",
-                       "note": "SPLIT 6xN -> six named decoded channels"},
+                        "note": "IMMUTABLE decoded 6xN; NOT split (PI decision). Channel order: "
+                                "x_force, y_force, z_force, x_torque, y_torque, z_torque "
+                                "(newton / newton_meter). R decodes/names channels downstream."},
+    "forcetorque":    {"tier": "timeseries", "key": "forcetorque_raw",
+                       "required": False, "source": "computed",
+                       "note": "live decoded working array; forcetorque_raw is a copy=True of it "
+                               "(bender_functions L1080). Written once as forcetorque_raw; not split."},
     "sono_left_mm":   {"tier": "timeseries", "key": "sono_left_millimeter",   "required": False, "source": "computed", "note": "decoded sono length (raw in aidata)"},
     "sono_right_mm":  {"tier": "timeseries", "key": "sono_right_millimeter",  "required": False, "source": "computed", "note": "decoded sono length (raw in aidata)"},
-    "cycle_index_history":   {"tier": "timeseries", "key": "cycle_index_by_sample",       "required": False, "source": "computed"},
+    "cycle_index_history":   {"tier": "timeseries", "key": "cycle_index",       "required": False, "source": "computed",
+                              "note": "per-sample cycle number; -1 = not a numbered cycle (step protocols)"},
     "sweep_instantaneous_freq": {"tier": "timeseries", "key": "instantaneous_frequency_hertz", "required": False, "source": "computed",
                                  "note": "frequency_sweep only"},
-    # ASSUMED (MC #5 default): keep per-sample categorical stim streams in timeseries.
-    "stim_side":   {"tier": "timeseries", "key": "stim_side",   "required": False, "source": "computed", "note": "per-sample categorical (MC #5)"},
-    "stim_state":  {"tier": "timeseries", "key": "stim_state",  "required": False, "source": "computed", "note": "per-sample categorical (MC #5)"},
-    "stim_type":   {"tier": "timeseries", "key": "stim_type",   "required": False, "source": "computed", "note": "per-sample categorical (MC #5)"},
+    # Per-sample stim streams (PI decision). stim_state/stim_side/stim_type kept per-sample as-is.
+    "stim_side":   {"tier": "timeseries", "key": "stim_side",   "required": False, "source": "computed", "note": "per-sample categorical: none/left/right/both"},
+    "stim_state":  {"tier": "timeseries", "key": "stim_state",  "required": False, "source": "computed", "note": "per-sample stim phase"},
+    "stim_type":   {"tier": "timeseries", "key": "stim_type",   "required": False, "source": "computed", "note": "per-sample activity (active/passive); demote pending PI stim_type flag"},
+
+    # Per-sample index family (NOT Bender attributes -- built per-step inside the protocol helpers
+    # and broadcast to length N by the exporter; listed here for documentation only):
+    #   step_index, sequence_index, block_index (int);  block_direction, block_stim_sides (str).
+    # trial_index is DROPPED (redundant with filename + sequence_index). step_order is DROPPED
+    # (reconstructable from per-sample sequence_index + block_index).
 }
 
 
@@ -312,18 +375,33 @@ EXCLUDED: Set[str] = {
     "frustum_density_g_per_mm3", "frustum_tip_scale", "frustum_clamp_offset_mm",
     "frustum_num_samples",
 
-    # --- hardware-config provenance (written verbatim by config-provenance writer) ---
-    "device_name", "motor_port", "encoder_chan", "stim_channels",
-    "S1stim_chan", "S2stim_chan", "S1side", "S2side", "motor_axis",
-    "bending_axis_sensor", "primary_bending_axis", "positive_motor_direction",
-    "specimen_lateral_index_on_positive_motor_side",
-    "specimen_side_index_left", "specimen_side_index_right",
-    "motor_gear_ratio", "motor_full_steps_per_rev", "encoder_pulses_per_rev",
-    "forcetorque_calibration_file", "sg_channels", "sg_names",
-    "sono_channels", "sono_names", "use_sono", "sono_internal_rate",
-    "amp_step_vel", "ramp_mode_default",
-    "waitbefore", "waitafter", "rampdur",
-    "prepoststim_dur", "prepoststim_sep", "prestim_time", "poststim_time",
+    # --- run-computed scheduling / per-cycle intermediates (DERIVED, recomputable) ---
+    # Built during run_experiment from the routed protocol params (all_freqs/all_amps/etc.) to
+    # assemble the motor timeline. Not raw data and not schema fields; recomputed downstream.
+    "amp_by_cycle", "freq_by_cycle", "phase_by_cycle", "duty_by_cycle",
+    "period_by_cycle", "step_by_cycle", "strain_by_cycle", "strainrate_by_cycle",
+    "stimburstdur", "Lonoff", "Ronoff",
+    "organized_freqs", "organized_curves", "organized_strains", "organized_strainrates",
+    "organized_stimduties", "organized_stimphases",
+    "all_degs", "all_strains", "all_strainrates",
+    "tout", "endTime", "max_commanded_rotation_deg",
+    # self.filename: duplicate of the portable name written to 01_Metadata/filename by exporter.
+    "filename",
+    # stim_monitor: redundant slice of the immutable raw aidata buffer (raw lives in aidata).
+    "stim_monitor",
+    # derived per-step analysis result objects (recomputed downstream from raw + params).
+    "force_length_results", "isovelocity_results",
+
+    # --- legacy R-labeling dicts (config-file-only; PI-dropped as redundant) ---
+    # Per PI decision: superseded by spelled-out unit suffixes in canonical keys.
+    # These are NOT Bender attrs (they live only in the config module), so they never
+    # trip fail-on-unmapped; listed here only to document the intentional drop.
+    "units", "unit_rules",
+
+    # NOTE: the former hardware-config provenance block (device_name, motor_port,
+    # motor_gear_ratio, daq/encoder/stim wiring, sono channels, timing buffers, etc.)
+    # is no longer excluded -- every config-sourced field is now routed canonically
+    # under daq_ / calibration_ / protocol_ in BENDER_ROUTING above.
 }
 
 

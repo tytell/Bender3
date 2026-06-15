@@ -2884,14 +2884,14 @@ def _applied_specimen_id() -> str:
     """Currently-applied specimen ID — the same value written to the HDF5 header
     (``h5_protocol_metadata['specimen_id']``), so the auto-generated filename always matches the
     specimen stored inside the file rather than a stale/uncommitted widget value. Falls back to
-    ``fishcode`` then the live ``gui_specimen_id`` field, then ``''``."""
+    the ``specimen_id`` attribute then the live ``gui_specimen_id`` field, then ``''``."""
     b = st.session_state.get('bender')
     if b is not None:
         meta = getattr(b, 'h5_protocol_metadata', {}) or {}
         sid = str(meta.get('specimen_id') or '').strip()
         if sid:
             return sid
-        fc = str(getattr(b, 'fishcode', '') or '').strip()
+        fc = str(getattr(b, 'specimen_id', '') or '').strip()
         if fc:
             return fc
     return str(st.session_state.get('gui_specimen_id') or '').strip()
@@ -4082,10 +4082,10 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     gs = str(st.session_state.get('gui_genus_species') or '').strip()
     meta['genus_species'] = gs
-    b.genus_species = gs
+    b.specimen_genusspecies = gs
     sid = str(st.session_state.get('gui_specimen_id') or '').strip()
     meta['specimen_id'] = sid
-    setattr(b, 'fishcode', sid)
+    setattr(b, 'specimen_id', sid)
 
     def _str_attr(sess_key: str, bender_attr: str) -> None:
         if sess_key not in st.session_state:
@@ -4112,7 +4112,7 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
     if 'morpho_prep_condition' in st.session_state:
         pc = str(st.session_state.get('morpho_prep_condition') or '').strip()
         meta['prep_condition'] = pc
-        b.prep_condition = pc
+        b.specimen_prep_condition = pc
     if 'morpho_temp_room' in st.session_state:
         try:
             meta['temp_C_room'] = float(st.session_state['morpho_temp_room'])
@@ -4145,13 +4145,13 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
 
 
 def _apply_specimen_identity_to_bender(b: Bender) -> None:
-    """Copy genus/species, specimen ID, ``fishcode``, segment, sex, muscle type, and analyst from section 3 onto ``b`` and ``h5_protocol_metadata``."""
+    """Copy genus/species, specimen ID, ``specimen_id``, segment, sex, muscle type, and analyst from section 3 onto ``b`` and ``h5_protocol_metadata``."""
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['genus_species'] = str(st.session_state.get('gui_genus_species') or '').strip()
-    b.genus_species = meta['genus_species']
+    b.specimen_genusspecies = meta['genus_species']
     sid = str(st.session_state.get('gui_specimen_id') or '').strip()
     meta['specimen_id'] = sid
-    b.fishcode = sid
+    b.specimen_id = sid
     seg = str(st.session_state.get('morpho_segment') or '').strip()
     meta['segment'] = seg
     b.segment = seg
@@ -4406,7 +4406,7 @@ def _sync_morphometric_flags_from_session(b: Bender):
     if 'morpho_dhoriz' in st.session_state:
         b.dhoriz = float(st.session_state['morpho_dhoriz'])
     if 'gui_specimen_id' in st.session_state:
-        b.fishcode = str(st.session_state.get('gui_specimen_id') or '')
+        b.specimen_id = str(st.session_state.get('gui_specimen_id') or '')
     if 'morpho_segment' in st.session_state:
         b.segment = str(st.session_state['morpho_segment'] or '')
     if 'morpho_fishmass' in st.session_state:
@@ -4455,7 +4455,7 @@ def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
     _xh = getattr(b, 'xsec_height', None)
     return {
         'gui_genus_species': str(meta.get('genus_species', '') or '').strip(),
-        'gui_specimen_id': str(meta.get('specimen_id') or getattr(b, 'fishcode', '') or '').strip(),
+        'gui_specimen_id': str(meta.get('specimen_id') or getattr(b, 'specimen_id', '') or '').strip(),
         'morpho_segment': str(getattr(b, 'segment', '') or ''),
         'morpho_fishmass': float(_fm) if _fm is not None and math.isfinite(float(_fm)) else 0.0,
         'morpho_fishlen_TL': float(_ftl) if _ftl is not None and math.isfinite(float(_ftl)) else 0.0,
@@ -7702,7 +7702,7 @@ def main():
                         'Specimen ID',
                         key='gui_specimen_id',
                         placeholder='e.g. fish-042 or prep code',
-                        help='Primary specimen label; also written to `fishcode` on the experiment object for notebook compatibility.',
+                        help='Primary specimen label; also written to `specimen_id` on the experiment object for notebook compatibility.',
                     )
                 if 'morpho_segment' not in st.session_state:
                     st.session_state['morpho_segment'] = ''

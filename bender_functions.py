@@ -287,6 +287,11 @@ class Bender:
         self.sg_names = list(getattr(cfg, 'SG_name', []))
         self.sono_channels = list(getattr(cfg, 'sono_channel', []))
         self.sono_names = list(getattr(cfg, 'sono_name', []))
+        # Config-file-only provenance fields, loaded onto the Bender so the canonical
+        # routing ledger (bender_routing_spec.BENDER_ROUTING) can write them to the h5.
+        # They are used inside the config to build input_channels; not read elsewhere.
+        self.stim_monitor_chan = list(getattr(cfg, 'stim_monitor_chan', []))
+        self.stim_monitor_name = list(getattr(cfg, 'stim_monitor_name', []))
         self.input_channels = list(self._cfg_input_channels)
         self.input_channel_names = list(self._cfg_input_channel_names)
         self.use_sono = bool(getattr(cfg, 'use_sono', True))
@@ -331,6 +336,9 @@ class Bender:
         self.S2side = cfg.S2side
         self.motor_axis = cfg.motor_axis
         self.bending_axis_sensor = cfg.bending_axis_sensor
+        # Config-file-only provenance: specimen-frame bending axis label. Loaded so the
+        # routing ledger can write it; not read elsewhere in the run path.
+        self.bending_axis_specimen = getattr(cfg, 'bending_axis_specimen', None)
         self.primary_bending_axis = getattr(cfg, 'primary_bending_axis', self.bending_axis_sensor)
 
         # Sonomicrometer specific calibration
@@ -514,12 +522,12 @@ class Bender:
         self.stimcmdhi = np.zeros((2, 2))
         self.dig = np.zeros((1, 2), dtype='uint32')
 
-        # Specimen / session identity — set by GUI before run and exported via the
-        # bender_settings catch-all in bender_h5_export.py. Defaults ensure these keys
-        # are always present in the file even when the GUI Apply buttons are skipped.
-        self.fishcode = ''
-        self.genus_species = ''
-        self.prep_condition = ''
+        # Specimen / session identity — set by GUI before run and routed to canonical
+        # 01_Metadata keys via BENDER_ROUTING (bender_h5_export.py). Defaults ensure these
+        # keys are always present in the file even when the GUI Apply buttons are skipped.
+        self.specimen_id = ''
+        self.specimen_genusspecies = ''
+        self.specimen_prep_condition = ''
         self.fishlen_TL = 0.0
         self.fishlen_SL = 0.0
         self.fishmass = 0.0
@@ -865,6 +873,13 @@ class Bender:
         requested_test_type = str(test_type)
         motion_test_type = requested_test_type
 
+        # Layer 1 (fail-on-unmapped): hard-raise BEFORE any acquisition if any public Bender
+        # attribute is neither routed in BENDER_ROUTING nor in EXCLUDED. Catches schema/ledger
+        # desyncs while no data is at risk; the export-time 99_Unrouted fallback (Layer 2) is the
+        # never-lose-data safety net for attributes created later during the run.
+        from bender_routing_spec import assert_full_coverage
+        assert_full_coverage(self)
+
         # --- THE CLEANING CREW ---
         self.aidata = None
         self.forcetorque = None
@@ -1035,7 +1050,7 @@ class Bender:
 
         self.master_logger.record(test_type=requested_test_type, motion_test_type=motion_test_type)
         # Build protocol metadata from the logger, then overlay any keys already set by the GUI
-        # (e.g. genus_species, prep_condition, specimen_id, temp_C_*) so they survive for every
+        # (e.g. specimen_genusspecies, specimen_prep_condition, specimen_id, temp_C_*) so they survive for every
         # protocol type. Logger-computed keys are written first; GUI keys win on collision because
         # they carry operator-entered values that the logger never touches.
         _proto_from_logger = self.master_logger.as_dict()
