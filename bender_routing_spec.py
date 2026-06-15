@@ -383,6 +383,9 @@ EXCLUDED: Set[str] = {
     "min_vel", "max_vel", "starting_strain", "starting_strain_mode",
     "test_segment_length_mm",   # alias of dclamp -> measurement_clamp_separation_millimeter (see CONFLICT note in decision log)
     "total_mass",               # MC #2: not a schema field; recomputed in R
+    "specimen_mass_specimen",   # run-computed geometry-model mass; not a schema field
+    "specimen_volume_mm3",      # run-computed geometry-model volume; not a schema field
+    "specimen_inertial_model",  # internal model tag (elliptical_frustum/profiled_stations/...); provenance downstream
 
     # --- legacy frustum scalar inputs (captured in frustum_inputs dict) ---
     "frustum_height_mm", "frustum_width_mm", "frustum_length_mm",
