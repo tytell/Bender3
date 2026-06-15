@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "name": "rod40a",
+  "description": "",
+  "saved_at": "2026-06-09T13:31:07Z",
+  "session": {
+    "morpho_segment": "",
+    "morpho_fishmass": 0.0,
+    "morpho_fishlen_TL": 0.0,
+    "morpho_fishlen_SL": 0.0,
+    "morpho_xsec_height": 8.0,
+    "morpho_dvert": 0.0,
+    "morpho_dhoriz": 0.0,
+    "morpho_dclamp": 10.0,
+    "morpho_dbend": 0.0,
+    "morpho_xsec": 8.0,
+    "morpho_muscle_depth": 0.0,
+    "morpho_temp_room": 22.0,
+    "morpho_temp_tank": 22.0,
+    "morpho_prep_condition": "",
+    "morpho_geom_x": "",
+    "morpho_geom_y": "",
+    "morpho_geom_pos": "",
+    "morpho_prof_rho_preset": "Custom \u2014 edit the number below",
+    "morpho_prof_rho": 0.00103,
+    "morpho_prof_clamp": 20.0,
+    "morpho_use_theoretical_inertial": false,
+    "gui_genus_species": "",
+    "gui_specimen_id": ""
+  }
+}
