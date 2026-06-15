@@ -399,3 +399,88 @@ def test_bender_data_trial_regex_handles_new_and_legacy_names():
     assert _num('2026-06-03_bass01_bender_12_isometric.h5') == 12
     assert _num('legacy_trial_042.h5') == 42
     assert _num('no_number_here.h5') is None
+
+
+def test_morphometrics_load_populates_fields_and_keeps_data_folder(tmp_path):
+    """Loading a morphometrics ("specimen") template must (1) populate the morphometrics/identity
+    widgets and (2) leave the Data folder field intact.
+
+    Drives the real widgets (folder typed into the input, template chosen in the selectbox, the
+    actual Load button clicked) so genuine widget state is exercised. Regression guard for the bug
+    where ``_consume_pending_morphometrics_template`` issued an extra ``st.rerun()`` that halted the
+    run before the morphometrics + Data folder widgets re-rendered, dropping their widget state
+    (fields reset to defaults / folder cleared).
+    """
+    import json
+
+    from bender_functions import Bender
+
+    tpl = {
+        'version': 1,
+        'name': 'repro',
+        'description': '',
+        'session': {
+            'gui_specimen_id': 'REPRO-SPECIMEN-XYZ',
+            'gui_genus_species': 'Repro distincta',
+            'morpho_segment': 'repro-seg',
+            'morpho_dclamp': 17.0,
+            'morpho_xsec': 3.5,
+            'morpho_fishmass': 4.2,
+        },
+    }
+    data_folder = tmp_path / 'data'
+    data_folder.mkdir()
+    # Put the template inside the data folder so the morphometrics selectbox lists it.
+    tpl_path = data_folder / 'repro_specimen.json'
+    tpl_path.write_text(json.dumps(tpl), encoding='utf-8')
+
+    at = AppTest.from_file('bender_streamlit_gui.py')
+    at.session_state['gui_autosave_bootstrapped'] = True  # skip autosave recovery interference
+    at.session_state['gui_app_route'] = 'scratch'
+    at.session_state['bender'] = Bender('jimenez_bender_config_A')
+
+    # First full render registers the Data folder + morphometrics widgets.
+    at.run(timeout=120)
+    assert not at.exception
+
+    # Type the data folder into the real text input (genuine widget state + on_change callback).
+    at.text_input(key='gui_data_folder').set_value(str(data_folder)).run(timeout=120)
+    assert not at.exception
+    assert at.session_state['gui_data_folder'] == str(data_folder)
+
+    # Choose the template in the real selectbox (index 0 is the "— Choose —" sentinel).
+    at.selectbox(key='gui_morphometrics_template_select').select_index(1).run(timeout=120)
+    assert not at.exception
+
+    # Click the real "Load morphometrics into form" button.
+    at.button(key='gui_morphometrics_btn_load').click().run(timeout=120)
+    assert not at.exception
+
+    # Problem 1: identity + morphometrics widgets populate from the template.
+    assert at.session_state['gui_specimen_id'] == 'REPRO-SPECIMEN-XYZ'
+    assert at.session_state['gui_genus_species'] == 'Repro distincta'
+    assert float(at.session_state['morpho_dclamp']) == 17.0
+    assert float(at.session_state['morpho_xsec']) == 3.5
+    # Problem 2: the Data folder field is not wiped by the load.
+    assert at.session_state['gui_data_folder'] == str(data_folder)
+
+
+def test_protocol_save_template_section_renders_without_error():
+    """The 'Save template' form submit button must render on every supported Streamlit version.
+
+    Regression guard: ``st.form_submit_button(..., key=...)`` crashed on Streamlit < 1.40
+    ('unexpected keyword argument key'), which broke the entire Run experiment page whenever the
+    'Save procedure as template' section was shown.
+    """
+    from bender_functions import Bender
+
+    at = AppTest.from_file('bender_streamlit_gui.py')
+    at.session_state['gui_autosave_bootstrapped'] = True
+    at.session_state['gui_app_route'] = 'scratch'
+    at.session_state['bender'] = Bender('jimenez_bender_config_A')
+    at.session_state['gui_protocol_show_save_template'] = True
+
+    at.run(timeout=120)
+    assert not at.exception
+    rendered = '\n'.join(getattr(n, 'value', '') for n in list(at.markdown) + list(at.caption))
+    assert 'Save procedure as template' in rendered

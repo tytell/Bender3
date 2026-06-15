@@ -4274,21 +4274,12 @@ def _consume_pending_morphometrics_template() -> None:
         if ok:
             st.session_state['gui_morpho_apply_invalidated'] = True
             st.session_state.pop('gui_tpl_morpho_done', None)
-            # #region agent log
-            _agent_debug_log(
-                hypothesis_id='A',
-                location='bender_streamlit_gui.py:_consume_pending_morphometrics_template',
-                message='template_loaded',
-                data={
-                    'path': os.path.basename(str(path)),
-                    'fishmass': st.session_state.get('morpho_fishmass'),
-                    'dclamp': st.session_state.get('morpho_dclamp'),
-                    'xsec': st.session_state.get('morpho_xsec'),
-                    'invalidated': True,
-                },
-            )
-            # #endregion
-            st.rerun()
+            # No st.rerun() here: this runs in the pre-widget phase (before the morphometrics
+            # and Data folder widgets render), so the just-written session values are picked up
+            # by the widgets later in this same run. Issuing st.rerun() here halts the run before
+            # those widgets render, which makes Streamlit drop their widget state (morphometrics
+            # fields reset to defaults; the Data folder field clears). Mirrors the no-rerun
+            # behavior of _consume_pending_protocol_template.
     except OSError as e:
         st.session_state['gui_morphometrics_load_feedback'] = (False, f'Could not read file: {e}')
     except json.JSONDecodeError as e:
@@ -8376,7 +8367,7 @@ def main():
                             help='Copy procedure fields onto the experiment object (not **Run experiment**).',
                         )
                     with _pc2:
-                        sub_proc_save = st.form_submit_button('Save template', key='gui_proc_save_template', use_container_width=True)
+                        sub_proc_save = st.form_submit_button('Save template', use_container_width=True)
                 else:
                     sub_proc_apply = st.form_submit_button(
                         'Apply procedure',
