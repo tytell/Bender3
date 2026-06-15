@@ -2902,13 +2902,27 @@ def _applied_specimen_id() -> str:
     return str(st.session_state.get('gui_specimen_id') or '').strip()
 
 
+def _sim_name_prefix() -> str:
+    """``'sim_'`` when simulation mode is active, else ``''``.
+
+    Used so auto-named simulation files live in their own ``sim_`` filename namespace, separate
+    from real-hardware files. This keeps the on-disk scan (:func:`_next_trial_number_on_disk`) and
+    the exporter's ``sim_`` prefix (``bender_h5_export.export_primary_h5``) consistent: the GUI
+    composes the final name the exporter will actually write, so the preview matches the saved file
+    and simulated runs get their own continuous counter.
+    """
+    return 'sim_' if bool(st.session_state.get('gui_simulation_mode', False)) else ''
+
+
 def _next_trial_number_on_disk(folder: str, prefix: str) -> int:
     """Next acquisition number for files named ``<prefix><NN>...`` in ``folder``.
 
     Scans ``folder`` for existing files whose name starts with ``prefix`` and returns
     ``max(found NN) + 1`` (``1`` when none exist or ``folder`` is unreadable). Because the scan is
-    scoped to the date+specimen ``prefix``, numbering resets to ``01`` for each unique
-    date+specimen pair instead of running continuously across the session.
+    scoped to the (optional ``sim_``) date+specimen ``prefix``, numbering resets to ``01`` for each
+    unique sim/real + date + specimen namespace instead of running continuously across the session.
+    Simulated files (``sim_...``) and real files never share a counter: a real-run scan with prefix
+    ``YYYY-MM-DD_...`` excludes ``sim_YYYY-MM-DD_...`` names, and vice versa.
     """
     folder = str(folder or '').strip()
     if not folder or not os.path.isdir(folder):
@@ -2937,18 +2951,21 @@ def _next_trial_number_on_disk(folder: str, prefix: str) -> int:
 
 
 def _standard_filename_stem(proc: str) -> str:
-    """``YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>`` for the next acquisition.
+    """``[sim_]YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>`` for the next acquisition.
 
     ``specimenID`` is the currently-applied specimen (the same value written to the HDF5 header).
-    ``NN`` is derived by scanning the output folder for existing files sharing this date+specimen
-    prefix (``max(found) + 1``, ``01`` if none), so numbering resets per unique date+specimen pair
-    rather than running continuously across the session.
+    In simulation mode the stem is prefixed with ``sim_`` so the composed name matches what the
+    exporter writes (it prepends ``sim_`` to sim-mode files) and the preview is truthful.
+    ``NN`` is derived by scanning the output folder for existing files sharing this
+    (optional ``sim_``) date+specimen prefix (``max(found) + 1``, ``01`` if none), so numbering
+    resets per unique sim/real + date + specimen namespace and continues across protocols within a
+    namespace rather than running continuously across the session or mixing sim with real.
     """
     date = _session_date_str()
     specimen = _sanitize_filename_token(_applied_specimen_id()) or 'specimen'
     proc_token = _sanitize_filename_token(proc).lower() or 'unknown'
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
-    prefix = f'{date}_{specimen}_bender_'
+    prefix = f'{_sim_name_prefix()}{date}_{specimen}_bender_'
     n = _next_trial_number_on_disk(folder, prefix)
     return f'{prefix}{n:02d}_{proc_token}'
 
@@ -7560,10 +7577,24 @@ def main():
                     disabled=_auto_named,
                 )
                 if _auto_named:
+                    _sim_pfx = _sim_name_prefix()
                     st.caption(
-                        'Auto-named: `YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5` '
-                        '(NN increments per acquisition this session).'
+                        f'Auto-named: `{_sim_pfx}YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5`. '
+                        'NN restarts at 01 for each new date+specimen and continues across protocols '
+                        'for the same date+specimen.'
+                        + (' Simulation files use the `sim_` namespace and number separately from '
+                           'real-hardware files.' if _sim_pfx else '')
                     )
+                    # The filename follows the APPLIED specimen (what gets written into the .h5), not
+                    # the live text field. Warn when they differ so the operator knows to Apply the
+                    # new specimen to start its own NN sequence.
+                    _live_specimen = str(st.session_state.get('gui_specimen_id') or '').strip()
+                    _used_specimen = _applied_specimen_id()
+                    if _live_specimen and _used_specimen and _live_specimen != _used_specimen:
+                        st.warning(
+                            f'Filename uses applied specimen `{_used_specimen}` — click '
+                            f'**Apply specimen** to start a new numbering sequence for `{_live_specimen}`.'
+                        )
                 elif _override:
                     st.caption('Manual override: file name used exactly as typed.')
             full_out = _compose_output_h5_path()

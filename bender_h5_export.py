@@ -222,7 +222,9 @@ def export_primary_h5(
 
     # Prefix all sim-mode files so they sort separately and the analysis pipeline can quarantine
     # them by name alone (belt-and-suspenders alongside 01_Metadata.attrs['session_simulated']).
-    # Idempotent: never double-prefixes if the caller has already named the file sim_*.
+    # Idempotent: never double-prefixes if the caller has already named the file sim_*. The GUI
+    # auto-namer already composes the sim_ name (so its disk scan and preview match this output);
+    # this branch still covers manual-override, legacy, and direct (non-GUI) export paths.
     if bool(getattr(bender, 'session_simulated', False)):
         _d, _base = os.path.split(str(out_path))
         if not _base.startswith('sim_'):
