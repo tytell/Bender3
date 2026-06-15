@@ -21,6 +21,7 @@ import math
 import ntpath
 import os
 import posixpath
+import re
 import sys
 import tempfile
 import time
@@ -2849,8 +2850,12 @@ def _sanitize_filename_token(s) -> str:
 
 
 def _session_date_str() -> str:
-    """Today's date (``YYYY-MM-DD``), captured once per session so a run spanning midnight keeps
-    a single date for the whole session."""
+    """Collection date (``YYYY-MM-DD``) used as the filename prefix for auto-named files.
+
+    Defaults to today on first access; the user can override it via the "Collection date"
+    widget in Section 2 (Data file path).  Reads ``gui_session_date`` from session state
+    so any user edit is reflected immediately in the filename preview.
+    """
     d = str(st.session_state.get('gui_session_date') or '').strip()
     if not d:
         d = datetime.now().strftime('%Y-%m-%d')
@@ -3340,7 +3345,11 @@ def _morpho_fingerprint() -> tuple:
 
 
 def _data_path_fingerprint() -> tuple:
-    return (st.session_state.get('gui_data_folder'), st.session_state.get('gui_data_filename'))
+    return (
+        st.session_state.get('gui_data_folder'),
+        st.session_state.get('gui_data_filename'),
+        st.session_state.get('gui_session_date'),
+    )
 
 
 def _procedure_fingerprint() -> tuple:
@@ -7507,6 +7516,16 @@ def main():
             df_col = fn_col = st.container()
             with df_col:
                 _render_data_folder_dropdown(key_suffix='main')
+                if 'gui_session_date' not in st.session_state:
+                    st.session_state['gui_session_date'] = datetime.now().strftime('%Y-%m-%d')
+                _entered_date = st.text_input(
+                    'Collection date',
+                    key='gui_session_date',
+                    placeholder='YYYY-MM-DD',
+                    help='Date prefix used in auto-named files. Defaults to today; edit to back-date or forward-date a collection.',
+                )
+                if _entered_date and not re.fullmatch(r'\d{4}-\d{2}-\d{2}', _entered_date):
+                    st.warning('Date must be YYYY-MM-DD (e.g. 2026-06-15).')
                 _preview_out = _compose_output_h5_path().strip()
                 _preview_folder = str(st.session_state.get('gui_data_folder') or '').strip()
                 if _preview_out:
