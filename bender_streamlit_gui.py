@@ -4187,7 +4187,11 @@ def _apply_pair(b: Bender, name: str, value):
             value = max(1, int(value))
         except (TypeError, ValueError):
             value = 1
-    setattr(b, name, value)
+    # Remap legacy GUI field names to their canonical Bender attribute names.
+    # S1volts/S2volts are shorthand names used in the dynamic protocol panel;
+    # the execution path and routing spec use left_stim_voltage/right_stim_voltage.
+    _APPLY_PAIR_REMAP = {'S1volts': 'left_stim_voltage', 'S2volts': 'right_stim_voltage'}
+    setattr(b, _APPLY_PAIR_REMAP.get(name, name), value)
 
 
 def _apply_form_updates(b: Bender, updates: dict, tt: str):

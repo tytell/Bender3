@@ -406,6 +406,12 @@ EXCLUDED: Set[str] = {
     # derived per-step analysis result objects (recomputed downstream from raw + params).
     "force_length_results", "isovelocity_results",
 
+    # --- legacy transport / convenience containers (unpacked before use) ---
+    # protocol_params is a notebook/GUI convenience dict consumed by update_metadata();
+    # its contents are unpacked into individual canonical attrs, so the dict itself
+    # must never be written to the schema (would double-write every field it contains).
+    "protocol_params",
+
     # --- legacy R-labeling dicts (config-file-only; PI-dropped as redundant) ---
     # Per PI decision: superseded by spelled-out unit suffixes in canonical keys.
     # These are NOT Bender attrs (they live only in the config module), so they never
