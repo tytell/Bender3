@@ -197,6 +197,7 @@ daq_primary_bending_axis                preferred torque axis for QC/correction 
 daq_positive_motor_direction            "left" / "right" (Current: positive_motor_direction)
 daq_specimen_lateral_index_on_positive_motor_side   signed lateral index (Current: same name)
 daq_specimen_side_index_left / _right   derived per-side signed indices
+daq_motor_positive_bend_lateral_index   signed lateral index the positive motor direction bends toward (run-computed; isometric/isovelocity)
 ```
 
 ### `index_` — structural indices into the continuous `timeseries`
@@ -228,6 +229,8 @@ inertial_specimen_moi                   specimen moment of inertia (parameter)
 inertial_system_moi                     full system MOI (parameter)
 inertial_total_moi                      total MOI including clamp (parameter)
 inertial_moi_provenance                 which frustum dims / calibration fed each MOI
+inertial_specimen_from_geometry         bool — analytic specimen MOI available (run-computed)
+inertial_system_from_profile            bool — system-inertia calibration profile loaded (run-computed)
 ```
 
 ### `measurement_` — ALL spatial geometry (animal AND apparatus)
@@ -276,6 +279,9 @@ protocol_isometric_initial / _final / _num_steps / _target_unit
 protocol_isovelocity_min_velocity / _max_velocity / _starting_strain / _*_unit
 protocol_step_frequency_hertz / _step_amplitude / _step_amplitude_unit / _step_curvature_per_meter
 protocol_amplitude_frequency_exponent / _velocity_exponent
+protocol_acquisition_mode               'continuous' for the stitched isometric engine (run-computed)
+protocol_guard_triggered                bool — isovelocity angle guard fired (run-computed)
+protocol_guard_angle_degree             angle (deg) the isovelocity guard fired at; NaN if not (run-computed)
 ... (per protocol type — see bender_routing_spec.py for the full list)
 
 # config-sourced timing defaults (routed under protocol_)

@@ -130,7 +130,8 @@ def test_block_run_six_entries_shapes_and_tags():
     assert abs(float(b._last_commanded_angle_deg)) < 1e-6
     # Continuous-mode metadata, user-selectable keys preserved.
     md = b.h5_protocol_metadata
-    assert md.get('acquisition_mode') == 'continuous'
+    # acquisition_mode is now routed canonically as a Bender attr (protocol_acquisition_mode).
+    assert b.protocol_acquisition_mode == 'continuous'
     for k in ('rest_between_steps_s', 'reset_between_steps', 'isometric_inter_step_interval_s'):
         assert k in md
 

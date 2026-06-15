@@ -175,6 +175,8 @@ BENDER_ROUTING: Dict[str, Route] = {
                                 "note": "signed index, dimensionless"},
     "specimen_side_index_left":  {"tier": "metadata", "key": "daq_specimen_side_index_left",   "required": False, "source": "config", "note": "derived"},
     "specimen_side_index_right": {"tier": "metadata", "key": "daq_specimen_side_index_right",  "required": False, "source": "config", "note": "derived"},
+    "daq_motor_positive_bend_lateral_index": {"tier": "metadata", "key": "daq_motor_positive_bend_lateral_index", "required": False, "source": "computed",
+                                "note": "signed lateral index the positive motor direction bends toward; set in isometric/isovelocity run paths"},
 
     # === metadata / inertial_ (parameters + provenance only; series -> hub) =
     "i_total_system":      {"tier": "metadata", "key": "inertial_total_moi",    "required": False, "source": "computed",
@@ -196,6 +198,10 @@ BENDER_ROUTING: Dict[str, Route] = {
     "specimen_profile_density_g_per_mm3": {"tier": "metadata", "key": "inertial_profile_density_gram_per_cubic_millimeter", "required": False, "source": "GUI"},
     "specimen_profile_num_samples":      {"tier": "metadata", "key": "inertial_profile_num_samples", "required": False, "source": "GUI"},
     "specimen_geometry_density_g_per_mm3": {"tier": "metadata", "key": "inertial_specimen_density_gram_per_cubic_millimeter", "required": False, "source": "GUI"},
+    "inertial_specimen_from_geometry": {"tier": "metadata", "key": "inertial_specimen_from_geometry", "required": False, "source": "computed",
+                                        "note": "bool: analytic specimen MOI available (set in run_experiment FT block)"},
+    "inertial_system_from_profile":    {"tier": "metadata", "key": "inertial_system_from_profile",    "required": False, "source": "computed",
+                                        "note": "bool: system-inertia calibration profile loaded (set in run_experiment FT block)"},
 
     # === metadata / note_ ==================================================
     "stim_clamp_notices": {"tier": "metadata", "key": "note_bench",    "required": False, "source": "computed",
@@ -231,6 +237,13 @@ BENDER_ROUTING: Dict[str, Route] = {
     "right_stim_voltage":     {"tier": "metadata", "key": "protocol_stim_voltage_right_volt",  "required": False, "source": "GUI"},
     "block_sequence":         {"tier": "metadata", "key": "protocol_block_sequence",           "required": False, "source": "GUI",
                                "note": "list-of-dict block plan; serialized as a JSON string (json.dumps) by the exporter"},
+    # run-computed protocol provenance (set during the run path; absent -> skipped)
+    "protocol_acquisition_mode":  {"tier": "metadata", "key": "protocol_acquisition_mode",  "required": False, "source": "computed",
+                                   "note": "'continuous' for the stitched isometric engine"},
+    "protocol_guard_triggered":   {"tier": "metadata", "key": "protocol_guard_triggered",   "required": False, "source": "computed",
+                                   "note": "bool: isovelocity angle guard fired"},
+    "protocol_guard_angle_degree": {"tier": "metadata", "key": "protocol_guard_angle_degree", "required": False, "source": "computed",
+                                   "note": "angle (deg) at which the isovelocity guard fired; NaN if not"},
 
     # --- protocol_ : config-sourced timing defaults ------------------------
     "waitbefore":        {"tier": "metadata", "key": "protocol_wait_before_second",          "required": False, "source": "config"},

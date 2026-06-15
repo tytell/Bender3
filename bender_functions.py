@@ -528,6 +528,15 @@ class Bender:
         self.specimen_id = ''
         self.specimen_genusspecies = ''
         self.specimen_prep_condition = ''
+        # Run-computed metadata routed canonically to 01_Metadata via BENDER_ROUTING.
+        # Default None so the exporter skips them for protocols that never set them
+        # (Pass A skips None); each is assigned at its computation point in the run path.
+        self.protocol_acquisition_mode = None
+        self.protocol_guard_triggered = None
+        self.protocol_guard_angle_degree = None
+        self.inertial_specimen_from_geometry = None
+        self.inertial_system_from_profile = None
+        self.daq_motor_positive_bend_lateral_index = None
         self.fishlen_TL = 0.0
         self.fishlen_SL = 0.0
         self.fishmass = 0.0
@@ -1056,10 +1065,8 @@ class Bender:
         _proto_from_logger = self.master_logger.as_dict()
         _proto_from_logger.update(self.h5_protocol_metadata)
         self.h5_protocol_metadata = _proto_from_logger
-        # Stamp run-start timestamp and rig identity into protocol_metadata so they
-        # appear directly in 01_Metadata/protocol_metadata (not just bender_settings).
-        self.h5_protocol_metadata.setdefault('session_date', str(self.session_date))
-        self.h5_protocol_metadata.setdefault('apparatus_id', str(getattr(self, 'session_apparatus_id', '') or ''))
+        # session_date and session_apparatus_id are routed canonically from their Bender attrs;
+        # the legacy protocol-metadata mirrors are no longer written.
         # Pulse width applies only when stim fires; log null otherwise (1.4).
         self.h5_protocol_metadata['pulse_width_ms'] = (
             float(getattr(self, 'pulse_width_ms', 2.0)) if bool(self.is_stim) else None
@@ -1080,10 +1087,8 @@ class Bender:
 
         # Run the experiment using 'self'
         self.aidata = self.run(device_name=self.device_name)
-        if getattr(self, 'session_simulated', False):
-            self.h5_protocol_metadata['simulation_mode'] = True
-            self.h5_protocol_metadata['simulation_material'] = str(getattr(self, 'simulation_material', ''))
-            self.h5_protocol_metadata['simulation_model'] = 'cantilever_solid_tube_OD_25.4mm'
+        # session_simulated / simulation_material are routed canonically from their Bender attrs;
+        # the legacy mirror keys (simulation_mode/simulation_material/simulation_model) are not written.
 
         # --- 1. Process Force/Torque (Always assumed to exist) ---
         # Find exactly where the 6 SG channels are, regardless of order
@@ -1108,11 +1113,10 @@ class Bender:
             # the parameters R needs: whether a system-inertia calibration profile is loaded,
             # whether analytic specimen inertia is available, and the theoretical system inertia.
             self.primary_torque_raw = np.asarray(self.forcetorque[idx_t, :], dtype=float).reshape(-1)
-            self.h5_protocol_metadata.update({
-                'system_inertial_from_profile': bool(use_cal and isinstance(prof, dict)),
-                'specimen_inertial_from_geometry': bool(self._specimen_moi_for_inertial_torque() > 0),
-                'theoretical_i_total_system_g_mm2': float(getattr(self, 'i_total_system', 0.0)),
-            })
+            # Routed canonically (inertial_*); theoretical_i_total_system_g_mm2 dropped (redundant,
+            # recomputable downstream from MOI inputs).
+            self.inertial_system_from_profile = bool(use_cal and isinstance(prof, dict))
+            self.inertial_specimen_from_geometry = bool(self._specimen_moi_for_inertial_torque() > 0)
         else:
             print("⚠️ Warning: Could not find all 6 SG channels for Force/Torque calibration.")
 
@@ -1152,11 +1156,8 @@ class Bender:
             extra={'cycle_index_by_sample': cyc},
         )
         self.trial_records = [entry]
-        self.h5_protocol_metadata.update({
-            'test_type': str(requested_test_type),
-            'n_trials': 1,
-            'motion_test_type': str(motion_test_type),
-        })
+        # test_type is routed from self.test_type; n_trials is written directly by the exporter;
+        # motion_test_type is dropped (redundant). No protocol-metadata mirror written here.
 
         # Return to resting length: command angle = 0° and confirm before the trial completes (1.7).
         self.return_to_resting_length(device_name=self.device_name)
@@ -4055,15 +4056,16 @@ class Bender:
         self.force_length_results = results
         self.test_type = 'isometric'
         self.trial_records = list(results)
+        # protocol_acquisition_mode routed canonically; test_type/n_trials are redundant
+        # (routed from self.test_type / written by the exporter). Realized continuous-mode
+        # settings are retained on the working dict for in-app inspection (not exported).
+        self.protocol_acquisition_mode = 'continuous'
         self.h5_protocol_metadata.update({
-            'test_type': 'isometric',
-            'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),
             'hold_motor_between_steps': bool(getattr(self, 'hold_motor_between_steps', True)),
             'pulse_width_ms': float(getattr(self, 'pulse_width_ms', 2.0)) if bool(is_stim) else None,
             'isometric_inter_step_interval_s': float(gap_s),
-            'acquisition_mode': 'continuous',
         })
         # Single terminal gate for the isometric family: isometric does not otherwise call
         # return_to_resting_length (its return-to-home is embedded in the continuous waveform).
@@ -4309,13 +4311,15 @@ class Bender:
                 sp.get('bilateral_sequential_left_frac', getattr(self, 'bilateral_sequential_left_frac', 0.5))
             )
             ml_n = mr_n = mhl = mhr = None
+            # Routed canonically; step_order / n_trials / unilateral_posture_lateral_index /
+            # motor_positive_bend_toward_lateral_index mirror dropped from the working dict.
+            self.daq_motor_positive_bend_lateral_index = int(self.motor_positive_bend_lateral_index())
             meta = {
                 'recruitment': rec,
                 'bilateral_mirror_motor': False,
                 'bilateral_sequential_left_frac': seq_frac,
                 'block_sequence': block_seq,
                 'randomize_step_order': bool(randomize),
-                'step_order': step_order_blocks,
                 'left_stim_voltage': left_v,
                 'right_stim_voltage': right_v,
                 'reset_max_speed_deg_per_s': float(
@@ -4326,9 +4330,6 @@ class Bender:
                 'specimen_lateral_index_on_positive_motor_side': int(
                     getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
                 ),
-                'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
-                'unilateral_posture_lateral_index': uidx,
-                'n_trials': int(len(all_out)),
             }
             self.h5_protocol_metadata.update(meta)
             self.force_length_results = all_out
@@ -4866,9 +4867,8 @@ class Bender:
         self.isovelocity_results = results
         self.test_type = 'isovelocity'
         self.trial_records = list(results)
+        # test_type routed from self.test_type; n_trials written by the exporter.
         self.h5_protocol_metadata.update({
-            'test_type': 'isovelocity',
-            'n_trials': int(len(results)),
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),
             'hold_motor_between_steps': bool(getattr(self, 'hold_motor_between_steps', True)),
@@ -5065,13 +5065,20 @@ class Bender:
                 last_deg = float(block_out[-1]['angle_cmd'][-1])
                 all_out.extend(block_out)
             uidx_meta = None
+            # Routed canonically (daq_motor_positive_bend_lateral_index / protocol_guard_*);
+            # step_order / n_trials / unilateral_posture_lateral_index mirror dropped.
+            self.daq_motor_positive_bend_lateral_index = int(self.motor_positive_bend_lateral_index())
+            self.protocol_guard_triggered = bool(any(e.get('guard_triggered') for e in all_out))
+            self.protocol_guard_angle_degree = next(
+                (float(e['guard_angle_deg']) for e in all_out if e.get('guard_triggered')),
+                float('nan'),
+            )
             self.h5_protocol_metadata.update({
                 'recruitment': rec_iso,
                 'bilateral_mirror_motor': False,
                 'bilateral_sequential_left_frac': seq_frac,
                 'block_sequence': block_seq,
                 'randomize_step_order': bool(randomize),
-                'step_order': step_order_blocks,
                 'left_stim_voltage': left_v,
                 'right_stim_voltage': right_v,
                 'reset_max_speed_deg_per_s': float(
@@ -5081,14 +5088,6 @@ class Bender:
                 'specimen_side_index_right': int(self.specimen_side_index_right),
                 'specimen_lateral_index_on_positive_motor_side': int(
                     getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
-                ),
-                'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
-                'unilateral_posture_lateral_index': uidx_meta,
-                'n_trials': int(len(all_out)),
-                'guard_triggered': bool(any(e.get('guard_triggered') for e in all_out)),
-                'guard_angle_deg': next(
-                    (float(e['guard_angle_deg']) for e in all_out if e.get('guard_triggered')),
-                    float('nan'),
                 ),
             })
             self.isovelocity_results = all_out
@@ -5135,12 +5134,18 @@ class Bender:
         for i, e in enumerate(out):
             e['sequence_index'] = int(seq_idx[i])
         uidx_meta = self.recruitment_unilateral_lateral_index(rec_iso)
+        # Routed canonically (daq_motor_positive_bend_lateral_index / protocol_guard_*);
+        # step_order / unilateral_posture_lateral_index mirror dropped.
+        self.daq_motor_positive_bend_lateral_index = int(self.motor_positive_bend_lateral_index())
+        self.protocol_guard_triggered = bool(any(e.get('guard_triggered') for e in out))
+        self.protocol_guard_angle_degree = next(
+            (float(e['guard_angle_deg']) for e in out if e.get('guard_triggered')), float('nan')
+        )
         self.h5_protocol_metadata.update({
             'recruitment': rec_iso,
             'bilateral_mirror_motor': mirror_bm,
             'bilateral_sequential_left_frac': seq_frac,
             'randomize_step_order': bool(randomize),
-            'step_order': [int(x) for x in seq_idx],
             'reset_max_speed_deg_per_s': float(
                 sp.get('reset_max_speed_deg_per_s', getattr(self, 'reset_max_speed_deg_per_s', 15.0))
             ),
@@ -5148,12 +5153,6 @@ class Bender:
             'specimen_side_index_right': int(self.specimen_side_index_right),
             'specimen_lateral_index_on_positive_motor_side': int(
                 getattr(self, 'specimen_lateral_index_on_positive_motor_side', -1)
-            ),
-            'motor_positive_bend_toward_lateral_index': int(self.motor_positive_bend_lateral_index()),
-            'unilateral_posture_lateral_index': uidx_meta,
-            'guard_triggered': bool(any(e.get('guard_triggered') for e in out)),
-            'guard_angle_deg': next(
-                (float(e['guard_angle_deg']) for e in out if e.get('guard_triggered')), float('nan')
             ),
         })
         # Return to resting length: drive the motor to angle = 0° before the trial completes (1.7).
