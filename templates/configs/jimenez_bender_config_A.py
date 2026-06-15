@@ -12,7 +12,7 @@ positive_motor_direction = "right"
 # positive_motor_direction="left" and -1 here, specimen LEFT = -1 and RIGHT = +1.
 specimen_lateral_index_on_positive_motor_side = -1
 
-# Rig identity — appears in 01_Metadata as apparatus_id. Empty string is accepted.
+# Rig identity — appears in 01_Metadata as session_apparatus_id. Empty string is accepted.
 apparatus_id = 'bender'
 
 # User Configuration

@@ -3255,7 +3255,7 @@ def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
             st.session_state['gui_pending_data_folder'] = os.path.dirname(n0) or ''
             st.session_state['gui_pending_data_filename'] = os.path.basename(n0)
         _meta0 = getattr(b0, 'h5_protocol_metadata', {}) or {}
-        st.session_state['gui_pending_genus_species'] = str(_meta0.get('genus_species', '') or '')
+        st.session_state['gui_pending_genus_species'] = str(_meta0.get('specimen_genusspecies', '') or '')
         st.session_state['gui_pending_specimen_id'] = str(_meta0.get('specimen_id', '') or '')
         st.session_state['gui_pending_post_notes'] = str(getattr(b0, 'post_trial_notes', '') or '')
         _init_morphometrics_session_state(b0, force=True)
@@ -3301,6 +3301,12 @@ def _paths_equal_norm(a: str, b: str) -> bool:
         return str(a).strip() == str(b).strip()
 
 
+# NOTE: These session_state keys are serialization-stable plumbing. Some retain legacy
+# field names (e.g. 'gui_genus_species', 'morpho_prep_condition') that predate the v2.3
+# canonical schema. They are deliberately NOT renamed: they are persisted verbatim into
+# saved morphometrics template JSON, so renaming would break loading of existing templates.
+# The canonical names live on the Bender attributes / h5_protocol_metadata mirrors and in
+# the exported .h5 (specimen_genusspecies, specimen_prep_condition).
 _MORPHO_APPLY_SESSION_KEYS = (
     'gui_genus_species',
     'gui_specimen_id',
@@ -4072,16 +4078,16 @@ def _ensure_gui_data_path_session_keys():
     # else: leave existing session_state values untouched
 
 
-def _sync_genus_species_to_bender(b: Bender) -> None:
+def _sync_specimen_identity_to_bender(b: Bender) -> None:
     """Store identity, notebook-style specimen metadata, and protocol IDs for HDF5 export.
 
-    Called before and after every run so GUI-set identity fields (genus_species, prep_condition,
-    specimen_sex, specimen_muscle_type, session_analyst) survive the h5_protocol_metadata
+    Called before and after every run so GUI-set identity fields (specimen_genusspecies,
+    specimen_prep_condition, specimen_sex, specimen_muscle_type, session_analyst) survive the h5_protocol_metadata
     overwrite that happens inside run_experiment when master_logger.as_dict() is applied.
     """
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     gs = str(st.session_state.get('gui_genus_species') or '').strip()
-    meta['genus_species'] = gs
+    meta['specimen_genusspecies'] = gs
     b.specimen_genusspecies = gs
     sid = str(st.session_state.get('gui_specimen_id') or '').strip()
     meta['specimen_id'] = sid
@@ -4111,7 +4117,7 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
     _float_attr('morpho_xsec_height', 'xsec_height')
     if 'morpho_prep_condition' in st.session_state:
         pc = str(st.session_state.get('morpho_prep_condition') or '').strip()
-        meta['prep_condition'] = pc
+        meta['specimen_prep_condition'] = pc
         b.specimen_prep_condition = pc
     if 'morpho_temp_room' in st.session_state:
         try:
@@ -4147,8 +4153,8 @@ def _sync_genus_species_to_bender(b: Bender) -> None:
 def _apply_specimen_identity_to_bender(b: Bender) -> None:
     """Copy genus/species, specimen ID, ``specimen_id``, segment, sex, muscle type, and analyst from section 3 onto ``b`` and ``h5_protocol_metadata``."""
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
-    meta['genus_species'] = str(st.session_state.get('gui_genus_species') or '').strip()
-    b.specimen_genusspecies = meta['genus_species']
+    meta['specimen_genusspecies'] = str(st.session_state.get('gui_genus_species') or '').strip()
+    b.specimen_genusspecies = meta['specimen_genusspecies']
     sid = str(st.session_state.get('gui_specimen_id') or '').strip()
     meta['specimen_id'] = sid
     b.specimen_id = sid
@@ -4194,7 +4200,7 @@ def _apply_procedure_form_to_bender(b: Bender, updates: dict, tt: str) -> None:
     """Sync morphometrics flags, copy procedure fields onto ``b``, and mirror any QC note text from session."""
     _sync_morphometric_flags_from_session(b)
     _apply_form_updates(b, updates, tt)
-    _sync_genus_species_to_bender(b)
+    _sync_specimen_identity_to_bender(b)
     b.starting_angle_deg = float(st.session_state.get('gui_starting_angle_deg') or 0.0)
     _pn = str(st.session_state.get('gui_post_notes') or '').strip()
     if _pn:
@@ -4262,11 +4268,11 @@ def _consume_pending_morphometrics_template() -> None:
 
 
 def _apply_intrinsic_morphometrics_to_bender(b: Bender) -> None:
-    """Whole-body TL/SL and mass → ``b``; identity/metadata via ``_sync_genus_species_to_bender``."""
+    """Whole-body TL/SL and mass → ``b``; identity/metadata via ``_sync_specimen_identity_to_bender``."""
     b.fishlen_TL = float(st.session_state['morpho_fishlen_TL'])
     b.fishlen_SL = float(st.session_state['morpho_fishlen_SL'])
     b.fishmass = float(st.session_state['morpho_fishmass'])
-    _sync_genus_species_to_bender(b)
+    _sync_specimen_identity_to_bender(b)
     _mark_morpho_applied()
 
 
@@ -4277,7 +4283,7 @@ def _apply_experimental_conditions_to_bender(b: Bender) -> None:
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['temp_C_room'] = float(st.session_state['morpho_temp_room'])
     meta['temp_C_tank'] = float(st.session_state['morpho_temp_tank'])
-    meta['prep_condition'] = str(st.session_state.get('morpho_prep_condition') or '').strip()
+    meta['specimen_prep_condition'] = str(st.session_state.get('morpho_prep_condition') or '').strip()
     b.h5_protocol_metadata = meta
     _mark_morpho_applied()
 
@@ -4454,7 +4460,7 @@ def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
     _fsl = getattr(b, 'fishlen_SL', None)
     _xh = getattr(b, 'xsec_height', None)
     return {
-        'gui_genus_species': str(meta.get('genus_species', '') or '').strip(),
+        'gui_genus_species': str(meta.get('specimen_genusspecies', '') or '').strip(),
         'gui_specimen_id': str(meta.get('specimen_id') or getattr(b, 'specimen_id', '') or '').strip(),
         'morpho_segment': str(getattr(b, 'segment', '') or ''),
         'morpho_fishmass': float(_fm) if _fm is not None and math.isfinite(float(_fm)) else 0.0,
@@ -4470,7 +4476,7 @@ def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
         'morpho_dbend': float(getattr(b, 'dbend', 0.0) or 0.0),
         'morpho_temp_room': float(getattr(b, 'temp_C_room', 22.0) or 22.0),
         'morpho_temp_tank': float(getattr(b, 'temp_C_tank', 22.0) or 22.0),
-        'morpho_prep_condition': str(meta.get('prep_condition', '') or ''),
+        'morpho_prep_condition': str(meta.get('specimen_prep_condition', '') or ''),
         'morpho_use_theoretical_inertial': bool(getattr(b, 'use_theoretical_inertial_correction', False)),
         'morpho_prof_rho': float(
             getattr(b, 'specimen_geometry_density_g_per_mm3', None)
@@ -7695,7 +7701,7 @@ def main():
                         'Genus-species',
                         key='gui_genus_species',
                         placeholder='e.g. Danio rerio',
-                        help='Stored in the exported `.h5` under protocol metadata (`genus_species`) when you run or export.',
+                        help='Stored in the exported `.h5` under `01_Metadata` as `specimen_genusspecies` when you run or export.',
                     )
                 with id2:
                     st.text_input(
@@ -7711,7 +7717,7 @@ def main():
                     'Prep note',
                     key='morpho_prep_condition',
                     placeholder='e.g. anesthetized, recovered 24 h, fasted',
-                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `prep_condition` in protocol metadata on export.',
+                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `specimen_prep_condition` in `01_Metadata` on export.',
                 )
                 if 'gui_specimen_sex' not in st.session_state:
                     st.session_state['gui_specimen_sex'] = ''
@@ -8391,7 +8397,7 @@ def main():
                         if _stim_clamp:
                             st.info(_stim_clamp)
                         _sync_morphometric_flags_from_session(b)
-                        _sync_genus_species_to_bender(b)
+                        _sync_specimen_identity_to_bender(b)
                         _apply_form_updates(b, updates, tt)
                         _mark_procedure_applied()
                         st.session_state['gui_last_preview'] = build_protocol_preview(
@@ -8418,7 +8424,7 @@ def main():
 
         def _render_current_settings_table() -> None:
             _sync_morphometric_flags_from_session(b)
-            _sync_genus_species_to_bender(b)
+            _sync_specimen_identity_to_bender(b)
             _apply_form_updates(b, updates, tt)
             _mark_procedure_applied()
             settings_rows = [
@@ -8430,8 +8436,8 @@ def main():
                 },
                 {
                     'group': 'specimen',
-                    'name': 'genus_species',
-                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('genus_species', ''),
+                    'name': 'specimen_genusspecies',
+                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_genusspecies', ''),
                 },
                 {
                     'group': 'specimen',
@@ -8456,8 +8462,8 @@ def main():
                 },
                 {
                     'group': 'conditions',
-                    'name': 'prep_condition',
-                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('prep_condition', ''),
+                    'name': 'specimen_prep_condition',
+                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_prep_condition', ''),
                 },
             ]
             for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
@@ -8699,7 +8705,7 @@ def main():
                 return
             st.session_state['gui_run_in_progress'] = True
             _rehydrate_missing_morphometrics_from_bender(b)
-            _sync_genus_species_to_bender(b)
+            _sync_specimen_identity_to_bender(b)
             # Re-read starting angle directly from the widget so any edit made after the
             # last Apply procedure is captured (the widget value is always current in
             # session_state; there is no need to force another Apply click for a scalar).
@@ -8924,7 +8930,7 @@ def main():
         else:
 
             def _export_h5_from_session():
-                _sync_genus_species_to_bender(b)
+                _sync_specimen_identity_to_bender(b)
                 outp = _compose_output_h5_path().strip()
                 if not outp and not getattr(b, 'outputfile', None):
                     _st_error_actions(

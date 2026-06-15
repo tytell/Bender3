@@ -513,10 +513,13 @@ def export_primary_h5(
                 g_ic.attrs[str(k)] = v
 
         # protocol_metadata subgroup REMOVED (PI decision, post-Phase-0 audit). Its attr-mirror keys
-        # are already written canonically by the ledger pass below; block_sequence is routed as
-        # protocol_block_sequence (JSON); step_order and the remaining dict-only summary keys
+        # are written canonically by the ledger pass below; block_sequence is routed as
+        # protocol_block_sequence (JSON). Run-computed provenance now routed canonically too
+        # (Step 2): protocol_acquisition_mode, protocol_guard_triggered/_angle_degree,
+        # inertial_specimen_from_geometry, inertial_system_from_profile,
+        # daq_motor_positive_bend_lateral_index. The remaining dict-only summary keys
         # (n_trials/protocol/motion_test_type/frequency_hz/curvature_1_per_m/*movedur*/
-        # simulation_model/theoretical_i_total_system/*_inertial_from_*) are dropped as redundant.
+        # simulation_model/theoretical_i_total_system/step_order) are dropped as redundant.
 
         # === Ledger-driven canonical metadata (Phase 0) ===================
         # Replaces BOTH the old ``bender_settings`` catch-all (raw bender.__dict__ dump) AND the
