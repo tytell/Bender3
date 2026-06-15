@@ -224,33 +224,46 @@ def build_series_catalog_v2(path: str, trial: str) -> Tuple[Dict[str, np.ndarray
     """
     notes: List[str] = []
     out: Dict[str, np.ndarray] = {}
+
+    def _pick(group, *names):
+        """Return the first dataset name present in ``group`` (canonical first, legacy fallback)."""
+        for nm in names:
+            if nm in group:
+                return nm
+        return None
+
     with h5py.File(path, 'r') as f:
         tg = f['02_TimeSeries'][trial]
-        if 't' in tg:
-            out['Time (s)'] = _as_float_1d(tg['t'])
+        t_key = _pick(tg, 'time_second', 't')
+        if t_key:
+            out['Time (s)'] = _as_float_1d(tg[t_key])
         else:
-            notes.append('No `t` dataset — time axis unavailable.')
+            notes.append('No `time_second` dataset — time axis unavailable.')
         n_ref = len(out.get('Time (s)', np.array([])))
 
-        if 'tnorm' in tg:
-            out['Normalized time (tnorm)'] = _as_float_1d(tg['tnorm'])
+        tnorm_key = _pick(tg, 'time_normalized', 'tnorm')
+        if tnorm_key:
+            out['Normalized time'] = _as_float_1d(tg[tnorm_key])
 
-        if 'angle_measured' in tg:
-            out['Angle measured (deg)'] = _as_float_1d(tg['angle_measured'])
-        if 'angle_cmd' in tg:
-            out['Angle command (deg)'] = _as_float_1d(tg['angle_cmd'])
+        ang_meas_key = _pick(tg, 'angle_measured_degree', 'angle_measured')
+        ang_cmd_key = _pick(tg, 'angle_commanded_degree', 'angle_cmd')
+        if ang_meas_key:
+            out['Angle measured (deg)'] = _as_float_1d(tg[ang_meas_key])
+        if ang_cmd_key:
+            out['Angle command (deg)'] = _as_float_1d(tg[ang_cmd_key])
 
         dc = _trial_dclamp_mm(tg)
-        if dc is not None and 'angle_measured' in tg:
+        if dc is not None and ang_meas_key:
             try:
-                ang = _as_float_1d(tg['angle_measured'])
+                ang = _as_float_1d(tg[ang_meas_key])
                 kappa = convert_to_curvature(ang, 'angle', dclamp_mm=dc)
                 out['Curvature κ (1/m) from angle'] = np.asarray(kappa, dtype=np.float64).ravel()
             except Exception as e:
                 notes.append(f'Curvature from angle skipped: {e}')
-        elif 'angle_measured' in tg:
+        elif ang_meas_key:
             notes.append('Curvature κ not computed (no positive `dclamp` / `test_segment_length_mm` on trial).')
 
+        # primary_torque_* is no longer written (derived → R/hub); read only for legacy files.
         for key, label in (
             ('primary_torque_corrected', 'Primary torque corrected (N·m)'),
             ('primary_torque_raw', 'Primary torque raw (N·m)'),
@@ -258,8 +271,9 @@ def build_series_catalog_v2(path: str, trial: str) -> Tuple[Dict[str, np.ndarray
             if key in tg:
                 out[label] = _as_float_1d(tg[key])
 
-        if 'forcetorque' in tg:
-            ft = np.asarray(tg['forcetorque'][...], dtype=np.float64)
+        ft_key = _pick(tg, 'forcetorque_raw', 'forcetorque')
+        if ft_key:
+            ft = np.asarray(tg[ft_key][...], dtype=np.float64)
             if ft.ndim == 2:
                 if ft.shape[0] == 6:
                     for i, name in enumerate(FT_ROW_LABELS):
@@ -268,9 +282,9 @@ def build_series_catalog_v2(path: str, trial: str) -> Tuple[Dict[str, np.ndarray
                     for i, name in enumerate(FT_ROW_LABELS):
                         out[name] = ft[:, i].ravel()
                 else:
-                    notes.append(f'`forcetorque` shape {ft.shape} not 6×N or N×6 — skipped.')
+                    notes.append(f'`{ft_key}` shape {ft.shape} not 6×N or N×6 — skipped.')
             else:
-                notes.append('`forcetorque` is not 2D — skipped.')
+                notes.append(f'`{ft_key}` is not 2D — skipped.')
 
         if 'forcetorque_corrected' in tg:
             ftc = np.asarray(tg['forcetorque_corrected'][...], dtype=np.float64)

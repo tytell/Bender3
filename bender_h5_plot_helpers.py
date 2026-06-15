@@ -49,14 +49,21 @@ def _decode_attr(val: Any) -> str:
 
 
 def _read_input_channel_names(f: h5py.File) -> List[str]:
+    # Canonical (Phase 0): instrumentation list at 01_Metadata/daq_instrumentation.
+    try:
+        meta = f['01_Metadata']
+        if 'daq_instrumentation' in meta:
+            return _coerce_channel_name_list(meta['daq_instrumentation'][()])
+        v = meta.attrs.get('daq_instrumentation', None)
+        if v is not None:
+            return _coerce_channel_name_list(v)
+    except Exception:
+        pass
+    # Legacy fallback: pre-Phase-0 files wrote 01_Metadata/bender_settings/input_channel_names.
     try:
         gs = f['01_Metadata/bender_settings']
-    except KeyError:
-        return []
-    try:
         if 'input_channel_names' in gs:
-            raw = gs['input_channel_names'][()]
-            return _coerce_channel_name_list(raw)
+            return _coerce_channel_name_list(gs['input_channel_names'][()])
         v = gs.attrs.get('input_channel_names', None)
         if v is not None:
             return _coerce_channel_name_list(v)
@@ -92,8 +99,11 @@ def h5_custom_plot_summary(path: str) -> Dict[str, Any]:
             ch = _read_input_channel_names(f)
             paxis = ''
             try:
-                gs = f['01_Metadata/bender_settings']
-                paxis = _decode_attr(gs.attrs.get('primary_bending_axis', ''))
+                meta = f['01_Metadata']
+                paxis = _decode_attr(meta.attrs.get('daq_primary_bending_axis', ''))
+                if not paxis and 'bender_settings' in meta:
+                    # Legacy fallback for pre-Phase-0 files.
+                    paxis = _decode_attr(meta['bender_settings'].attrs.get('primary_bending_axis', ''))
             except Exception:
                 pass
             return {

@@ -5,8 +5,8 @@
 - **Authority level:** Tier 2 (binding for all H5 write/read tasks — export routine, R pipeline, GUI→backend assignment).
 - **Scope:** `bender_h5_export.py` (write), `01_calibration.R` / `02_correct.R` / `03_analyze.R` (read), GUI variable assignment in `bender_streamlit_gui.py`.
 - **Owner:** PI (schema decisions are PI-only).
-- **Version:** v2.1
-- **Last reviewed:** 2026-06-12
+- **Version:** v2.3 (Phase 0 + index/stim schema: ledger-driven canonical exporter; `forcetorque_raw` kept `[6×N]` not split; index fields `cycle_index`/`step_index`/`sequence_index`/`block_index`/`block_direction`/`block_stim_sides` converted to per-sample timeseries arrays; `trial_index` + `step_order` dropped; `protocol_metadata` subgroup removed, `block_sequence` → `protocol_block_sequence` JSON; `99_Unrouted` fallback)
+- **Last reviewed:** 2026-06-15
 
 ---
 
@@ -89,27 +89,47 @@ Analysis-pipeline rule: `filename starts with sim_` **OR** `session_simulated = 
 
 ## 3. `timeseries`
 
-Continuous streams, sample-indexed at the acquisition rate, sharing one `time_second` axis. Step boundaries are encoded in `index_step_*` in `metadata` (§4). **No per-trial or per-step subgroups.**
+Continuous streams, sample-indexed at the acquisition rate, sharing one `time_second` axis.
+
+> **Phase 0 status.** The canonical **dataset names** below are implemented in `bender_h5_export.py`, and the index/stim fields are now **per-sample timeseries arrays** (§3b-i). The on-disk group skeleton is still `02_TimeSeries/trial_XXXX` (one subgroup per step). The full §2 restructure — collapse to a single continuous `timeseries` group + `index_step_*` ranges, drop the numeric `01_/02_` prefixes — is a later, separate step. The per-sample index arrays are designed to concatenate cleanly into that flat timeline; the `index_step_*` range form (§4) is not yet written.
 
 ### 3a. Motor and time axes
 
 | Dataset | Shape | Notes |
 |---|---|---|
-| `time_second` | `[N]` | Time axis in seconds. *(Current name: `t` — rename pending.)* |
-| `time_normalized` | `[N]` | Normalized time axis, dimensionless. *(Current: `tnorm`.)* |
-| `angle_commanded_degree` | `[N]` | Commanded motor angle (degrees). *(Current: `angle_cmd`.)* |
-| `angle_measured_degree` | `[N]` | Encoder angle, gearbox output / specimen frame (degrees). *(Current: `angle_measured`.)* |
-| `angular_velocity_commanded_degree_per_second` | `[N]` | Commanded angular velocity. *(Current: `anglevel_cmd`.)* |
+| `time_second` | `[N]` | Time axis in seconds. *(Was `t`; renamed in Phase 0.)* |
+| `time_normalized` | `[N]` | Normalized time axis, dimensionless. *(Was `tnorm`.)* |
+| `angle_commanded_degree` | `[N]` | Commanded motor angle (degrees). *(Was `angle_cmd`.)* |
+| `angle_measured_degree` | `[N]` | Encoder angle, gearbox output / specimen frame (degrees). *(Was `angle_measured`.)* |
+| `angular_velocity_commanded_degree_per_second` | `[N]` | Commanded angular velocity. *(Was `anglevel_cmd`.)* |
 
 ### 3b. Stimulator command streams
 
 | Dataset | Shape | Notes |
 |---|---|---|
-| `stim_channel1_command_volt` | `[N]` | Stim command waveform, channel 1 (volts). *(Current: `S1stimcmd`.)* |
-| `stim_channel2_command_volt` | `[N]` | Stim command waveform, channel 2 (volts). *(Current: `S2stimcmd`.)* |
-| `stim_side` | `[N]` | Per-sample categorical label. *(Candidate to fold into `index_step_*` — see §7.)* |
-| `stim_state` | `[N]` | Per-sample categorical label. |
-| `stim_type` | `[N]` | Per-sample categorical label. |
+| `stim_channel1_command_volt` | `[N]` | Stim command waveform, channel 1 (volts). *(Was `S1stimcmd`.)* |
+| `stim_channel2_command_volt` | `[N]` | Stim command waveform, channel 2 (volts). *(Was `S2stimcmd`.)* |
+| `stim_side` | `[N]` | Per-sample categorical: `none` / `left` / `right` / `both` (handles co-contraction). |
+| `stim_state` | `[N]` | Per-sample stim phase: `passive` / `off` / `on` (3-value string). |
+| `stim_type` | `[N]` | Per-sample activity: `active` / `passive`. |
+| `instantaneous_frequency_hertz` | `[N]` | Chirp instantaneous frequency (frequency_sweep only). *(Was `sweep_instantaneous_freq`.)* |
+
+> **Stim fields — RESOLVED (PI).** `stim_state` stays a 3-value string (`passive`/`off`/`on`). `stim_type` stays per-sample (`active`/`passive`) — `active_passive` mixes both within one experiment. `stim_side` already exists as the per-sample categorical above (`none`/`left`/`right`/`both`). No code change.
+
+### 3b-i. Per-sample index streams (LOCKED — converted from per-trial scalar attrs)
+
+Each is a length-`[N]` array; within the current `trial_XXXX` skeleton the step-protocol fields are constant across a trial's samples (broadcast) and concatenate cleanly when the timeline is later flattened.
+
+| Dataset | Shape | Notes |
+|---|---|---|
+| `cycle_index` | `[N]` | Cycle number per sample; `-1` = not a numbered cycle (all step-protocol samples). *(Was `cycle_index_by_sample`.)* |
+| `step_index` | `[N]` | Ramp/step number at each sample (step protocols only). |
+| `sequence_index` | `[N]` | Pre-shuffle parameter index at each sample (step protocols only). |
+| `block_index` | `[N]` | Block number at each sample (step protocols only). |
+| `block_direction` | `[N]` | Bending direction for the block (string; step protocols only). |
+| `block_stim_sides` | `[N]` | Stim sides for the block (string; step protocols only). |
+
+**Dropped:** `trial_index` (redundant with the file/trial identity + `sequence_index`) and `step_order` (reconstructable from per-sample `sequence_index` + `block_index`). Dynamic / frequency_sweep carry only `cycle_index` (no discrete shuffled steps/blocks).
 
 ### 3c. Raw analog input buffer
 
@@ -119,17 +139,13 @@ Continuous streams, sample-indexed at the acquisition rate, sharing one `time_se
 
 ### 3d. ATI 6-axis force/torque (decoded, in `timeseries`)
 
-Raw + calibration principle (see Governing Rule 2): both the immutable raw voltages **and** the calibrated physical-unit channels live in the raw file. The raw buffer `aidata` rows 0–5 are the immutable original; the decoded channels below are computed at write time from `aidata` + `metadata/calibration_forcetorque_matrix`.
+Raw + calibration principle (see Governing Rule 2): both the immutable raw voltages **and** the calibrated physical-unit data live in the raw file. The raw buffer `aidata` rows 0–5 are the immutable original; `forcetorque_raw` is the calibrated `[6 × N]` array computed at write time from `aidata` + `metadata/calibration_forcetorque_matrix`.
 
 | Dataset | Shape | Notes |
 |---|---|---|
-| `forcetorque_raw` | `[6 × N]` | Calibrated F/T in physical units (newton / newton_meter), **unmodified post-write** (immutable decoded original). *(Current: `forcetorque_raw`.)* |
-| `force_x_newton` | `[N]` | x-axis force (newton). *(Decoded slice; current: `forcetorque[0,:]`.)* |
-| `force_y_newton` | `[N]` | y-axis force (newton). |
-| `force_z_newton` | `[N]` | z-axis force (newton). |
-| `torque_x_newton_meter` | `[N]` | x-axis torque (newton_meter). |
-| `torque_y_newton_meter` | `[N]` | y-axis torque (newton_meter). |
-| `torque_z_newton_meter` | `[N]` | z-axis torque (newton_meter). Primary bending axis in most protocols. |
+| `forcetorque_raw` | `[6 × N]` | Calibrated F/T in physical units, **unmodified post-write** (immutable decoded original). **Kept as a single `[6 × N]` array — NOT split into per-channel datasets (PI decision).** |
+
+> **Force/torque channel order — LOCKED (PI decision).** `forcetorque_raw` rows are, in order: `x_force`, `y_force`, `z_force` (newton), then `x_torque`, `y_torque`, `z_torque` (newton_meter). The Python writer does **not** split or rename these into per-channel datasets; the R pipeline slices `forcetorque_raw` and names/decodes the channels downstream. Row index → channel: `0=x_force, 1=y_force, 2=z_force, 3=x_torque, 4=y_torque, 5=z_torque`.
 
 **Not in `timeseries`:** inertial-corrected torque series, `primary_torque_*`, and any computed derived quantities. These are regenerated in R from `forcetorque_raw` + correction parameters and written only to `derived` in the hub copy.
 
@@ -148,13 +164,39 @@ calibration_sono_left                   [4 or 8] Sono calibration breakpoints, l
 calibration_sono_right                  [4 or 8] Sono calibration breakpoints, right channel
 ```
 
-### `daq_` — acquisition / DAQ configuration
+### `daq_` — acquisition / DAQ configuration + rig hardware/wiring provenance
+
+All config-sourced hardware/wiring/mechanics provenance is routed canonically under `daq_`
+(PI decision: no separate `hardware_` group). The verbatim config-provenance writer is retired;
+every config field now flows through the routing ledger except the legacy `units` / `unit_rules`
+dicts (dropped as redundant with the spelled-out unit suffixes).
 
 ```
-daq_ai_channel_map                      channel index → identity (e.g. ai0=Fx … ai6=sono)
-daq_ai_sample_rate_hertz                AI + encoder sample clock (hertz) (Current: daq_ai_sample_rate_hz)
+daq_ai_channel_map                      channel index → identity map (JSON; e.g. "0":"ai0:xForce" … "6":"ai6:sono_right")
+daq_ai_sample_rate_hertz                AI + encoder sample clock (hertz) (Current Python attr: daq_ai_sample_rate_hz, a @property)
 daq_ao_do_sample_rate_hertz             AO stim + DO motor sample clock (hertz)
 daq_instrumentation                     list of active sensors this session (was: instrumentation)
+daq_device_name                         NI device name (Current: device_name)
+daq_motor_port                          motor DO port (Current: motor_port)
+daq_encoder_channel                     encoder counter channel (Current: encoder_chan)
+daq_stim_channels                       stim AO channel list (Current: stim_channels)
+daq_stim_channel1 / daq_stim_channel2   per-side stim AO channel (Current: S1stim_chan / S2stim_chan)
+daq_stim_channel1_side / _channel2_side stim side labels (Current: S1side / S2side)
+daq_stim_monitor_channel / _name        stim-monitor AI channel + name (Current: stim_monitor_chan / stim_monitor_name)
+daq_forcetorque_channels / _channel_names   6-axis F/T AI channels + names (Current: SG_chan / SG_name)
+daq_sono_channels / _channel_names      sono AI channels + names (Current: sono_channel / sono_name)
+daq_sono_enabled                        sono in use this session (Current: use_sono)
+daq_sono_internal_sample_rate_hertz     DS3 internal update rate ~241–242 Hz (Current: sono_internal_samplefreq)
+daq_motor_gear_ratio                    gearbox ratio, dimensionless (Current: motor_gear_ratio)
+daq_motor_full_steps_per_revolution     motor steps/rev (Current: motor_full_steps_per_rev)
+daq_encoder_pulses_per_revolution       encoder CPR (Current: encoder_pulses_per_rev)
+daq_motor_axis_sensor                   motor rotation axis label (Current: motor_axis)
+daq_bending_axis_sensor                 sensor-frame bending axis (Current: bending_axis_sensor)
+daq_bending_axis_specimen               specimen-frame bending axis (Current: bending_axis_specimen)
+daq_primary_bending_axis                preferred torque axis for QC/correction (Current: primary_bending_axis)
+daq_positive_motor_direction            "left" / "right" (Current: positive_motor_direction)
+daq_specimen_lateral_index_on_positive_motor_side   signed lateral index (Current: same name)
+daq_specimen_side_index_left / _right   derived per-side signed indices
 ```
 
 ### `index_` — structural indices into the continuous `timeseries`
@@ -227,13 +269,25 @@ note_posthoc                            post-hoc analysis notes (new; populated 
 Global defaults. Per-step *realized* values live in `index_step_*`.
 
 ```
-protocol_name                           (was: protocol)
-protocol_isometric_ramp_duration_second
-protocol_isometric_target_angle_degree
-protocol_isovelocity_velocity_degree_per_second
-protocol_dynamic_frequency_hertz
-protocol_dynamic_amplitude_degree
-... (per protocol type)
+protocol_type                           file-level protocol selector (was: test_type)
+protocol_starting_angle_degree          (was: starting_angle_deg)
+protocol_duration_second                (was: duration)
+protocol_isometric_initial / _final / _num_steps / _target_unit
+protocol_isovelocity_min_velocity / _max_velocity / _starting_strain / _*_unit
+protocol_step_frequency_hertz / _step_amplitude / _step_amplitude_unit / _step_curvature_per_meter
+protocol_amplitude_frequency_exponent / _velocity_exponent
+... (per protocol type — see bender_routing_spec.py for the full list)
+
+# config-sourced timing defaults (routed under protocol_)
+protocol_wait_before_second             (was: waitbefore)
+protocol_wait_after_second              (was: waitafter)
+protocol_ramp_duration_second           (was: rampdur)
+protocol_prepoststim_duration_second    (was: prepoststim_dur)
+protocol_prepoststim_separation_second  (was: prepoststim_sep)
+protocol_prestim_time_second            (was: prestim_time)
+protocol_poststim_time_second           (was: poststim_time)
+protocol_ramp_mode                      linear/exponential (was: ramp_mode_default)
+protocol_amplitude_step_velocity_degree_per_second  (was: amp_step_vel)
 ```
 
 ### `session_` — recording-session logistics
@@ -314,8 +368,10 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 | `primary_torque_raw` | empty `(0,)` | — | delete from metadata (derived series → hub) |
 | `primary_torque_corrected` | empty `(0,)` | — | delete from metadata (derived series → hub) |
 | `stim_clamp_notices` | empty `(0,)` | `note_bench` | rename |
-| `trial_index/*` (subgroup) | present | `index_step_*` parallel arrays | move + flatten |
-| `protocol_metadata/step_order` | present | resolve to `index_step_*` or `protocol_*` | decision pending |
+| `trial_index/*` (subgroup) | present (minus `trial_index`/`cycle_index` cols) | `index_step_*` parallel arrays | move + flatten (later) |
+| `protocol_metadata/step_order` | **dropped** | — | done (reconstructable from per-sample `sequence_index` + `block_index`) |
+| `protocol_metadata/block_sequence` | **`protocol_block_sequence` (JSON)** | — | done (routed, `json.dumps`) |
+| `protocol_metadata` (subgroup) | **removed** | — | done (attr-mirrors now canonical; redundant dict-only keys dropped) |
 | `calibration_link` (empty group) | empty | — | delete |
 | `daq_ai_sample_rate_hz` | present | `daq_ai_sample_rate_hertz` | rename |
 | `t` (timeseries) | present | `time_second` | rename |
@@ -325,8 +381,8 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 | `anglevel_cmd` (timeseries) | present | `angular_velocity_commanded_degree_per_second` | rename |
 | `S1stimcmd` (timeseries) | present | `stim_channel1_command_volt` | rename |
 | `S2stimcmd` (timeseries) | present | `stim_channel2_command_volt` | rename |
-| `forcetorque` (timeseries) | present | `force_x/y/z_newton` + `torque_x/y/z_newton_meter` | split + rename |
-| `forcetorque_raw` (timeseries) | present | `forcetorque_raw` | conformant (keep, immutable) |
+| `forcetorque` (timeseries) | **dropped** | — | done (identical copy of `forcetorque_raw`; not split, PI decision) |
+| `forcetorque_raw` (timeseries) | present | `forcetorque_raw` `[6×N]` | conformant (keep, immutable, not split) |
 
 ---
 
@@ -363,5 +419,3 @@ All schema-level decisions are locked. Remaining work is code-side renames only:
 ## 9. Backlog (logged, not blocking)
 
 - Update `tier2_data_curation_sop` + `jlab_folder_architecture` to the new key names; update any provenance assertions (`apparatus_id` → `session_apparatus_id`, etc.).
-- Resolve whether per-sample `stim_side` / `stim_state` / `stim_type` streams stay in `timeseries` or fold into `index_step_*` (currently redundant with step ranges + stim params).
-- Confirm `protocol_metadata/step_order` target (`index_step_*` vs `protocol_*`).
