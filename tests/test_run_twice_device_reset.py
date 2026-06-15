@@ -36,7 +36,7 @@ def _minimal_dynamic_bender():
     b.stim_cycles_in_step = []
     b.stim_pulse_rate = 75.0
     b.is_stim = False
-    b.simulation_mode = False
+    b.session_simulated = False
     return b
 
 

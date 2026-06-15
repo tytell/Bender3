@@ -262,8 +262,8 @@ class Bender:
 
         # 2. Assign Hardware settings from cfg
         self.device_name = cfg.device_name
-        # Rig identity label; empty string accepted. Written to 01_Metadata/apparatus_id.
-        self.apparatus_id = str(getattr(cfg, 'apparatus_id', '') or '')
+        # Rig identity label; empty string accepted. Written to 01_Metadata/session_apparatus_id.
+        self.session_apparatus_id = str(getattr(cfg, 'apparatus_id', '') or '')
         self.motor_port = cfg.motor_port 
         self.encoder_chan = cfg.encoder_chan
         self.stim_channels = cfg.stim_channels  
@@ -370,7 +370,7 @@ class Bender:
             self.calibration = np.eye(6, dtype=float)
 
         # Simulation mode (set by GUI): :meth:`run` uses numpy instead of NI-DAQmx.
-        self.simulation_mode = False
+        self.session_simulated = False
         self.simulation_material = 'polyurethane'
 
         # Last commanded motor angle (deg). Updated whenever a motion timeline is recorded; used by
@@ -1059,7 +1059,7 @@ class Bender:
         # Stamp run-start timestamp and rig identity into protocol_metadata so they
         # appear directly in 01_Metadata/protocol_metadata (not just bender_settings).
         self.h5_protocol_metadata.setdefault('session_date', str(self.session_date))
-        self.h5_protocol_metadata.setdefault('apparatus_id', str(getattr(self, 'apparatus_id', '') or ''))
+        self.h5_protocol_metadata.setdefault('apparatus_id', str(getattr(self, 'session_apparatus_id', '') or ''))
         # Pulse width applies only when stim fires; log null otherwise (1.4).
         self.h5_protocol_metadata['pulse_width_ms'] = (
             float(getattr(self, 'pulse_width_ms', 2.0)) if bool(self.is_stim) else None
@@ -1080,7 +1080,7 @@ class Bender:
 
         # Run the experiment using 'self'
         self.aidata = self.run(device_name=self.device_name)
-        if getattr(self, 'simulation_mode', False):
+        if getattr(self, 'session_simulated', False):
             self.h5_protocol_metadata['simulation_mode'] = True
             self.h5_protocol_metadata['simulation_material'] = str(getattr(self, 'simulation_material', ''))
             self.h5_protocol_metadata['simulation_model'] = 'cantilever_solid_tube_OD_25.4mm'
@@ -1141,7 +1141,7 @@ class Bender:
             self.make_cycle_tags()
             cyc = np.array(getattr(self, 'cycle_index_history', np.array([])), copy=True)
         except Exception as exc:
-            if not getattr(self, 'simulation_mode', False):
+            if not getattr(self, 'session_simulated', False):
                 import warnings
                 warnings.warn(f'make_cycle_tags failed: {exc}', UserWarning, stacklevel=2)
             cyc = np.array([], dtype=int)
@@ -1697,7 +1697,7 @@ class Bender:
         (the waveform's own sample-0 ENABLE still energizes the driver, just without dwell).
         """
         try:
-            if getattr(self, 'simulation_mode', False):
+            if getattr(self, 'session_simulated', False):
                 return False
             idle_word = self._pack_motor_do_word(
                 enable=1, step=0, direction=int(getattr(self, '_last_motor_direction_bit', 0))
@@ -2414,7 +2414,7 @@ class Bender:
         cache is cleared whenever a release forces the port back to TRISTATE). Fully guarded: a
         failure logs a warning and never breaks the run.
         """
-        if getattr(self, 'simulation_mode', False):
+        if getattr(self, 'session_simulated', False):
             return
         if Task is None or System is None or DOPowerUpState is None or PowerUpStates is None:
             return
@@ -2452,7 +2452,7 @@ class Bender:
             )
 
     def run(self, device_name, is_terminal_release=False):
-        if getattr(self, 'simulation_mode', False):
+        if getattr(self, 'session_simulated', False):
             return self._simulate_daq_acquisition()
 
         if Task is None:
@@ -2473,12 +2473,12 @@ class Bender:
                 f"DAQ AO/DO sample rate daq_ao_do_sample_rate_hz must be finite and > 0; got {self.daq_ao_do_sample_rate_hz!r}."
             )
 
-        # Drift guard: if simulation_mode is True, the early-return at the top of run() must have
+        # Drift guard: if session_simulated is True, the early-return at the top of run() must have
         # been bypassed (future code path error). Raise loudly here rather than silently touching
         # real hardware.
-        if getattr(self, 'simulation_mode', False):
+        if getattr(self, 'session_simulated', False):
             raise RuntimeError(
-                'Hardware acquisition path reached with simulation_mode=True. '
+                'Hardware acquisition path reached with session_simulated=True. '
                 '_simulate_daq_acquisition() should have returned before this point. '
                 'Check that all acquisition entry points call Bender.run() rather than '
                 'reaching NI Task creation directly.'

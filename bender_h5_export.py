@@ -5,16 +5,16 @@ Used by the Streamlit GUI and callable from scripts/notebooks to avoid duplicati
 """
 from __future__ import annotations
 
-import importlib
-import inspect
 import json
+import logging
 import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 import h5py
 import numpy as np
+
+from bender_routing_spec import BENDER_ROUTING, EXCLUDED
 
 
 def _is_non_data_object(value: Any) -> bool:
@@ -78,21 +78,23 @@ def _store_h5_metadata_value(group: Any, key: str, value: Any, *, max_attr_array
         group.attrs[k] = f'<omitted_large_array shape={arr.shape}>'
 
 
-def _store_config_field(group: Any, key: str, value: Any) -> None:
-    """Store one **config-file** field into ``group`` for full provenance, additive only.
+def _store_metadata_canonical(group: Any, key: str, value: Any) -> bool:
+    """Store one **canonical metadata** value, fail-loud and lossless.
 
-    Mapping (per approved Task 1 contract):
+    Used by the ledger-driven exporter to write a routed Bender attribute (or an unrouted
+    one, into ``99_Unrouted``) under its canonical schema key. Mapping:
 
-    * ``dict`` (e.g. ``units`` / ``unit_rules``) → JSON-string attribute written with an
-      explicit variable-length string dtype so long dictionaries are never truncated.
+    * ``None`` / non-data objects (loggers, callables, file handles) → skipped.
+    * ``dict`` → JSON-string attribute (variable-length str dtype; never truncated).
     * ``str`` / ``bytes`` / scalars → attributes.
-    * ``list`` / ``tuple`` / ``ndarray`` → datasets (string/object arrays are encoded to bytes
-      so h5py can store them; if that fails, fall back to a JSON-string attribute).
+    * ``list`` / ``tuple`` / ``ndarray`` → datasets at full length (string/object arrays are
+      encoded to bytes; if that fails, a JSON-string attribute is used as a fallback).
 
-    Caller must guard against name collisions with existing ``01_Metadata`` entries; this
-    function never inspects or rewrites entries other than the one ``key`` it is asked to add.
+    Returns ``True`` if anything was written, ``False`` if the value was skipped.
     """
     k = str(key)
+    if value is None or _is_non_data_object(value):
+        return False
     vlen_str = h5py.special_dtype(vlen=str)
     if isinstance(value, dict):
         try:
@@ -100,15 +102,17 @@ def _store_config_field(group: Any, key: str, value: Any) -> None:
         except Exception:
             payload = str(value)
         group.attrs.create(k, payload, dtype=vlen_str)
-        return
+        return True
     if isinstance(value, (str, bytes)):
         group.attrs[k] = value
-        return
+        return True
     if isinstance(value, (bool, int, float, complex)) or isinstance(value, np.generic):
         group.attrs[k] = value
-        return
+        return True
     if isinstance(value, (list, tuple, np.ndarray)):
         arr = np.asarray(value)
+        if arr.size == 0:
+            return False
         if arr.dtype.kind in ('U', 'O'):
             try:
                 arr = arr.astype('S')
@@ -117,41 +121,14 @@ def _store_config_field(group: Any, key: str, value: Any) -> None:
                     group.attrs.create(k, json.dumps(list(value), default=str), dtype=vlen_str)
                 except Exception:
                     group.attrs[k] = str(value)
-                return
+                return True
         try:
             group.create_dataset(k, data=arr)
         except Exception:
             group.attrs[k] = str(value)
-        return
+        return True
     group.attrs[k] = str(value)
-
-
-def _iter_public_config_fields(config_module_name: str):
-    """Yield ``(name, value)`` for every public, data-like attribute of the config module.
-
-    The module is taken from ``sys.modules`` when already imported (it is, since ``Bender``
-    imported it at construction) and re-imported otherwise. Modules, callables, and classes are
-    skipped so only actual config values (scalars, strings, lists, dicts) are yielded.
-    """
-    name = str(config_module_name or '').strip()
-    if not name:
-        return
-    cfg = sys.modules.get(name)
-    if cfg is None:
-        try:
-            cfg = importlib.import_module(name)
-        except Exception:
-            return
-    for attr in sorted(dir(cfg)):
-        if attr.startswith('_'):
-            continue
-        try:
-            value = getattr(cfg, attr)
-        except Exception:
-            continue
-        if inspect.ismodule(value) or inspect.isclass(value) or callable(value):
-            continue
-        yield attr, value
+    return True
 
 
 def _read_existing_post_trial_notes(h5_path: str) -> str:
@@ -244,9 +221,9 @@ def export_primary_h5(
         raise ValueError("export_primary_h5 requires bender.outputfile or outputfile=...")
 
     # Prefix all sim-mode files so they sort separately and the analysis pipeline can quarantine
-    # them by name alone (belt-and-suspenders alongside 01_Metadata.attrs['simulated']).
+    # them by name alone (belt-and-suspenders alongside 01_Metadata.attrs['session_simulated']).
     # Idempotent: never double-prefixes if the caller has already named the file sim_*.
-    if bool(getattr(bender, 'simulation_mode', False)):
+    if bool(getattr(bender, 'session_simulated', False)):
         _d, _base = os.path.split(str(out_path))
         if not _base.startswith('sim_'):
             out_path = os.path.join(_d, 'sim_' + _base) if _d else 'sim_' + _base
@@ -319,16 +296,11 @@ def export_primary_h5(
         f.attrs['start_time_iso'] = start_time_iso
 
         g_meta = f.create_group('01_Metadata')
-        g_meta.attrs['test_type'] = test_type
-        g_meta.attrs['schema_version'] = h5_schema_version
-        g_meta.attrs['post-trial notes'] = notes
+        # Canonical scalar metadata (protocol_type, session_*, schema_version, note_posthoc,
+        # starting_angle, etc.) is written by the ledger-driven loop near the end of this block
+        # from BENDER_ROUTING -- no hardcoded per-field writes here. Only the portable file name
+        # (not a schema field) is kept as provenance.
         g_meta.attrs['filename'] = filename_only
-        g_meta.attrs['start_time_iso'] = start_time_iso
-        g_meta.attrs['starting_angle_deg'] = float(getattr(bender, 'starting_angle_deg', 0.0))
-        g_meta.attrs['session_date'] = str(getattr(bender, 'session_date', '') or '')
-        g_meta.attrs['apparatus_id'] = str(getattr(bender, 'apparatus_id', '') or '')
-        # Explicit boolean on every file — True for sim runs, False for real. Absent means legacy.
-        g_meta.attrs['simulated'] = bool(getattr(bender, 'simulation_mode', False))
 
         g_cal_link = g_meta.create_group('calibration_link')
         g_cal_link.attrs['use_inertial_calibration'] = bool(use_cal)
@@ -338,16 +310,45 @@ def export_primary_h5(
         g_ts = f.create_group('02_TimeSeries')
         manifest_rows = []
 
+        # Canonical per-trial timeseries dataset names (PI decision: full spelled-out rename).
+        # forcetorque is kept as the immutable (6, N) ``forcetorque_raw`` and is NOT split into
+        # per-channel datasets -- channel order is x_force, y_force, z_force, x_torque, y_torque,
+        # z_torque (newton / newton_meter); R decodes/names channels downstream.
+        ts_rename = {
+            't': 'time_second',
+            'tnorm': 'time_normalized',
+            'angle_cmd': 'angle_commanded_degree',
+            'angle_measured': 'angle_measured_degree',
+            'anglevel_cmd': 'angular_velocity_commanded_degree_per_second',
+            'S1stimcmd': 'stim_channel1_command_volt',
+            'S2stimcmd': 'stim_channel2_command_volt',
+            'aidata': 'aidata',
+            'forcetorque_raw': 'forcetorque_raw',
+            'stim_type': 'stim_type',
+            'stim_state': 'stim_state',
+            'stim_side': 'stim_side',
+            'sweep_instantaneous_freq': 'instantaneous_frequency_hertz',
+        }
+        # Per-sample index family (converted from former per-trial scalar attrs). cycle_index is
+        # written for every trial; the rest are written only where the source rec field exists
+        # (step protocols carry step/sequence/block; dynamic/frequency_sweep carry only cycles).
+        ts_index_int = ('step_index', 'sequence_index', 'block_index')
+        ts_index_str = ('block_direction', 'block_stim_sides')
+        # trial_index is dropped (redundant with filename + sequence_index, PI decision).
+        ts_converted = set(ts_index_int) | set(ts_index_str) | {
+            'cycle_index', 'cycle_index_by_sample', 'trial_index',
+        }
+        # Dropped from the raw file: ``forcetorque`` (identical copy of forcetorque_raw, see
+        # bender_functions L1080) and ``primary_torque_raw`` (derived; recomputed in R per schema
+        # doc 6 -- belongs in the research-hub ``derived`` group, not the raw file).
+        ts_drop = {'forcetorque', 'primary_torque_raw'}
+
         for i, rec in enumerate(trial_records):
             tg = g_ts.create_group(f'trial_{i:04d}')
-            tg.attrs['trial_index'] = int(rec.get('trial_index', i))
-            tg.attrs['cycle_index'] = int(rec.get('cycle_index', i))
             rec_tt = str(rec.get('test_type', test_type))
             tg.attrs['test_type'] = rec_tt
             manifest = {
                 'trial_name': f'trial_{i:04d}',
-                'trial_index': int(rec.get('trial_index', i)),
-                'cycle_index': int(rec.get('cycle_index', i)),
                 'test_type': rec_tt,
             }
 
@@ -358,12 +359,8 @@ def export_primary_h5(
             # MOI, and the inertial_calibration_profile I_est/bias) are stored in 01_Metadata, not
             # baked into a corrected time series here. So forcetorque_corrected,
             # primary_torque_corrected, and the inertial_torque_* traces are intentionally omitted.
-            series_keys = [
-                't', 'angle_cmd', 'anglevel_cmd', 'tnorm', 'S1stimcmd', 'S2stimcmd',
-                'aidata', 'angle_measured', 'forcetorque', 'forcetorque_raw',
-                'primary_torque_raw',
-                'cycle_index_by_sample', 'stim_type', 'stim_state', 'stim_side',
-            ]
+            # Source rec keys we know how to canonicalize (written below under ts_rename names).
+            series_keys = list(ts_rename.keys())
 
             t_arr = np.asarray(rec.get('t', np.array([]))).reshape(-1)
             s1_arr = np.asarray(rec.get('S1stimcmd', np.array([]))).reshape(-1)
@@ -423,14 +420,40 @@ def export_primary_h5(
                 tg.attrs['stim_any_on'] = bool(np.any(stim_on_mask))
                 manifest['stim_enabled'] = bool(stim_enabled)
                 manifest['stim_any_on'] = bool(np.any(stim_on_mask))
+
+            # Per-sample index arrays (PI decision: convert from per-trial scalar attrs). Within a
+            # trial group each step is one record, so the step/sequence/block fields are constant
+            # across the trial's samples; they are broadcast to length n so the timeline stays
+            # self-describing when trials are later concatenated. cycle_index is the per-sample
+            # cycle number (dynamic/frequency_sweep) or -1 for step protocols (no numbered cycles).
+            if n > 0:
+                if cyc_arr.size == n:
+                    cycle_idx_ps = np.asarray(cyc_arr, dtype=np.int64)
+                else:
+                    cycle_idx_ps = np.full(n, -1, dtype=np.int64)
+                tg.create_dataset('cycle_index', data=cycle_idx_ps)
+
+                for key in ts_index_int:
+                    if key in rec and rec[key] is not None:
+                        try:
+                            val = int(np.asarray(rec[key]).reshape(-1)[0])
+                        except Exception:
+                            continue
+                        tg.create_dataset(key, data=np.full(n, val, dtype=np.int64))
+                for key in ts_index_str:
+                    if key in rec and rec[key] is not None:
+                        raw = np.asarray(rec[key]).reshape(-1)[0]
+                        sval = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        tg.create_dataset(key, data=np.array([sval] * n, dtype='S16'))
+
             for key in series_keys:
                 if key in rec and rec[key] is not None:
                     arr = np.asarray(rec[key])
                     if arr.size > 0:
-                        tg.create_dataset(key, data=arr)
+                        tg.create_dataset(ts_rename[key], data=arr)
 
             for k, v in rec.items():
-                if k in series_keys or k in ('trial_index', 'cycle_index', 'test_type'):
+                if k in series_keys or k in ts_drop or k in ts_converted or k in ('test_type',):
                     continue
                 try:
                     arr = np.asarray(v)
@@ -447,24 +470,18 @@ def export_primary_h5(
                     manifest[str(k)] = str(v)
             manifest_rows.append(manifest)
 
+        # Per-trial condition manifest. trial_index / cycle_index columns are dropped: trial order
+        # is the trial_names order, and per-sample cycle_index lives in 02_TimeSeries (PI decision).
         g_idx = g_meta.create_group('trial_index')
         g_idx.create_dataset(
             'trial_names',
             data=np.array([f'trial_{i:04d}' for i in range(len(trial_records))], dtype='S'),
         )
         g_idx.create_dataset(
-            'trial_index',
-            data=np.array([int(r.get('trial_index', i)) for i, r in enumerate(manifest_rows)], dtype=np.int64),
-        )
-        g_idx.create_dataset(
-            'cycle_index',
-            data=np.array([int(r.get('cycle_index', i)) for i, r in enumerate(manifest_rows)], dtype=np.int64),
-        )
-        g_idx.create_dataset(
             'test_type',
             data=np.array([str(r.get('test_type', test_type)) for r in manifest_rows], dtype='S'),
         )
-        reserved = {'trial_name', 'trial_index', 'cycle_index', 'test_type'}
+        reserved = {'trial_name', 'test_type'}
         all_keys = sorted({k for r in manifest_rows for k in r.keys() if k not in reserved})
         for cond_key in all_keys:
             col = [r.get(cond_key, np.nan) for r in manifest_rows]
@@ -495,38 +512,73 @@ def export_primary_h5(
             for k, v in prof.items():
                 g_ic.attrs[str(k)] = v
 
-        h5p = dict(getattr(bender, 'h5_protocol_metadata', {}) or {})
-        g_proto = g_meta.create_group('protocol_metadata')
-        for k, v in h5p.items():
-            # Protocol arrays (e.g. frequency/amplitude lists) stay full datasets regardless of
-            # length; opaque objects are skipped rather than stringified.
-            _store_h5_metadata_value(g_proto, k, v, max_attr_array_size=2**31)
+        # protocol_metadata subgroup REMOVED (PI decision, post-Phase-0 audit). Its attr-mirror keys
+        # are already written canonically by the ledger pass below; block_sequence is routed as
+        # protocol_block_sequence (JSON); step_order and the remaining dict-only summary keys
+        # (n_trials/protocol/motion_test_type/frequency_hz/curvature_1_per_m/*movedur*/
+        # simulation_model/theoretical_i_total_system/*_inertial_from_*) are dropped as redundant.
 
-        g_settings = g_meta.create_group('bender_settings')
-        skip_keys = {
-            'aidata', 'forcetorque', 'angle', 'anglevel', 'tnorm', 't', 'angledata',
-            'S1stimcmd', 'S2stimcmd', 'trial_records',
-            # Not data: the MasterLogger object must not be serialized into the file.
-            'master_logger',
-            # Absolute output path is machine-specific; the portable filename is stored on
-            # the root and 01_Metadata as ``filename`` instead.
-            'outputfile',
-        }
-        for k, v in bender.__dict__.items():
-            if k.startswith('_') or k in skip_keys or v is None:
+        # === Ledger-driven canonical metadata (Phase 0) ===================
+        # Replaces BOTH the old ``bender_settings`` catch-all (raw bender.__dict__ dump) AND the
+        # verbatim config-provenance writer. Every public Bender attribute is routed via
+        # bender_routing_spec.BENDER_ROUTING to its canonical schema key:
+        #   * tier == 'metadata'   -> written here into 01_Metadata under route['key']
+        #   * tier == 'timeseries' -> already written per-trial above (skip here)
+        #   * in EXCLUDED / underscore / None -> skipped
+        #   * unmapped (neither routed nor excluded) -> preserved under 99_Unrouted + loud warning
+        # Canonical-only output, no dual-write. Many-to-one routes write the FIRST present source
+        # (subsequent sources for the same key are skipped) to avoid dataset collisions.
+        # Pass A -- write canonical metadata. Iterate the LEDGER (not bender.__dict__) so that
+        # @property-backed routed attributes (e.g. daq_ai_sample_rate_hz) are captured; instance
+        # __dict__ never contains properties. Many-to-one routes write the FIRST present source
+        # (ledger insertion order) to avoid dataset collisions.
+        special_metadata = {'inertial_calibration_profile'}  # written as a subgroup above
+        written_keys: set = set()
+        for name, route in BENDER_ROUTING.items():
+            if route.get('tier') != 'metadata' or name in special_metadata:
                 continue
-            _store_h5_metadata_value(g_settings, k, v)
+            key = route['key']
+            if key in written_keys:
+                continue
+            value = getattr(bender, name, None)
+            if value is None:
+                continue
+            if name == 'input_channels':
+                # daq_ai_channel_map: zip channels with their identities -> index:identity map.
+                names = list(getattr(bender, 'input_channel_names', []) or [])
+                chans = list(value)
+                cmap = {str(ix): f'{ch}:{nm}' for ix, (ch, nm) in enumerate(zip(chans, names))}
+                if _store_metadata_canonical(g_meta, key, cmap):
+                    written_keys.add(key)
+            elif name == 'block_sequence':
+                # protocol_block_sequence: list-of-dicts block plan -> JSON string (PI decision).
+                try:
+                    payload = json.dumps(value, default=str)
+                except Exception:
+                    payload = str(value)
+                g_meta.attrs.create(key, payload, dtype=h5py.special_dtype(vlen=str))
+                written_keys.add(key)
+            elif _store_metadata_canonical(g_meta, key, value):
+                written_keys.add(key)
 
-        # Full config-file provenance: write every public config attribute directly into
-        # 01_Metadata under its EXACT config field name. Additive only — any name that already
-        # exists as an attribute, dataset, or subgroup of 01_Metadata is left untouched so the
-        # established HDF5 / R-pipeline contract is preserved.
-        for cfg_key, cfg_val in _iter_public_config_fields(getattr(bender, 'config_name', '')):
-            if cfg_val is None:
+        # Pass B -- unmapped detection over the instance __dict__: any public attribute that is
+        # neither routed nor excluded is preserved (lossless) under 99_Unrouted with a loud warning.
+        unrouted: Dict[str, Any] = {}
+        for name, value in list(vars(bender).items()):
+            if name.startswith('_') or value is None:
                 continue
-            if cfg_key in g_meta.attrs or cfg_key in g_meta:
+            if name in BENDER_ROUTING or name in EXCLUDED:
                 continue
-            _store_config_field(g_meta, cfg_key, cfg_val)
+            unrouted[name] = value
+        if unrouted:
+            g_un = f.create_group('99_Unrouted')
+            for name, value in unrouted.items():
+                _store_metadata_canonical(g_un, name, value)
+            logging.warning(
+                'export_primary_h5: %d unrouted Bender attribute(s) preserved under 99_Unrouted '
+                '(add each to BENDER_ROUTING or EXCLUDED in bender_routing_spec.py): %s',
+                len(unrouted), sorted(unrouted),
+            )
 
     msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})'
     return {

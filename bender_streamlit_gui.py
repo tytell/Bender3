@@ -3937,7 +3937,7 @@ def _render_simulation_controls() -> None:
         )
     b = st.session_state.get('bender')
     if b is not None:
-        b.simulation_mode = bool(st.session_state.get('gui_simulation_mode', False))
+        b.session_simulated = bool(st.session_state.get('gui_simulation_mode', False))
         b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
 
 
@@ -6651,7 +6651,7 @@ def _render_sidebar() -> None:
             st.session_state['gui_simulation_mode'] = False
             _b = st.session_state.get('bender')
             if _b is not None:
-                _b.simulation_mode = False
+                _b.session_simulated = False
         elif _route == 'scratch':
             pass
         else:
@@ -7245,7 +7245,7 @@ def main():
                             'Apparatus ID',
                             key='gui_cfg_bld_apparatus_id',
                             placeholder='e.g. bender',
-                            help='Rig identity label written to `01_Metadata/apparatus_id`. Empty value accepted.',
+                            help='Rig identity label written to `01_Metadata/session_apparatus_id`. Empty value accepted.',
                         )
                         st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
                         st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
@@ -8710,11 +8710,11 @@ def main():
                 _mark_data_path_applied()
             notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
             try:
-                b.simulation_mode = bool(st.session_state.get('gui_simulation_mode', False))
+                b.session_simulated = bool(st.session_state.get('gui_simulation_mode', False))
                 b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
                 _acq_label = (
                     'Simulating acquisition (no DAQ)…'
-                    if b.simulation_mode
+                    if b.session_simulated
                     else 'Acquiring (DAQ)…'
                 )
                 _status_factory = getattr(st, 'status', None)

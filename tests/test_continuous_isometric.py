@@ -37,7 +37,7 @@ def _bender():
 
 def _sim_bender():
     b = _bender()
-    b.simulation_mode = True
+    b.session_simulated = True
     b.device_name = 'SimDev'
     return b
 

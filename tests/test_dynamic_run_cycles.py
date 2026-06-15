@@ -101,7 +101,7 @@ def _minimal_sweep_bender():
     b.amplitude_frequency_exponent = 0.0
     b.is_stim = False
     b.stim_pulse_rate = 75.0
-    b.simulation_mode = True
+    b.session_simulated = True
     return b
 
 

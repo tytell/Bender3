@@ -138,7 +138,7 @@ def _minimal_dynamic_bender(hold):
     b.stim_cycles_in_step = []
     b.stim_pulse_rate = 75.0
     b.is_stim = False
-    b.simulation_mode = False
+    b.session_simulated = False
     b.hold_motor_between_steps = hold
     # Keep the mocked acquisition fast: the pre-energize dwell is real wall-clock sleep.
     b.motor_enable_dwell_s = 0.01
