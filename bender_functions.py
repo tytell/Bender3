@@ -2540,6 +2540,25 @@ class Bender:
 
             # set up the input sample frequency
             # just records as many samples as are in the output
+            # [H2-DIAG] read-only instrumentation for NI -200361 (input overrun). Logs the
+            # effective AI throughput feeding the FINITE buffer. Remove once the cause is found.
+            try:
+                _h2_rate = float(self.daq_ai_sample_rate_hz)
+                _h2_t = np.asarray(self.t, dtype=float)
+                _h2_samps = int(_h2_t.size)
+                _h2_dt = float(_h2_t[1] - _h2_t[0]) if _h2_samps >= 2 else float('nan')
+                _h2_inv_dt = (1.0 / _h2_dt) if (_h2_dt == _h2_dt and _h2_dt != 0.0) else float('nan')
+                _h2_nchan = int(len(self.input_channels))
+                _h2_throughput = _h2_rate * _h2_nchan
+                _h2_buf_bytes = _h2_samps * _h2_nchan * 8
+                print(
+                    f"[H2-DIAG] ai_rate_hz={_h2_rate:.6g} dt_s={_h2_dt:.6g} 1/dt={_h2_inv_dt:.6g} "
+                    f"samps_per_chan={_h2_samps} n_channels={_h2_nchan} "
+                    f"throughput_samps_per_s={_h2_throughput:.6g} est_buffer_bytes={_h2_buf_bytes}",
+                    flush=True,
+                )
+            except Exception as _h2_exc:
+                print(f"[H2-DIAG] diagnostic failed (non-fatal): {_h2_exc!r}", flush=True)
             analog_in.timing.cfg_samp_clk_timing(self.daq_ai_sample_rate_hz,
                                                 sample_mode=daq.AcquisitionType.FINITE,
                                                 samps_per_chan=len(self.t))
