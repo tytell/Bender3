@@ -3000,8 +3000,28 @@ def _repair_data_path_fields_from_session() -> None:
         st.session_state['gui_data_filename'] = fn_base or fn
         return
 
+    # If the folder was culled by Streamlit's widget GC (e.g. because Section 2 did not
+    # render on the config-Load rerun), reseed from b.outputfile — the authoritative copy
+    # that lives on the Bender object and is never culled.  Only safe when the operator has
+    # already committed a path (gui_data_path_committed=True) so we are restoring a known-
+    # good value, not inventing one.
+    if not folder and st.session_state.get('gui_data_path_committed'):
+        _b = st.session_state.get('bender')
+        _outp = str(getattr(_b, 'outputfile', '') or '').strip() if _b is not None else ''
+        if _outp:
+            _outp_norm = _normpath_cross_platform(_outp)
+            _rep_dir, _rep_base = _split_path_cross_platform(_outp_norm)
+            if _rep_dir:
+                st.session_state['gui_data_folder'] = _rep_dir
+                folder = _rep_dir
+            if not fn and _rep_base:
+                st.session_state['gui_data_filename'] = _rep_base
+                fn = _rep_base
+            if folder and fn:
+                return
+
     sig = st.session_state.get('gui_data_path_applied_sig')
-    if not isinstance(sig, (list, tuple)) or len(sig) != 2:
+    if not isinstance(sig, (list, tuple)) or len(sig) != 3:
         return
     vals = [str(v or '').strip() for v in sig]
     vals = [v for v in vals if v]
@@ -6985,11 +7005,6 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                     st.session_state['gui_pending_cfg_build_base'] = eff
                     st.session_state.pop('gui_cfg_build_seeded_for', None)
                     st.success(f'Loaded `{eff}`')
-                    print(
-                        '[DBG-cull] PRE-RERUN(load) gui_data_folder='
-                        f'{st.session_state.get("gui_data_folder")!r}',
-                        flush=True,
-                    )
                     st.rerun()
 
     _display_mod = _eff_mod or _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
@@ -7066,11 +7081,6 @@ def main():
         _autosave_tick()
         return
 
-    print(
-        '[DBG-cull] RUN-TOP gui_data_folder='
-        f'{st.session_state.get("gui_data_folder")!r}',
-        flush=True,
-    )
     _flush_pending_load_config_session()
     _consume_pending_morphometrics_template()
     _refresh_confirmation_flags()
