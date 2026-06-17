@@ -3208,7 +3208,9 @@ def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
             st.session_state.pop('gui_loaded_cfg_abs_path', None)
         b0 = st.session_state['bender']
         outp0 = str(getattr(b0, 'outputfile', '') or '').strip()
-        if outp0:
+        # Only seed the data path from the config when the operator has NOT already committed one.
+        # A config reload must never overwrite a folder/filename the operator applied (one-way flow).
+        if outp0 and not bool(st.session_state.get('gui_data_path_committed')):
             n0 = os.path.normpath(outp0)
             st.session_state['gui_pending_data_folder'] = os.path.dirname(n0) or ''
             st.session_state['gui_pending_data_filename'] = os.path.basename(n0)
@@ -3374,6 +3376,11 @@ def _mark_morpho_applied() -> None:
 
 def _mark_data_path_applied() -> None:
     st.session_state['gui_data_path_applied_sig'] = _data_path_fingerprint()
+    # Durable "the operator committed a data path" flag. Unlike the applied-sig (which
+    # _ensure_apply_tracking_bender wipes on every Bender swap, i.e. on config reload), this
+    # survives a config reload so the reload cannot reseed/clobber a committed folder/filename.
+    # Cleared only by _reset_workflow_session_to_home (Start fresh).
+    st.session_state['gui_data_path_committed'] = True
 
 
 def _mark_procedure_applied() -> None:
