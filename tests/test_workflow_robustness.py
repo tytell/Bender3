@@ -309,9 +309,12 @@ def test_repair_data_path_from_applied_signature():
     _clear_streamlit_session_state()
     st.session_state['gui_data_folder'] = ''
     st.session_state['gui_data_filename'] = ''
+    # _data_path_fingerprint() is a 3-tuple (folder, filename, session_date); a full path pasted
+    # into the filename slot must still be split back into folder + filename.
     st.session_state['gui_data_path_applied_sig'] = (
         '',
         r'C:\Users\jimen\Desktop\BenderCode\Bender_PC2026\TestData\demo.h5',
+        '',
     )
     gui._repair_data_path_fields_from_session()
     assert st.session_state['gui_data_folder'].lower().endswith('testdata')

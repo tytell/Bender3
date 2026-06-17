@@ -3000,26 +3000,6 @@ def _repair_data_path_fields_from_session() -> None:
         st.session_state['gui_data_filename'] = fn_base or fn
         return
 
-    # If the folder was culled by Streamlit's widget GC (e.g. because Section 2 did not
-    # render on the config-Load rerun), reseed from b.outputfile — the authoritative copy
-    # that lives on the Bender object and is never culled.  Only safe when the operator has
-    # already committed a path (gui_data_path_committed=True) so we are restoring a known-
-    # good value, not inventing one.
-    if not folder and st.session_state.get('gui_data_path_committed'):
-        _b = st.session_state.get('bender')
-        _outp = str(getattr(_b, 'outputfile', '') or '').strip() if _b is not None else ''
-        if _outp:
-            _outp_norm = _normpath_cross_platform(_outp)
-            _rep_dir, _rep_base = _split_path_cross_platform(_outp_norm)
-            if _rep_dir:
-                st.session_state['gui_data_folder'] = _rep_dir
-                folder = _rep_dir
-            if not fn and _rep_base:
-                st.session_state['gui_data_filename'] = _rep_base
-                fn = _rep_base
-            if folder and fn:
-                return
-
     sig = st.session_state.get('gui_data_path_applied_sig')
     if not isinstance(sig, (list, tuple)) or len(sig) != 3:
         return
@@ -3046,6 +3026,34 @@ def _repair_data_path_fields_from_session() -> None:
         if b_dir and a_base:
             st.session_state['gui_data_folder'] = _normpath_cross_platform(b)
             st.session_state['gui_data_filename'] = a_base
+
+
+def _reseed_data_path_from_bender_if_committed() -> None:
+    """Restore the data-path pair after a Streamlit widget-GC cull, before Section 2 binds.
+
+    The config-Load ``st.rerun()`` halts that pass before the ``gui_data_folder`` widget is
+    instantiated, so Streamlit's widget garbage collector drops ``gui_data_folder`` /
+    ``gui_data_filename`` for the next run (proven present->absent across the rerun). ``b.outputfile``
+    lives on the ``Bender`` and is never culled, so it is the authoritative copy to restore from.
+
+    Called unconditionally at run-top (no per-rerun guard that could let a cull slip through). It
+    acts only when the operator has already committed a path (``gui_data_path_committed``) and the
+    folder key is blank/missing, so it restores a known-good value and never invents one. Replaces
+    the earlier post-hoc repair arm that only fired when its conditions happened to hold.
+    """
+    if not bool(st.session_state.get('gui_data_path_committed')):
+        return
+    if str(st.session_state.get('gui_data_folder') or '').strip():
+        return
+    b = st.session_state.get('bender')
+    outp = str(getattr(b, 'outputfile', '') or '').strip() if b is not None else ''
+    if not outp:
+        return
+    rep_dir, rep_base = _split_path_cross_platform(_normpath_cross_platform(outp))
+    if rep_dir:
+        st.session_state['gui_data_folder'] = rep_dir
+    if rep_base and not str(st.session_state.get('gui_data_filename') or '').strip():
+        st.session_state['gui_data_filename'] = rep_base
 
 
 def _section2_destination_incomplete() -> bool:
@@ -3230,31 +3238,21 @@ def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
         outp0 = str(getattr(b0, 'outputfile', '') or '').strip()
         # Only seed the data path from the config when the operator has NOT already committed one.
         # A config reload must never overwrite a folder/filename the operator applied (one-way flow).
-        print(
-            f'[DBG-datapath] queue-guard enter: committed={st.session_state.get("gui_data_path_committed")!r} '
-            f'outp0={outp0!r} cur_folder={st.session_state.get("gui_data_folder")!r}',
-            flush=True,
-        )
         if outp0 and not bool(st.session_state.get('gui_data_path_committed')):
             n0 = os.path.normpath(outp0)
             st.session_state['gui_pending_data_folder'] = os.path.dirname(n0) or ''
             st.session_state['gui_pending_data_filename'] = os.path.basename(n0)
-            print(
-                f'[DBG-datapath] queue-guard QUEUED pending: folder={st.session_state.get("gui_pending_data_folder")!r} '
-                f'filename={st.session_state.get("gui_pending_data_filename")!r}',
-                flush=True,
-            )
-        else:
-            print(
-                '[DBG-datapath] queue-guard SKIPPED pending (committed True or outp0 empty)',
-                flush=True,
-            )
         _meta0 = getattr(b0, 'h5_protocol_metadata', {}) or {}
         st.session_state['gui_pending_genus_species'] = str(_meta0.get('specimen_genusspecies', '') or '')
         st.session_state['gui_pending_specimen_id'] = str(_meta0.get('specimen_id', '') or '')
         st.session_state['gui_pending_post_notes'] = str(getattr(b0, 'post_trial_notes', '') or '')
-        _init_morphometrics_session_state(b0, force=True)
-        _clear_fld_session_keys()
+        # Preserve-on-reload: a config reload must not force-overwrite values the operator has
+        # already committed. Only force-reseed morphometrics / clear procedure fields when the
+        # respective commit flag is unset; committed values stay and show dirty until re-Apply.
+        if not bool(st.session_state.get('gui_measurements_confirmed')):
+            _init_morphometrics_session_state(b0, force=True)
+        if not bool(st.session_state.get('gui_protocol_confirmed')):
+            _clear_fld_session_keys()
         st.session_state.pop('gui_tpl_morpho_done', None)
         return None
     except ImportError as e:
@@ -3416,11 +3414,6 @@ def _mark_data_path_applied() -> None:
     # survives a config reload so the reload cannot reseed/clobber a committed folder/filename.
     # Cleared only by _reset_workflow_session_to_home (Start fresh).
     st.session_state['gui_data_path_committed'] = True
-    print(
-        f'[DBG-datapath] _mark_data_path_applied FIRED: committed={st.session_state.get("gui_data_path_committed")!r} '
-        f'folder={st.session_state.get("gui_data_folder")!r} filename={st.session_state.get("gui_data_filename")!r}',
-        flush=True,
-    )
 
 
 def _mark_procedure_applied() -> None:
@@ -3477,6 +3470,41 @@ def _procedure_ready_for_run() -> tuple[bool, str]:
             'Click **Apply procedure** or **Refresh experiment preview** before **Run experiment**.',
         )
     return True, ''
+
+
+def _run_export_blocked_reason(b: Optional[Bender]) -> Optional[str]:
+    """Hard backstop for the Run/Export actions: the safety the rendering gate used to enforce.
+
+    Returns a friendly reason when acquisition + export must be refused, or ``None`` when it is
+    safe to proceed. This is the point-of-consequence guard: it holds regardless of whether any
+    section is shown, so a run can never start (and waste an acquisition) without a loaded config
+    and a resolvable output destination. Uses existing read-only predicates only.
+    """
+    if b is None:
+        return 'No hardware config loaded — select a config in section 1 and click **Apply setup** first.'
+    if not _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or '')):
+        return 'No hardware config selected — choose a config in section 1 and click **Apply setup**.'
+    if _section2_destination_incomplete():
+        return 'No output path — set a **Data folder** (or file name) in section 2 and click **Apply setup**.'
+    if not _setup_ready(b):
+        return 'Setup not applied — click **Apply setup** to commit the config and data path before running.'
+    return None
+
+
+def _render_no_config_placeholder() -> None:
+    """Null-safe stand-in for the experiment pane when no hardware config is loaded.
+
+    Replaces the old silent ``st.stop()`` gate: instead of a blank halt, the operator sees a
+    clear pointer back to section 1. The downstream sections are intrinsically derived from the
+    loaded ``Bender`` (protocol schema, morphometrics), so there is nothing to render until a
+    config exists — but the page no longer dead-ends without explanation.
+    """
+    st.info(
+        'Load a hardware config first. Choose a config in **section 1 · Hardware configuration** '
+        'and click **Apply setup** — the specimen, clamp, procedure, and run sections appear once '
+        'a config is loaded.',
+        icon='⚙️',
+    )
 
 
 def _soft_apply_reminder() -> None:
@@ -4061,13 +4089,6 @@ def _flush_pending_load_config_session():
     """
     _data_path_applied = 'gui_data_path_applied_sig' in st.session_state
     _specimen_applied = bool(st.session_state.get('gui_measurements_confirmed'))
-    print(
-        f'[DBG-datapath] flush enter: pending_folder_present={"gui_pending_data_folder" in st.session_state} '
-        f'_data_path_applied(sig_present)={_data_path_applied} '
-        f'committed={st.session_state.get("gui_data_path_committed")!r} '
-        f'cur_folder={st.session_state.get("gui_data_folder")!r}',
-        flush=True,
-    )
 
     if 'gui_pending_genus_species' in st.session_state:
         _pending_gs = st.session_state.pop('gui_pending_genus_species')
@@ -4079,25 +4100,12 @@ def _flush_pending_load_config_session():
             st.session_state['gui_specimen_id'] = _pending_sid
     if 'gui_pending_data_folder' in st.session_state:
         _pending_folder = str(st.session_state.pop('gui_pending_data_folder') or '').strip()
-        _cur_folder = str(st.session_state.get('gui_data_folder') or '').strip()
-        _folder_guard = (not _data_path_applied and (_pending_folder or not _cur_folder))
-        print(
-            f'[DBG-datapath] flush folder-write: _data_path_applied={_data_path_applied} '
-            f'committed={st.session_state.get("gui_data_path_committed")!r} '
-            f'pending_folder={_pending_folder!r} cur_folder={_cur_folder!r} '
-            f'guard_overwrite={bool(_folder_guard)}',
-            flush=True,
-        )
         # Seed only when: (a) no applied-sig is present AND (b) no durable committed flag AND
         # (c) the pending value is non-empty.  Never write an empty string from pending — that
         # would blank the widget when the config's outputfile has no directory component.
         _committed = bool(st.session_state.get('gui_data_path_committed'))
         if not _data_path_applied and not _committed and _pending_folder:
             st.session_state['gui_data_folder'] = _pending_folder
-            print(
-                f'[DBG-datapath] flush folder-write OVERWROTE gui_data_folder -> {_pending_folder!r}',
-                flush=True,
-            )
     if 'gui_pending_data_filename' in st.session_state:
         _pending_file = str(st.session_state.pop('gui_pending_data_filename') or '').strip()
         _cur_file = str(st.session_state.get('gui_data_filename') or '').strip()
@@ -7085,8 +7093,10 @@ def main():
     _consume_pending_morphometrics_template()
     _refresh_confirmation_flags()
     _sanitize_stale_run_state()
-    # Repair data-path fields from persisted signatures before any widget binds to
-    # gui_data_folder / gui_data_filename (Streamlit forbids mutating those keys later).
+    # Restore the data-path pair from the Bender (committed) when Streamlit's widget GC culled it
+    # on a config-Load rerun, then repair from persisted signatures. Both run before any widget
+    # binds to gui_data_folder / gui_data_filename (Streamlit forbids mutating those keys later).
+    _reseed_data_path_from_bender_if_committed()
     _repair_data_path_fields_from_session()
 
     _render_app_chrome()
@@ -7623,10 +7633,16 @@ def main():
         if _load_save_button('Apply setup', key='gui_setup_apply_bottom', help=_apply_hlp):
             _apply_setup_action(sw_dp=bool(_sw_dp))
 
-    if 'bender' not in st.session_state:
-        st.stop()
+    # No rendering gate: the experiment pane always renders once a config is loaded. With no
+    # config there is no Bender to derive sections from, so show a null-safe placeholder and
+    # return (run/export safety is enforced at the point of consequence by
+    # _run_export_blocked_reason, not by hiding UI).
+    b: Optional[Bender] = st.session_state.get('bender')
+    if b is None:
+        _render_no_config_placeholder()
+        _autosave_tick()
+        return
 
-    b: Bender = st.session_state['bender']
     _ensure_apply_tracking_bender(b)
     _init_morphometrics_session_state(b, force=False)
     _rehydrate_missing_morphometrics_from_bender(b)
@@ -8793,6 +8809,10 @@ def main():
         def _execute_run() -> None:
             if bool(st.session_state.get('gui_run_in_progress', False)):
                 st.warning('A run is already in progress.')
+                return
+            _blocked = _run_export_blocked_reason(b)
+            if _blocked:
+                st.error(_blocked)
                 return
             _proc_ok, _proc_msg = _procedure_ready_for_run()
             if not _proc_ok:
