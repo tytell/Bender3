@@ -11,7 +11,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 # Hardware config modules live here (relative to the project root) after the templates reorg.
-_CONFIG_TEMPLATE_DIR = os.path.join('templates', 'configs')
+_CONFIG_TEMPLATE_DIR = os.path.join('templates')
 
 # Skip framework / app modules when scanning the project folder.
 _SKIP_NAME_PREFIXES = (
