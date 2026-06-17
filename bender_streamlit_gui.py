@@ -7540,10 +7540,11 @@ def main():
                     )
             full_out = _compose_output_h5_path()
             if full_out:
-                # Show "selected" state immediately; committing to the in-memory experiment still requires "Apply setup".
-                b0 = st.session_state.get('bender')
-                applied = str(getattr(b0, 'outputfile', '') or '').strip() if b0 is not None else ''
-                if applied and _paths_equal_norm(applied, full_out):
+                # Banner clears as soon as the operator has committed a data path (gui_data_path_committed).
+                # The old b.outputfile == _compose_output_h5_path() string comparison was unreliable because
+                # _compose_output_h5_path() is non-deterministic (NN disk scan, sim prefix, protocol token),
+                # so the banner never cleared even after a successful Apply.
+                if bool(st.session_state.get('gui_data_path_committed')):
                     st.success(f'**Save path:** `{full_out}`')
                 else:
                     st.success(f'**Save path:** `{full_out}` (selected, not applied yet — click **Apply setup**)')
