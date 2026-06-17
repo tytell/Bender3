@@ -365,7 +365,7 @@ class Bender:
         try:
             self.loadCalibration(self.forcetorque_calibration_file)
         except Exception as e:
-            print(f"⚠️ WARNING: Calibration failed to load: {e}")
+            print(f"[warn] WARNING: Calibration failed to load: {e}")
         if not hasattr(self, 'calibration') or self.calibration is None:
             self.calibration = np.eye(6, dtype=float)
 
@@ -1110,7 +1110,7 @@ class Bender:
                 try:
                     self.load_inertial_calibration_file(cal_file)
                 except Exception as e:
-                    print(f"⚠️ Inertial calibration file could not be loaded: {e}")
+                    print(f"[warn] Inertial calibration file could not be loaded: {e}")
             prof = getattr(self, 'inertial_calibration_profile', None)
             idx_t = self._primary_torque_index()
             # Raw primary torque only; the inertial correction is applied post-hoc in R. Record
@@ -1122,7 +1122,7 @@ class Bender:
             self.inertial_system_from_profile = bool(use_cal and isinstance(prof, dict))
             self.inertial_specimen_from_geometry = bool(self._specimen_moi_for_inertial_torque() > 0)
         else:
-            print("⚠️ Warning: Could not find all 6 SG channels for Force/Torque calibration.")
+            print("[warn] Could not find all 6 SG channels for Force/Torque calibration.")
 
           # --- Process Sonometer (Checks if they exist in config first) ---
         self.sono_left_mm = None
@@ -1132,13 +1132,13 @@ class Bender:
         if 'sono_left' in self.input_channel_names:
             raw_l = self.get_data_by_name('sono_left')
             self.sono_left_mm = self.apply_calibration_sono(raw_l, self.sono_cal_left)
-            print(f"📏 Sonometer (Left) Calibrated: {np.mean(self.sono_left_mm):.2f} mm")
+            print(f"[sono] Sonometer (Left) Calibrated: {np.mean(self.sono_left_mm):.2f} mm")
 
         # Look for 'sono_right' in master name list
         if 'sono_right' in self.input_channel_names:
             raw_r = self.get_data_by_name('sono_right')
             self.sono_right_mm = self.apply_calibration_sono(raw_r, self.sono_cal_right)
-            print(f"📏 Sonometer (Right) Calibrated: {np.mean(self.sono_right_mm):.2f} mm")
+            print(f"[sono] Sonometer (Right) Calibrated: {np.mean(self.sono_right_mm):.2f} mm")
 
         # --- 3. Process Stim Monitor (ONLY if it exists) ---
         if 'stim_monitor' in self.input_channel_names:
@@ -5629,7 +5629,7 @@ class Bender:
         print(f"{'PHYSICS CONFIGURATION REPORT':^50}")
         print("="*50)
         print(f"{'Mode':<25} | {mode:<21}")
-        print(f"{'Total Rotating MOI':<25} | {self.i_total_system:<12.2f} | g*mm²")
+        print(f"{'Total Rotating MOI':<25} | {self.i_total_system:<12.2f} | g*mm^2")
         print(f"{'Lever Arm (r)':<25} | {r_cm:<12.2f} | mm")
         print(f"{'Specimen Mass':<25} | {m_spec:<12.2f} | g")
         print("-" * 50)

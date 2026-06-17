@@ -34,6 +34,18 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+# Reconfigure stdout/stderr to UTF-8 so that any non-ASCII character printed by
+# bender_functions.py (e.g. during a dynamic run) cannot raise UnicodeEncodeError
+# on Windows terminals whose default encoding is cp1252. errors='replace' ensures
+# a bad codepoint emits '?' rather than aborting a live hardware acquisition.
+for _stream_name in ('stdout', 'stderr'):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream is not None and hasattr(_stream, 'reconfigure'):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
 # Project root on path for `bender_functions` and config modules
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _LOGO_PATH = os.path.join(_ROOT, 'assets', 'jimenez_biomechanics_logo.png')
