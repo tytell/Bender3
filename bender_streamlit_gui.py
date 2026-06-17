@@ -6985,6 +6985,11 @@ def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware c
                     st.session_state['gui_pending_cfg_build_base'] = eff
                     st.session_state.pop('gui_cfg_build_seeded_for', None)
                     st.success(f'Loaded `{eff}`')
+                    print(
+                        '[DBG-cull] PRE-RERUN(load) gui_data_folder='
+                        f'{st.session_state.get("gui_data_folder")!r}',
+                        flush=True,
+                    )
                     st.rerun()
 
     _display_mod = _eff_mod or _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
@@ -7061,6 +7066,11 @@ def main():
         _autosave_tick()
         return
 
+    print(
+        '[DBG-cull] RUN-TOP gui_data_folder='
+        f'{st.session_state.get("gui_data_folder")!r}',
+        flush=True,
+    )
     _flush_pending_load_config_session()
     _consume_pending_morphometrics_template()
     _refresh_confirmation_flags()
