@@ -1039,8 +1039,10 @@ def _load_save_button(
 
 
 def _shared_experiment_dir() -> str:
-    """Protocol & morphometrics JSON files use the same folder as **Data folder** (section 2) when it exists."""
-    d = str(st.session_state.get('gui_data_folder') or '').strip()
+    """Protocol & morphometrics JSON templates use the **Templates folder** (section 2) when it is
+    set and exists on disk; otherwise fall back to the app default templates folder. Never sourced
+    from **Data folder** (that anchors only the HDF5 output path)."""
+    d = str(st.session_state.get('gui_templates_folder') or '').strip()
     if d:
         norm = os.path.normpath(d)
         if os.path.isdir(norm):
@@ -6870,11 +6872,17 @@ def _data_folder_dropdown_choice_list(current_folder: str) -> list[str]:
 
 def _render_data_folder_dropdown(*, key_suffix: str) -> None:
     """
-    Browser-native folder entry: text input accepts pasted folder paths.
+    Two browser-native folder entries (both blank by default; placeholders are display-only hints):
+      * **Data folder** (``gui_data_folder``) — anchors the HDF5 output path.
+      * **Templates folder** (``gui_templates_folder``) — lists/saves protocol & morphometrics
+        ``.json`` templates. Falls back to the app default templates folder when blank.
+    Text inputs accept pasted folder paths. Placeholder text is never read as a value.
     """
     _ = key_suffix
     if 'gui_data_folder' not in st.session_state:
         st.session_state['gui_data_folder'] = ''
+    if 'gui_templates_folder' not in st.session_state:
+        st.session_state['gui_templates_folder'] = ''
 
     def _on_folder_text_change() -> None:
         raw = str(st.session_state.get('gui_data_folder') or '').strip()
@@ -6887,6 +6895,7 @@ def _render_data_folder_dropdown(*, key_suffix: str) -> None:
         'Data folder',
         key='gui_data_folder',
         on_change=_on_folder_text_change,
+        placeholder='Paste a folder path for HDF5 output',
         help=(
             'Paste a folder path. The full HDF5 path is **folder + file name** '
             'shown below. Native **Browse…** may not work on remote desktops or hosted Streamlit.'
@@ -6898,6 +6907,22 @@ def _render_data_folder_dropdown(*, key_suffix: str) -> None:
             st.success('✅ Folder found')
         else:
             st.error('❌ Folder not found — check path')
+
+    templates_folder = st.text_input(
+        'Templates folder',
+        key='gui_templates_folder',
+        placeholder='Paste a folder for protocol / morphometrics templates (.json)',
+        help=(
+            'Folder used to list and save protocol and morphometrics templates (`.json`). '
+            'Leave blank to use the app default templates folder. Separate from **Data folder**.'
+        ),
+    )
+    templates_folder = str(templates_folder or '').strip()
+    if templates_folder:
+        if os.path.isdir(templates_folder):
+            st.success('✅ Templates folder found')
+        else:
+            st.error('❌ Templates folder not found — check path')
 
 
 def _pick_file_with_dialog(initial_dir: str, *, title: str, filetypes: list[tuple[str, str]]) -> tuple[Optional[str], Optional[str]]:
@@ -7698,12 +7723,12 @@ def main():
                     txt_s,
                 )
         with st.expander('Load / save morphometrics templates', expanded=False):
-            st.caption('Optional: reuse morphometrics snapshots (`.json`) in your selected data folder.')
-            _df_check = str(st.session_state.get('gui_data_folder') or '').strip()
+            st.caption('Optional: reuse morphometrics snapshots (`.json`) in your selected **Templates folder**.')
+            _tf_check = str(st.session_state.get('gui_templates_folder') or '').strip()
             _morpho_tpl_dir = _shared_experiment_dir()
-            if not (_df_check and os.path.isdir(os.path.normpath(_df_check))):
+            if not (_tf_check and os.path.isdir(os.path.normpath(_tf_check))):
                 st.caption(
-                    f'**Data folder** is not set or not found on disk—listing saved template files from `{_morpho_tpl_dir}` until '
+                    f'**Templates folder** is not set or not found on disk—listing saved template files from `{_morpho_tpl_dir}` until '
                     '**section 2** points to a valid folder.'
                 )
             _morpho_tpl_list = list_morphometrics_template_files(_morpho_tpl_dir)
@@ -8065,7 +8090,7 @@ def main():
                 _tpl_options_top,
                 format_func=_protocol_template_option_label,
                 key='gui_protocol_template_select',
-                help='Procedure files saved from this app (`.json` in the data folder).',
+                help='Procedure files saved from this app (`.json` in the **Templates folder**).',
             )
             if _load_save_button(
                 'Load template into form',

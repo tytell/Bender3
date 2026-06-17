@@ -436,8 +436,11 @@ def test_morphometrics_load_populates_fields_and_keeps_data_folder(tmp_path):
     }
     data_folder = tmp_path / 'data'
     data_folder.mkdir()
-    # Put the template inside the data folder so the morphometrics selectbox lists it.
-    tpl_path = data_folder / 'repro_specimen.json'
+    templates_folder = tmp_path / 'templates'
+    templates_folder.mkdir()
+    # Templates live in the dedicated Templates folder so the morphometrics selectbox lists them
+    # (the Data folder now anchors only the HDF5 output path).
+    tpl_path = templates_folder / 'repro_specimen.json'
     tpl_path.write_text(json.dumps(tpl), encoding='utf-8')
 
     at = AppTest.from_file('bender_streamlit_gui.py')
@@ -445,7 +448,7 @@ def test_morphometrics_load_populates_fields_and_keeps_data_folder(tmp_path):
     at.session_state['gui_app_route'] = 'scratch'
     at.session_state['bender'] = Bender('jimenez_bender_config_A')
 
-    # First full render registers the Data folder + morphometrics widgets.
+    # First full render registers the Data folder + Templates folder + morphometrics widgets.
     at.run(timeout=120)
     assert not at.exception
 
@@ -453,6 +456,11 @@ def test_morphometrics_load_populates_fields_and_keeps_data_folder(tmp_path):
     at.text_input(key='gui_data_folder').set_value(str(data_folder)).run(timeout=120)
     assert not at.exception
     assert at.session_state['gui_data_folder'] == str(data_folder)
+
+    # Point the Templates folder at the folder holding the morphometrics template.
+    at.text_input(key='gui_templates_folder').set_value(str(templates_folder)).run(timeout=120)
+    assert not at.exception
+    assert at.session_state['gui_templates_folder'] == str(templates_folder)
 
     # Choose the template in the real selectbox (index 0 is the "— Choose —" sentinel).
     at.selectbox(key='gui_morphometrics_template_select').select_index(1).run(timeout=120)
