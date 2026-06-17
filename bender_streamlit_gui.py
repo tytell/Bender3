@@ -4002,24 +4002,44 @@ def _flush_pending_cfg_build_base() -> None:
 
 
 def _flush_pending_load_config_session():
-    """Apply deferred session updates before widgets bind to these keys (Streamlit restriction)."""
+    """Apply deferred session updates before widgets bind to these keys (Streamlit restriction).
+
+    One-way data flow: a config reload seeds fields that are blank/unapplied; it never
+    overwrites values the operator has already committed via an Apply button.
+
+    Guard signals checked here (before ``_ensure_apply_tracking_bender`` wipes them):
+    - ``gui_data_path_applied_sig`` present  → data path was applied; skip folder/filename.
+    - ``gui_measurements_confirmed`` True    → specimen identity was applied; skip specimen/genus.
+    - non-empty ``gui_post_notes``           → user typed notes; skip post-notes (no dedicated sig).
+    """
+    _data_path_applied = 'gui_data_path_applied_sig' in st.session_state
+    _specimen_applied = bool(st.session_state.get('gui_measurements_confirmed'))
+
     if 'gui_pending_genus_species' in st.session_state:
-        st.session_state['gui_genus_species'] = st.session_state.pop('gui_pending_genus_species')
+        _pending_gs = st.session_state.pop('gui_pending_genus_species')
+        if not _specimen_applied:
+            st.session_state['gui_genus_species'] = _pending_gs
     if 'gui_pending_specimen_id' in st.session_state:
-        st.session_state['gui_specimen_id'] = st.session_state.pop('gui_pending_specimen_id')
+        _pending_sid = st.session_state.pop('gui_pending_specimen_id')
+        if not _specimen_applied:
+            st.session_state['gui_specimen_id'] = _pending_sid
     if 'gui_pending_data_folder' in st.session_state:
         _pending_folder = str(st.session_state.pop('gui_pending_data_folder') or '').strip()
         _cur_folder = str(st.session_state.get('gui_data_folder') or '').strip()
-        # Do not clobber a user-picked folder with an empty pending value.
-        if _pending_folder or not _cur_folder:
+        # Seed if the user has not yet applied a data path; otherwise leave their applied path alone.
+        if not _data_path_applied and (_pending_folder or not _cur_folder):
             st.session_state['gui_data_folder'] = _pending_folder
     if 'gui_pending_data_filename' in st.session_state:
         _pending_file = str(st.session_state.pop('gui_pending_data_filename') or '').strip()
         _cur_file = str(st.session_state.get('gui_data_filename') or '').strip()
-        if _pending_file or not _cur_file:
+        if not _data_path_applied and (_pending_file or not _cur_file):
             st.session_state['gui_data_filename'] = _pending_file
     if 'gui_pending_post_notes' in st.session_state:
-        st.session_state['gui_post_notes'] = st.session_state.pop('gui_pending_post_notes')
+        _pending_notes = st.session_state.pop('gui_pending_post_notes')
+        # Only seed if the notes field is blank — no dedicated applied signal, but non-empty
+        # content means the operator typed something and it must not be clobbered.
+        if not str(st.session_state.get('gui_post_notes') or '').strip():
+            st.session_state['gui_post_notes'] = _pending_notes
     if 'gui_pending_load_cfg_file_path' in st.session_state:
         st.session_state['gui_load_cfg_file_path'] = st.session_state.pop('gui_pending_load_cfg_file_path')
 
