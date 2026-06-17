@@ -3506,7 +3506,7 @@ class Bender:
             )
             self.aidata = self.run(device_name=dev, is_terminal_release=True)
         except Exception as exc:
-            logging.warning(
+            logging.exception(
                 f"Terminal motor release segment failed ({exc}); motor may remain energized/held. "
                 "Use KILL DAQ to release if needed."
             )
