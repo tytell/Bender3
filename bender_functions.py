@@ -551,6 +551,10 @@ class Bender:
         self.dhoriz = 0.0
         self.clamp_plate_extension_mm = 0.0
         self.starting_angle_deg = 0.0
+        # Isovelocity timing defaults (GUI out-of-box). Existing getattr fallbacks (0.2 / 0.3)
+        # elsewhere are intentionally left as safety nets and are not the source of these defaults.
+        self.isovelocity_pre_hold_s = 1.0
+        self.isovelocity_iso_duration_s = 0.5
         # Extended biological identity — schema specimen_sex / specimen_muscle_type
         self.specimen_sex = ''
         self.specimen_muscle_type = ''
@@ -5815,13 +5819,14 @@ class Bender:
                 'isovelocity_min_vel', 'isovelocity_max_vel',
                 'isovelocity_starting_strain', 'isovelocity_starting_strain_mode',
                 'isovelocity_velocity_mode', 'isovelocity_num_steps',
+                'isovelocity_pre_hold_s', 'isovelocity_iso_duration_s',
                 'block_sequence', 'left_stim_voltage', 'right_stim_voltage',
                 'reset_max_speed_deg_per_s',
             ],
             'isovelocity_optional': [
                 'randomize_step_order',
-                'isovelocity_random_seed', 'isovelocity_iso_duration_s',
-                'isovelocity_pre_hold_s', 'rest_between_steps_s', 'reset_between_steps',
+                'isovelocity_random_seed',
+                'rest_between_steps_s', 'reset_between_steps',
                 'hold_motor_between_steps',
                 'isovelocity_stim_params',
             ],

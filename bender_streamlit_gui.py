@@ -1650,14 +1650,14 @@ RECRUITMENT_FIELD_HELP = (
 ISOVELOCITY_WIDGET_LABEL = {
     'isovelocity_min_vel': 'Minimum velocity',
     'isovelocity_max_vel': 'Maximum velocity',
-    'isovelocity_starting_strain': 'Starting posture',
+    'isovelocity_starting_strain': 'Ramp Starting Position',
     'isovelocity_num_steps': 'Number of velocity steps',
-    'isovelocity_starting_strain_mode': 'Unit for starting posture',
+    'isovelocity_starting_strain_mode': 'Unit for ramp starting position',
     'isovelocity_velocity_mode': 'Unit for min/max velocity',
     'isovelocity_randomize': 'Randomize order of velocity steps',
     'isovelocity_random_seed': 'Random seed (optional)',
-    'isovelocity_iso_duration_s': 'Constant-velocity bend duration (s)',
-    'isovelocity_pre_hold_s': 'Pre-hold at starting angle (s)',
+    'isovelocity_iso_duration_s': 'Ramp duration (s)',
+    'isovelocity_pre_hold_s': 'Hold before ramp (s)',
 }
 
 ISOVELOCITY_FIELD_HELP = {
@@ -1667,13 +1667,13 @@ ISOVELOCITY_FIELD_HELP = {
         'How **minimum** / **maximum velocity** are interpreted before conversion to motor deg/s '
         '(strain_rate, curvature_rate, or angle_vel).'
     ),
-    'isovelocity_starting_strain': 'Initial posture before each velocity step; interpreted with **starting strain mode** (e.g. decimal ε vs motor angle).',
-    'isovelocity_num_steps': 'How many commanded angular velocities between min and max (inclusive). Each is a separate trial from the same start posture.',
-    'isovelocity_starting_strain_mode': 'Whether **starting posture** is decimal ε, percent strain, curvature κ, or motor angle (deg).',
+    'isovelocity_starting_strain': 'Ramp starting position before each velocity step; interpreted with the **unit** selected below (e.g. decimal ε vs motor angle).',
+    'isovelocity_num_steps': 'How many commanded angular velocities between min and max (inclusive). Each is a separate trial from the same ramp starting position.',
+    'isovelocity_starting_strain_mode': 'Whether **ramp starting position** is decimal ε, percent strain, curvature κ, or motor angle (deg).',
     'isovelocity_randomize': 'Shuffle the order of velocity steps. Use **random seed** if you want the same order every time.',
     'isovelocity_random_seed': RANDOM_SEED_HELP,
-    'isovelocity_iso_duration_s': 'After the quiet **pre-hold**, how long (seconds) the motor holds **constant angular velocity** before the step ends. This is not the pre-hold time—that is **pre-hold**.',
-    'isovelocity_pre_hold_s': 'Time (s) at the starting posture before each trial’s constant-velocity segment begins.',
+    'isovelocity_iso_duration_s': 'After the **hold before ramp**, how long (seconds) the motor holds **constant angular velocity** (the ramp) before the step ends. This is not the hold time—that is **hold before ramp**.',
+    'isovelocity_pre_hold_s': 'Time (s) held at the ramp starting position before each trial’s constant-velocity ramp begins.',
     'recruitment': RECRUITMENT_FIELD_HELP,
     'lateral_mode': (
         'Expert only. Leave **blank** unless you need a custom stim-router label. Normal left/right/bilateral behavior '
@@ -1795,6 +1795,15 @@ _BLOCK_SEQUENCE_PROCEDURE_KEYS = frozenset({
     'left_stim_voltage',
     'right_stim_voltage',
 })
+
+# Shared label/help for the pre-experiment apparatus pose annotation (key gui_starting_angle_deg).
+# Defined once so the isovelocity-relocated render and the shared non-isovelocity render stay in sync.
+PRE_EXPERIMENT_START_POS_LABEL = 'Pre-Experiment starting position (deg)'
+PRE_EXPERIMENT_START_POS_HELP = (
+    'Physical pre-experiment starting position of the apparatus, measured by protractor before '
+    'the experiment. Reference annotation only — stored in HDF5 metadata to record the apparatus '
+    'pose. It does NOT affect motor commands or the commanded motion in any way.'
+)
 
 # Shared label/help for the speed-capped neutral-reset parameter. Rendered in the left "Required"
 # column of BOTH isometric and isovelocity (parallel placement, same default 15.0 deg/s).
@@ -2021,12 +2030,12 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
     pulse_width = _render_pulse_width_field(b)
     onset = float(
         st.number_input(
-            'Stim onset (s, relative to active-segment start)',
+            'Stim onset (s, rel. ramp start)',
             key=onset_sk,
             format='%.6g',
             help=(
-                'Signed seconds from constant-velocity segment start. Negative = pre-activation during '
-                'pre-hold; 0 = at segment start; positive = after.'
+                'Negative = during the hold, before the ramp. Cannot exceed the hold duration '
+                '(floor = -hold).'
             ),
         )
     )
@@ -2039,20 +2048,11 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
             help='How long stimulation runs from onset.',
         )
     )
+    # Item 6: "Return-to-home duration" is rendered in the Required (motion) column, not here.
+    # Read its value back from session_state so it still flows into
+    # isovelocity_stim_params['post_baseline_s'].
     post_baseline_sk = _widget_key('isovelocity_post_baseline_s')
-    post_baseline = float(
-        st.number_input(
-            'Post-ramp reset duration (s)',
-            key=post_baseline_sk,
-            format='%.6g',
-            min_value=0.0,
-            help=(
-                'After the constant-velocity segment, ramp the motor back to neutral (0 deg) over this '
-                'many seconds with stim off, recording continuously. Captures a post-stimulus baseline / '
-                'relaxation. Set 0 to disable.'
-            ),
-        )
-    )
+    post_baseline = float(st.session_state.get(post_baseline_sk, 1.0) or 0.0)
 
     # Validation guards apply only when stim will fire; disabled stim never blocks Apply so
     # values are preserved for pre-conditioning and tuning.
@@ -8194,7 +8194,7 @@ def main():
                                 if skm not in st.session_state:
                                     st.session_state[skm] = cur_m if cur_m in modes else 'angle'
                                 updates[key] = st.selectbox(
-                                    ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for starting posture'),
+                                    ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for ramp starting position'),
                                     modes,
                                     key=skm,
                                     format_func=_format_strain_or_amp_mode,
@@ -8213,6 +8213,23 @@ def main():
                                     format_func=_format_velocity_mode,
                                     help=ISOVELOCITY_FIELD_HELP.get(key),
                                 )
+                            elif key == 'isovelocity_starting_strain':
+                                lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                                updates[key] = _render_field(
+                                    b, key, 'float', lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                                )
+                                # Item 3: render the pre-experiment apparatus pose directly under
+                                # "Ramp Starting Position" for isovelocity. The shared render below the
+                                # panel is guarded out for isovelocity, so seed the key here BEFORE the
+                                # widget renders (the shared seed above is skipped for this view).
+                                if 'gui_starting_angle_deg' not in st.session_state:
+                                    st.session_state['gui_starting_angle_deg'] = 0.0
+                                st.number_input(
+                                    PRE_EXPERIMENT_START_POS_LABEL,
+                                    format='%.4g',
+                                    key='gui_starting_angle_deg',
+                                    help=PRE_EXPERIMENT_START_POS_HELP,
+                                )
                             else:
                                 kind = 'int' if 'num_steps' in key else 'float'
                                 lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
@@ -8221,6 +8238,26 @@ def main():
                                 )
                         if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
                             updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
+                        # Item 6: "Return-to-home duration" (post-ramp neutral reset) is a motion
+                        # parameter, so it renders here in the Required column. Seed its key BEFORE the
+                        # widget renders (the stim-column seed in _seed_isovelocity_stim_widget_state runs
+                        # later, in scol). The value is read back into isovelocity_stim_params
+                        # ['post_baseline_s'] inside _render_isovelocity_stim_fields.
+                        _pb_sk = _widget_key('isovelocity_post_baseline_s')
+                        if _pb_sk not in st.session_state:
+                            _sp_pb = _stim_params_dict_from_bender(b, 'isovelocity_stim_params')
+                            st.session_state[_pb_sk] = float(_sp_pb.get('post_baseline_s', 1.0) or 0.0)
+                        st.number_input(
+                            'Return-to-home duration (s)',
+                            key=_pb_sk,
+                            format='%.6g',
+                            min_value=0.0,
+                            help=(
+                                'After the constant-velocity ramp, return the motor to neutral (0 deg) over '
+                                'this many seconds with stim off, recording continuously. Captures a '
+                                'post-stimulus baseline / relaxation. Set 0 to disable.'
+                            ),
+                        )
                         st.markdown('**Optional**')
                         for key in schema['isovelocity_optional']:
                             if key == 'isovelocity_stim_params':
@@ -8322,18 +8359,17 @@ def main():
                     st.info(_stim_clamp)
 
                 st.divider()
-                if 'gui_starting_angle_deg' not in st.session_state:
-                    st.session_state['gui_starting_angle_deg'] = 0.0
-                st.number_input(
-                    'Starting angle (deg)',
-                    format='%.4g',
-                    key='gui_starting_angle_deg',
-                    help=(
-                        'Physical starting angle of the apparatus measured by protractor before '
-                        'the experiment. Reference annotation only — stored in HDF5 metadata, '
-                        'does not affect motor commands.'
-                    ),
-                )
+                # Isovelocity renders this directly under "Ramp Starting Position" (item 3); for all
+                # other protocols it stays here. Guarded so the key renders exactly once per run.
+                if tt != 'isovelocity':
+                    if 'gui_starting_angle_deg' not in st.session_state:
+                        st.session_state['gui_starting_angle_deg'] = 0.0
+                    st.number_input(
+                        PRE_EXPERIMENT_START_POS_LABEL,
+                        format='%.4g',
+                        key='gui_starting_angle_deg',
+                        help=PRE_EXPERIMENT_START_POS_HELP,
+                    )
                 if 'gui_protocol_show_save_template' not in st.session_state:
                     st.session_state['gui_protocol_show_save_template'] = False
                 _show_tpl_save = st.checkbox(
