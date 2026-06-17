@@ -139,11 +139,14 @@ def test_autosave_roundtrip_and_start_fresh_cleanup(tmp_path, monkeypatch):
     assert 'gui_measurements_confirmed' not in payload['state']
     assert 'gui_protocol_confirmed' not in payload['state']
 
+    # One-way data flow: an on-disk autosave is announced via banner but is NEVER
+    # restored back into widgets/session_state.
     _clear_streamlit_session_state()
-    gui._restore_autosave_payload(payload)
-    assert st.session_state['gui_data_filename'] == 'trial.h5'
-    assert st.session_state['morpho_fishmass'] == 10.0
-    assert st.session_state['gui_session_source'] == 'restored'
+    gui._announce_disk_recovery_snapshot()
+    assert 'gui_data_filename' not in st.session_state
+    assert 'morpho_fishmass' not in st.session_state
+    assert st.session_state.get('gui_session_source') == 'fresh'
+    assert st.session_state.get('gui_recovery_banner_level') == 'info'
 
     gui._reset_workflow_session_to_home(clear_autosave=True)
     assert st.session_state.get('gui_app_route') == 'landing'
@@ -206,15 +209,15 @@ def test_autosave_corrupt_and_schema_mismatch_fallback(tmp_path, monkeypatch):
 
     with open(gui._autosave_latest_path(), 'w', encoding='utf-8') as f:
         f.write('{bad json')
-    gui._bootstrap_autosave_recovery()
-    assert 'Autosave ignored' in str(st.session_state.get('gui_recovery_banner_message') or '')
+    gui._announce_disk_recovery_snapshot()
+    assert 'could not be read' in str(st.session_state.get('gui_recovery_banner_message') or '')
     assert st.session_state.get('gui_recovery_banner_level') == 'warning'
 
     _clear_streamlit_session_state()
     with open(gui._autosave_latest_path(), 'w', encoding='utf-8') as f:
         f.write('{"schema_version":999,"state":{}}')
-    gui._bootstrap_autosave_recovery()
-    assert 'Autosave ignored' in str(st.session_state.get('gui_recovery_banner_message') or '')
+    gui._announce_disk_recovery_snapshot()
+    assert 'could not be read' in str(st.session_state.get('gui_recovery_banner_message') or '')
 
 
 def test_state_origin_map_classifies_default_recovered_and_user():

@@ -4,7 +4,7 @@ overview: Stabilize the Streamlit GUI by removing all write-into-widget (disk/Be
 todos:
   - id: c1-remove-restore
     content: "C1: Remove refresh-restore + manual Load-snapshot (sole callers of _restore_snapshot_payload); keep autosave write. Add disk-only recovery banner."
-    status: pending
+    status: in_progress
   - id: c2-template-seed
     content: "C2: Replace template injection with seed-once from a staged template snapshot; gui_fld_version key-suffix scoped to PROCEDURE fields only. Verify datafolder/specimen intact across template load. Run test suite."
     status: pending
@@ -20,6 +20,7 @@ todos:
   - id: future-c5-provenance
     content: "Future schema task (NOT this pass): log absolute config+protocol path into H5; touches bender_routing_spec.py + R pipeline contract."
     status: pending
+isProject: false
 ---
 
 # One-way GUI data flow (C1-C4)

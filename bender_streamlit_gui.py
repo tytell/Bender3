@@ -1247,28 +1247,6 @@ def _save_progress_snapshot() -> tuple[bool, str]:
     return _write_snapshot_payload(source='manual_snapshot', update_latest=False)
 
 
-def _list_manual_snapshot_files(*, max_entries: int = 50) -> list[str]:
-    """Most-recent manual session snapshots from ``SessionSnapshots``."""
-    root = _session_snapshots_dir()
-    if not os.path.isdir(root):
-        return []
-    out: list[tuple[float, str]] = []
-    try:
-        for name in os.listdir(root):
-            if not (name.startswith('session_snapshot_') and name.endswith('.json')):
-                continue
-            p = os.path.normpath(os.path.join(root, name))
-            try:
-                mt = float(os.path.getmtime(p))
-            except OSError:
-                mt = 0.0
-            out.append((mt, p))
-    except OSError:
-        return []
-    out.sort(key=lambda row: row[0], reverse=True)
-    return [p for _, p in out[: max(1, int(max_entries))]]
-
-
 def _validate_snapshot_payload(payload: dict, *, context: str) -> Optional[str]:
     schema = int(payload.get('schema_version', 0) or 0)
     if schema != _AUTOSAVE_SCHEMA_VERSION:
@@ -1277,57 +1255,6 @@ def _validate_snapshot_payload(payload: dict, *, context: str) -> Optional[str]:
     if not isinstance(state, dict):
         return f'{context.capitalize()} payload missing valid `state` object.'
     return None
-
-
-def _restore_snapshot_payload(payload: dict, *, source_label: str) -> None:
-    state = dict(payload.get('state') or {})
-    for k, v in state.items():
-        if _is_restore_safe_key(k):
-            try:
-                st.session_state[k] = v
-            except Exception as e:
-                # Streamlit forbids assigning certain widget-managed keys (buttons/uploaders).
-                # Ignore those stale keys from older payloads.
-                if 'cannot be set using `st.session_state`' not in str(e):
-                    raise
-    st.session_state['gui_recovered_state_baseline'] = {
-        k: to_json_persistent(v, path=k) for k, v in state.items()
-    }
-    st.session_state['gui_recovery_summary'] = {
-        'saved_at': str(payload.get('saved_at') or ''),
-        'app_route': str(payload.get('app_route') or ''),
-        'source': str(payload.get('source') or source_label),
-    }
-    st.session_state['gui_recovery_banner_message'] = (
-        f"Recovered from {source_label} ({st.session_state['gui_recovery_summary']['saved_at'] or 'unknown time'})."
-    )
-    st.session_state['gui_recovery_banner_level'] = 'success'
-    st.session_state['gui_session_source'] = 'restored'
-    _repair_data_path_fields_from_session()
-
-
-def _load_manual_snapshot(path: str) -> tuple[bool, str]:
-    snap_path = os.path.normpath(str(path or '').strip())
-    if not snap_path:
-        return False, 'Choose a snapshot file first.'
-    payload, err = _read_json_file(snap_path)
-    if err:
-        return False, err
-    if payload is None:
-        return False, f'Snapshot file not found: `{snap_path}`'
-    verr = _validate_snapshot_payload(payload, context='snapshot')
-    if verr:
-        return False, verr
-    _restore_snapshot_payload(payload, source_label='snapshot')
-    cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-    if cfg_sel:
-        mods = discover_config_modules(_ROOT)
-        if cfg_sel not in mods:
-            st.session_state['gui_recovery_banner_message'] = (
-                f"Recovered snapshot, but config module `{cfg_sel}` is missing. Choose a config in Setup."
-            )
-            st.session_state['gui_recovery_banner_level'] = 'warning'
-    return True, snap_path
 
 
 def _load_latest_autosave() -> tuple[Optional[dict], Optional[str]]:
@@ -1342,31 +1269,35 @@ def _load_latest_autosave() -> tuple[Optional[dict], Optional[str]]:
     return payload, None
 
 
-def _restore_autosave_payload(payload: dict) -> None:
-    _restore_snapshot_payload(payload, source_label='autosave')
+def _announce_disk_recovery_snapshot() -> None:
+    """On launch, point the operator to an on-disk autosave WITHOUT loading it.
 
-
-def _bootstrap_autosave_recovery() -> None:
+    One-way data flow: disk/Bender state is never written back into widgets. If an
+    ``autosave_latest.json`` exists from a prior session, surface an informational
+    banner with its path so the operator can recover values manually if needed.
+    """
     if st.session_state.get('gui_autosave_bootstrapped'):
         return
     st.session_state['gui_autosave_bootstrapped'] = True
+    st.session_state.setdefault('gui_session_source', 'fresh')
+    autosave_path = _autosave_latest_path()
+    if not os.path.isfile(autosave_path):
+        return
     payload, err = _load_latest_autosave()
     if err:
-        st.session_state['gui_recovery_banner_message'] = f'Autosave ignored: {err}'
+        st.session_state['gui_recovery_banner_message'] = (
+            f'A disk autosave exists but could not be read ({err}). File: `{autosave_path}`'
+        )
         st.session_state['gui_recovery_banner_level'] = 'warning'
         return
-    if payload is None:
-        st.session_state.setdefault('gui_session_source', 'fresh')
-        return
-    _restore_autosave_payload(payload)
-    cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-    if cfg_sel:
-        mods = discover_config_modules(_ROOT)
-        if cfg_sel not in mods:
-            st.session_state['gui_recovery_banner_message'] = (
-                f"Recovered session, but config module `{cfg_sel}` is missing. Choose a config in Setup."
-            )
-            st.session_state['gui_recovery_banner_level'] = 'warning'
+    saved_at = str((payload or {}).get('saved_at') or '') if payload else ''
+    when = saved_at or 'a previous session'
+    st.session_state['gui_recovery_banner_message'] = (
+        f'A previous session autosave exists on disk ({when}). Fields were NOT restored — '
+        'start fresh below, or open the snapshot file to copy values manually: '
+        f'`{autosave_path}`'
+    )
+    st.session_state['gui_recovery_banner_level'] = 'info'
 
 
 def _clear_latest_autosave_marker() -> None:
@@ -1404,19 +1335,15 @@ def _render_recovery_status_ui() -> None:
     with st.container(border=True):
         if lvl == 'warning':
             st.warning(msg)
+        elif lvl == 'info':
+            st.info(msg)
         else:
             st.success(msg)
-        # Recovery is preserved here as a status banner; the single start-fresh / save-progress
-        # control lives in the setup "Start fresh / save progress" panel (no duplicate button).
-        c1 = c2 = st.container()
-        with c1:
-            with st.expander('Recovery details', expanded=False):
-                info = dict(st.session_state.get('gui_recovery_summary') or {})
-                st.caption(f"Saved at: `{info.get('saved_at', '(unknown)')}`")
-                st.caption(f"Route: `{info.get('app_route', '(unknown)')}`")
-        with c2:
-            if st.button('Dismiss', key='gui_recovery_dismiss', use_container_width=True):
-                st.session_state['gui_recovery_banner_message'] = ''
+        # Disk autosave is announced as a status banner only; recovery never writes back into
+        # widgets. The single start-fresh / save-progress control lives in the setup
+        # "Start fresh / save progress" panel (no duplicate button).
+        if st.button('Dismiss', key='gui_recovery_dismiss', use_container_width=True):
+            st.session_state['gui_recovery_banner_message'] = ''
 
 
 def _update_state_origin_summary() -> None:
@@ -1559,6 +1486,7 @@ DATA_FOLDER_HELP = (
 DATA_FILE_NAME_HELP = (
     'This is the name of your saved measurements file (HDF5). Enter only the file name, not the full path. '
     'The app joins it with the data folder field above to build where data is saved. You may type .h5 or leave it off. '
+    'Leave it blank to auto-name from the date, specimen, and protocol whenever a data folder is set. '
     'If that exact file already exists, the app uses a new name like my_run_001.h5 so nothing is overwritten.'
 )
 
@@ -2975,7 +2903,11 @@ def _compose_output_h5_path() -> str:
 
     When a specimen ID is set, the file name follows the standardized convention
     ``YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5`` (sorts by acquisition sequence). With no
-    specimen ID we fall back to the legacy **section 2** **Data file name** field.
+    specimen ID, a typed **Data file name** is used; if that field is empty but a **Data folder**
+    is set, the same standardized stem is auto-composed (specimen placeholder until one is entered)
+    so a folder-only setup still resolves to a concrete path. The path is recomposed at run/export
+    time, so a specimen entered after Apply is picked up automatically. Returns ``''`` only when
+    neither a folder nor a file name is available.
     """
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
     specimen = str(st.session_state.get('gui_specimen_id') or '').strip()
@@ -2993,8 +2925,12 @@ def _compose_output_h5_path() -> str:
         if folder and fn:
             fn = os.path.basename(os.path.normpath(fn))
         if not fn:
-            return ''
-        if not fn.lower().endswith('.h5'):
+            # Folder-only: defer to the standardized auto-name so Apply/run/export never block on a
+            # missing file name. With no folder there is nothing to anchor the file to.
+            if not folder:
+                return ''
+            fn = _standard_filename_stem(_current_protocol_token()) + '.h5'
+        elif not fn.lower().endswith('.h5'):
             fn = fn + '.h5'
     if folder:
         return os.path.normpath(os.path.join(folder, fn))
@@ -3097,10 +3033,10 @@ def _section2_destination_incomplete() -> bool:
     folder = str(st.session_state.get('gui_data_folder') or '').strip()
     fn = str(st.session_state.get('gui_data_filename') or '').strip()
     if fn:
-        # If filename includes a path, or folder+filename compose cleanly, we have a destination.
-        if folder or os.path.dirname(fn):
-            return False
-        # Filename-only still resolves to a concrete relative `.h5` path.
+        # A file name (with folder, an embedded path, or even bare) resolves to a concrete path.
+        return False
+    # Folder-only is sufficient: the file name is auto-composed at save time.
+    if folder:
         return False
     # Fall back to any already-bound experiment output path.
     b = st.session_state.get('bender')
@@ -3308,7 +3244,7 @@ def _sec1_apply_composed_path_to_bender() -> Optional[str]:
         return 'Load hardware configuration first.'
     outp = _compose_output_h5_path().strip()
     if not outp:
-        return 'Set **Data file name** first.'
+        return 'Set a **Data folder** (or file name) first.'
     b1.outputfile = outp
     _mark_data_path_applied()
     return None
@@ -7035,7 +6971,7 @@ def main():
     st.session_state.setdefault('gui_setup_confirmed', False)
     st.session_state.setdefault('gui_measurements_confirmed', False)
     st.session_state.setdefault('gui_protocol_confirmed', False)
-    _bootstrap_autosave_recovery()
+    _announce_disk_recovery_snapshot()
     _inject_accessibility_theme()
     _ensure_gui_data_path_session_keys()
     if 'gui_post_notes' not in st.session_state:
@@ -7114,37 +7050,10 @@ def main():
                             ['Check write permissions', 'Verify workspace is writable'],
                             msg,
                         )
-                _snap_files = _list_manual_snapshot_files(max_entries=40)
-                st.selectbox(
-                    'Recent snapshots',
-                    options=[''] + _snap_files,
-                    key='gui_snapshot_file_pick',
-                    format_func=lambda p: '— Select saved snapshot —' if not p else os.path.basename(str(p)),
-                    help='Manual snapshots saved in SessionSnapshots.',
+                st.caption(
+                    'Snapshots are write-only recovery logs. They are NOT loaded back into the '
+                    'form — open the JSON in SessionSnapshots to copy values manually if needed.'
                 )
-                st.text_input(
-                    'Snapshot file path',
-                    key='gui_manual_snapshot_path',
-                    placeholder='Paste full path to session_snapshot_*.json',
-                    help='Use a recent snapshot above or paste a full path.',
-                )
-                if _load_save_button('Load snapshot', key='gui_btn_load_snapshot', button_type='secondary'):
-                    _picked = str(st.session_state.get('gui_snapshot_file_pick') or '').strip()
-                    _typed = str(st.session_state.get('gui_manual_snapshot_path') or '').strip()
-                    _path = _typed or _picked
-                    ok, msg = _load_manual_snapshot(_path)
-                    if ok:
-                        st.success(f'Snapshot loaded: `{msg}`')
-                        st.info('Re-apply setup, morphometrics, and procedure before running hardware.')
-                        st.rerun()
-                    elif msg == 'Choose a snapshot file first.':
-                        st.warning(msg)
-                    else:
-                        _st_error_detail(
-                            'Could not load snapshot.',
-                            ['Check file path', 'Verify JSON schema and state object'],
-                            msg,
-                        )
             with _a_home:
                 if st.button(
                     'Start fresh (discard & go to Home)',
@@ -7201,16 +7110,20 @@ def main():
                 return
             perr = _sec1_apply_composed_path_to_bender()
             if perr:
+                # A folder alone is enough (the file name is auto-composed at save time), so the
+                # only remaining path failure is having neither a folder nor a file name. Point at
+                # the folder as the minimum requirement.
+                _path_actions = ['Set a Data folder', 'Or enter a file name']
                 if need_hw_reload:
                     _st_error_detail(
-                        'Hardware OK; path failed.',
-                        ['Fix folder name', 'Fix file name'],
+                        'Hardware loaded; data path not set.',
+                        _path_actions,
                         perr,
                     )
                 else:
                     _st_error_detail(
                         'Data path not applied.',
-                        ['Fix folder name', 'Fix file name'],
+                        _path_actions,
                         perr,
                     )
                 return
@@ -7588,6 +7501,16 @@ def main():
                         )
                 elif _override:
                     st.caption('Manual override: file name used exactly as typed.')
+                elif (
+                    str(st.session_state.get('gui_data_folder') or '').strip()
+                    and not str(st.session_state.get('gui_data_filename') or '').strip()
+                ):
+                    _sim_pfx = _sim_name_prefix()
+                    st.caption(
+                        'No file name entered — it will be auto-named '
+                        f'`{_sim_pfx}YYYY-MM-DD_<specimenID>_bender_<NN>_<protocol>.h5` at save time '
+                        '(specimen placeholder until you apply a Specimen ID). Type a name to override.'
+                    )
             full_out = _compose_output_h5_path()
             if full_out:
                 # Show "selected" state immediately; committing to the in-memory experiment still requires "Apply setup".
