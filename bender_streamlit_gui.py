@@ -3210,10 +3210,25 @@ def _apply_loaded_config_module(raw_mod: str) -> Optional[str]:
         outp0 = str(getattr(b0, 'outputfile', '') or '').strip()
         # Only seed the data path from the config when the operator has NOT already committed one.
         # A config reload must never overwrite a folder/filename the operator applied (one-way flow).
+        print(
+            f'[DBG-datapath] queue-guard enter: committed={st.session_state.get("gui_data_path_committed")!r} '
+            f'outp0={outp0!r} cur_folder={st.session_state.get("gui_data_folder")!r}',
+            flush=True,
+        )
         if outp0 and not bool(st.session_state.get('gui_data_path_committed')):
             n0 = os.path.normpath(outp0)
             st.session_state['gui_pending_data_folder'] = os.path.dirname(n0) or ''
             st.session_state['gui_pending_data_filename'] = os.path.basename(n0)
+            print(
+                f'[DBG-datapath] queue-guard QUEUED pending: folder={st.session_state.get("gui_pending_data_folder")!r} '
+                f'filename={st.session_state.get("gui_pending_data_filename")!r}',
+                flush=True,
+            )
+        else:
+            print(
+                '[DBG-datapath] queue-guard SKIPPED pending (committed True or outp0 empty)',
+                flush=True,
+            )
         _meta0 = getattr(b0, 'h5_protocol_metadata', {}) or {}
         st.session_state['gui_pending_genus_species'] = str(_meta0.get('specimen_genusspecies', '') or '')
         st.session_state['gui_pending_specimen_id'] = str(_meta0.get('specimen_id', '') or '')
@@ -3381,6 +3396,11 @@ def _mark_data_path_applied() -> None:
     # survives a config reload so the reload cannot reseed/clobber a committed folder/filename.
     # Cleared only by _reset_workflow_session_to_home (Start fresh).
     st.session_state['gui_data_path_committed'] = True
+    print(
+        f'[DBG-datapath] _mark_data_path_applied FIRED: committed={st.session_state.get("gui_data_path_committed")!r} '
+        f'folder={st.session_state.get("gui_data_folder")!r} filename={st.session_state.get("gui_data_filename")!r}',
+        flush=True,
+    )
 
 
 def _mark_procedure_applied() -> None:
@@ -4021,6 +4041,13 @@ def _flush_pending_load_config_session():
     """
     _data_path_applied = 'gui_data_path_applied_sig' in st.session_state
     _specimen_applied = bool(st.session_state.get('gui_measurements_confirmed'))
+    print(
+        f'[DBG-datapath] flush enter: pending_folder_present={"gui_pending_data_folder" in st.session_state} '
+        f'_data_path_applied(sig_present)={_data_path_applied} '
+        f'committed={st.session_state.get("gui_data_path_committed")!r} '
+        f'cur_folder={st.session_state.get("gui_data_folder")!r}',
+        flush=True,
+    )
 
     if 'gui_pending_genus_species' in st.session_state:
         _pending_gs = st.session_state.pop('gui_pending_genus_species')
@@ -4033,13 +4060,29 @@ def _flush_pending_load_config_session():
     if 'gui_pending_data_folder' in st.session_state:
         _pending_folder = str(st.session_state.pop('gui_pending_data_folder') or '').strip()
         _cur_folder = str(st.session_state.get('gui_data_folder') or '').strip()
-        # Seed if the user has not yet applied a data path; otherwise leave their applied path alone.
-        if not _data_path_applied and (_pending_folder or not _cur_folder):
+        _folder_guard = (not _data_path_applied and (_pending_folder or not _cur_folder))
+        print(
+            f'[DBG-datapath] flush folder-write: _data_path_applied={_data_path_applied} '
+            f'committed={st.session_state.get("gui_data_path_committed")!r} '
+            f'pending_folder={_pending_folder!r} cur_folder={_cur_folder!r} '
+            f'guard_overwrite={bool(_folder_guard)}',
+            flush=True,
+        )
+        # Seed only when: (a) no applied-sig is present AND (b) no durable committed flag AND
+        # (c) the pending value is non-empty.  Never write an empty string from pending — that
+        # would blank the widget when the config's outputfile has no directory component.
+        _committed = bool(st.session_state.get('gui_data_path_committed'))
+        if not _data_path_applied and not _committed and _pending_folder:
             st.session_state['gui_data_folder'] = _pending_folder
+            print(
+                f'[DBG-datapath] flush folder-write OVERWROTE gui_data_folder -> {_pending_folder!r}',
+                flush=True,
+            )
     if 'gui_pending_data_filename' in st.session_state:
         _pending_file = str(st.session_state.pop('gui_pending_data_filename') or '').strip()
         _cur_file = str(st.session_state.get('gui_data_filename') or '').strip()
-        if not _data_path_applied and (_pending_file or not _cur_file):
+        _committed = bool(st.session_state.get('gui_data_path_committed'))
+        if not _data_path_applied and not _committed and _pending_file:
             st.session_state['gui_data_filename'] = _pending_file
     if 'gui_pending_post_notes' in st.session_state:
         _pending_notes = st.session_state.pop('gui_pending_post_notes')
