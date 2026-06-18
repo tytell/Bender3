@@ -90,10 +90,13 @@ def test_step_protocol_per_sample_index_arrays(tmp_path):
 def test_dynamic_has_cycle_index_but_no_step_index(tmp_path):
     path = _run(_dynamic, tmp_path)
     with h5py.File(path, 'r') as f:
-        tg = f['02_TimeSeries']['trial_0000']
-        n = tg['time_second'].shape[0]
-        assert 'cycle_index' in tg and tg['cycle_index'].shape[0] == n
-        assert 'step_index' not in tg, 'dynamic has no discrete shuffled steps'
+        # continuous (single_finite): datasets written flat directly under 02_TimeSeries, no subgroup
+        ts = f['02_TimeSeries']
+        assert 'trial_0000' not in ts, 'continuous layout must not create a trial_0000 subgroup'
+        assert 'time_second' in ts, 'continuous layout must have time_second flat under 02_TimeSeries'
+        n = ts['time_second'].shape[0]
+        assert 'cycle_index' in ts and ts['cycle_index'].shape[0] == n
+        assert 'step_index' not in ts, 'dynamic has no discrete shuffled steps'
 
 
 def test_forcetorque_raw_kept_not_split(tmp_path):

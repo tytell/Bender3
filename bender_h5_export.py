@@ -345,12 +345,28 @@ def export_primary_h5(
         # doc 6 -- belongs in the research-hub ``derived`` group, not the raw file).
         ts_drop = {'forcetorque', 'primary_torque_raw'}
 
+        # Step 2: branch on daq_collection_type + record count.
+        # 'continuous' with exactly 1 record (single_finite, dynamic/sweep): write channel
+        # datasets flat under 02_TimeSeries — no per-step subgroup.
+        # 'segmented' (isovelocity/FV) OR 'continuous' with N > 1 records (isometric/FL via
+        # gate, which still produces N slice records from the stitched task): keep
+        # trial_{i:04d} subgroups — renamed to step_{NNN} in Steps 3/4.
+        _is_flat = (
+            str(getattr(bender, 'daq_collection_type', '') or '') == 'continuous'
+            and len(trial_records) <= 1
+        )
+
         for i, rec in enumerate(trial_records):
-            tg = g_ts.create_group(f'trial_{i:04d}')
+            if _is_flat:
+                tg = g_ts
+                _tname = '02_TimeSeries'
+            else:
+                tg = g_ts.create_group(f'trial_{i:04d}')
+                _tname = f'trial_{i:04d}'
             rec_tt = str(rec.get('test_type', test_type))
             tg.attrs['test_type'] = rec_tt
             manifest = {
-                'trial_name': f'trial_{i:04d}',
+                'trial_name': _tname,
                 'test_type': rec_tt,
             }
 
@@ -474,10 +490,13 @@ def export_primary_h5(
 
         # Per-trial condition manifest. trial_index / cycle_index columns are dropped: trial order
         # is the trial_names order, and per-sample cycle_index lives in 02_TimeSeries (PI decision).
+        # For continuous (flat) protocols trial_names reflects the flat layout ('02_TimeSeries');
+        # for segmented protocols it lists the subgroup names ('trial_0000', …) until Steps 3/4
+        # rename them to step_001, step_002, … .
         g_idx = g_meta.create_group('trial_index')
         g_idx.create_dataset(
             'trial_names',
-            data=np.array([f'trial_{i:04d}' for i in range(len(trial_records))], dtype='S'),
+            data=np.array([r.get('trial_name', f'trial_{i:04d}') for i, r in enumerate(manifest_rows)], dtype='S'),
         )
         g_idx.create_dataset(
             'test_type',
