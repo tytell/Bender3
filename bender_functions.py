@@ -4519,6 +4519,7 @@ class Bender:
         pre_iso_stim_duration_s=None,
         post_baseline_s=1.0,
         approach_from_deg=None,
+        post_buffer_s=None,
     ):
         """
         Build one isovelocity timeline + stim commands.
@@ -4532,6 +4533,12 @@ class Bender:
         ``approach_from_deg``: forwarded to :meth:`_timeline_prehold_isovelocity`. Pass the motor's
         known resting angle (typically 0°) when the block starts from rest so a ramp to the starting
         angle is prepended; leave None for a mid-trajectory continuation (mirror second segment).
+
+        ``post_buffer_s``: when not None, sizes the trailing neutral hold at 0° (the segmented
+        recording post-bookend, ``step_buffer_s``) instead of defaulting to ``pre_hold_s``. The run
+        path (:meth:`_run_isovelocity_steps`) passes the fixed 1 s buffer; the preview leaves it
+        ``None`` so its trailing hold is unchanged (preview is OFF the run path and ported
+        separately).
         """
         stim_onset_s, stim_duration_s = self._resolve_stim_onset_duration_s(
             {
@@ -4563,12 +4570,13 @@ class Bender:
             angle = np.concatenate([angle, ang_post])
             anglevel = np.concatenate([anglevel, w_post])
             # End-of-trial buffer: after the controlled return to neutral, hold flat at the final
-            # angle (0 deg) with zero velocity for ``pre_hold_s`` so the trial does not end abruptly
-            # the instant motion stops. Mirrors the dynamic protocol's post-motion hold (waitafter)
-            # and matches the isovelocity start hold (pre_hold), so each trial is symmetric. Only the
-            # trial-ending segment returns to neutral (post_baseline_s > 0); intermediate
-            # bilateral-mirror sub-segments (post_baseline_s == 0) get no spurious hold.
-            end_hold_s = max(0.0, float(pre_hold_s))
+            # angle (0 deg) with zero velocity so the trial does not end abruptly the instant motion
+            # stops. Duration is ``post_buffer_s`` when the caller supplies it (the segmented
+            # recording post-bookend, a fixed 1 s neutral hold at home from the run path), otherwise
+            # it falls back to ``pre_hold_s`` (legacy/preview behavior, symmetric with the start
+            # hold). Only the trial-ending segment returns to neutral (post_baseline_s > 0);
+            # intermediate bilateral-mirror sub-segments (post_baseline_s == 0) get no spurious hold.
+            end_hold_s = max(0.0, float(post_buffer_s if post_buffer_s is not None else pre_hold_s))
             if end_hold_s > 0:
                 hold_ang = float(angle[-1])
                 n_hold = max(2, int(round(end_hold_s * float(daq_hz))) + 1)
@@ -4703,6 +4711,10 @@ class Bender:
         self.set_stim_channels(*self.stim_channels)
         th0_fixed = float(theta_start_deg)
         post_b = max(0.0, float(post_baseline_s))
+        # Segmented recording bookend: a fixed 1 s neutral hold at home (0 deg) brackets each
+        # recorded step (pre-bookend prepended below; post-bookend is the trailing neutral hold
+        # inside the final block, sized by post_buffer_s). Hardcoded, no GUI field (plan D2).
+        step_buffer_s = 1.0
         iso_kw = dict(
             pre_hold_s=pre_hold_s,
             iso_duration_s=iso_duration_s,
@@ -4716,6 +4728,7 @@ class Bender:
             daq_hz=daq_hz,
             recruitment=rec,
             sequential_left_frac=seq_frac,
+            post_buffer_s=step_buffer_s,
         )
         if use_block_stim:
             iso_kw.update(
@@ -4727,8 +4740,14 @@ class Bender:
         gap_s = float(inter_step_interval_s)
         if not np.isfinite(gap_s) or gap_s < 0:
             raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
-        reset_steps = bool(reset_between_steps)
+        # Segmented protocols always reset to home and stay energized between steps, regardless of
+        # the (now-vestigial) reset_between_steps / hold_motor_between_steps inputs: the neutral
+        # reset re-anchors the open-loop motor to 0 deg before each step and the hold keeps it
+        # energized across the unrecorded gap (plan: reset/hold always-on for segmented).
+        reset_steps = True
+        self.hold_motor_between_steps = True
         prev_end_deg = float(theta_start_deg)
+        prev_wall_clock_end = None
 
         for i in range(n):
             if i > 0 and gap_s > 0:
@@ -4824,6 +4843,39 @@ class Bender:
                     s1 = np.concatenate([s1, np.zeros(_t_wait.size)])
                     s2 = np.concatenate([s2, np.zeros(_t_wait.size)])
 
+            # --- Segmented recording pre-bookend (1 s neutral hold at home) -----------------
+            # Prepend a fixed step_buffer_s neutral hold at 0 deg (zero velocity, motor energized)
+            # so each recorded step opens with a clean at-rest baseline buffer before the approach
+            # ramp. The matching post-bookend is the trailing neutral hold inside the final block
+            # (post_buffer_s, set above). Every event marker shifts by step_buffer_s because the
+            # move/active/return window now starts that much later within the recorded timeline.
+            n_pre = max(2, int(round(step_buffer_s * daq_hz)) + 1)
+            t_pre = np.linspace(0.0, step_buffer_s, n_pre)[:-1]
+            n_pre_eff = int(t_pre.size)
+            t = np.concatenate([t_pre, np.asarray(t, dtype=float) + step_buffer_s])
+            angle = np.concatenate([np.zeros(n_pre_eff), angle])
+            anglevel = np.concatenate([np.zeros(n_pre_eff), anglevel])
+            s1 = np.concatenate([np.zeros(n_pre_eff), s1])
+            s2 = np.concatenate([np.zeros(n_pre_eff), s2])
+            active = np.concatenate([np.zeros(n_pre_eff, dtype=bool), np.asarray(active, dtype=bool)])
+            t_pre0 += step_buffer_s
+            t_pre1 += step_buffer_s
+            t_iso0 += step_buffer_s
+            t_stim0 += step_buffer_s
+            t_stim1 += step_buffer_s
+            iso_t1_end += step_buffer_s
+            t_post0 += step_buffer_s
+            t_post1 += step_buffer_s
+
+            # Wall-clock start of this step's recorded window (pre-bookend onset). rest_before_second
+            # is the UNRECORDED gap since the previous step's recording ended (inter-step sleep +
+            # neutral reset); zero for the first step. Captured for the step_manifest (schema 4).
+            step_wall_clock_start = time.time()
+            rest_before_second = (
+                0.0 if (i == 0 or prev_wall_clock_end is None)
+                else max(0.0, step_wall_clock_start - prev_wall_clock_end)
+            )
+
             self.record_motor_signal(t, angle, anglevel, tnorm=np.zeros_like(t))
             self.record_stim_signal(s1, s2)
             self.make_motor_stepper_pulses(
@@ -4832,6 +4884,7 @@ class Bender:
                 motor_full_steps_per_rev=self.motor_full_steps_per_rev,
             )
             self.aidata = self.run(device_name=dev)
+            prev_wall_clock_end = time.time()
 
             entry = {
                 'test_type': 'isovelocity',
@@ -4864,6 +4917,11 @@ class Bender:
                 't_active_end': float(iso_t1_end),
                 't_post_baseline_start': float(t_post0),
                 't_post_baseline_end': float(t_post1),
+                'wall_clock_start': datetime.fromtimestamp(step_wall_clock_start).isoformat(),
+                'rest_before_second': float(rest_before_second),
+                'duration_second': float(np.asarray(t).size) / daq_hz,
+                'operating_point': float(v_report),
+                'operating_point_units': 'degree_per_second',
                 'forcetorque': None,
                 'mean_xforce_stim': None,
                 'guard_triggered': bool(step_guard_triggered),

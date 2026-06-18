@@ -345,21 +345,26 @@ def export_primary_h5(
         # doc 6 -- belongs in the research-hub ``derived`` group, not the raw file).
         ts_drop = {'forcetorque', 'primary_torque_raw'}
 
-        # Step 2: branch on daq_collection_type + record count.
+        # Branch on daq_collection_type + record count (Steps 2/3).
         # 'continuous' with exactly 1 record (single_finite, dynamic/sweep): write channel
         # datasets flat under 02_TimeSeries — no per-step subgroup.
-        # 'segmented' (isovelocity/FV) OR 'continuous' with N > 1 records (isometric/FL via
-        # gate, which still produces N slice records from the stitched task): keep
-        # trial_{i:04d} subgroups — renamed to step_{NNN} in Steps 3/4.
-        _is_flat = (
-            str(getattr(bender, 'daq_collection_type', '') or '') == 'continuous'
-            and len(trial_records) <= 1
-        )
+        # 'segmented' (isovelocity/FV, Step 3): one subgroup per step named step_{step_index:03d}
+        # (one-based, 3-digit, step_ prefix); step_NNN suffix == rec['step_index'].
+        # 'continuous' with N > 1 records (isometric/FL still behind the Step-4 gate, which
+        # produces N slice records from the stitched task): keep trial_{i:04d} subgroups until
+        # Step 4 converts isometric to a per-step run() loop.
+        _daq_ct = str(getattr(bender, 'daq_collection_type', '') or '')
+        _is_flat = (_daq_ct == 'continuous' and len(trial_records) <= 1)
+        _is_segmented = (_daq_ct == 'segmented')
 
         for i, rec in enumerate(trial_records):
             if _is_flat:
                 tg = g_ts
                 _tname = '02_TimeSeries'
+            elif _is_segmented:
+                _si = int(rec.get('step_index', i + 1))
+                _tname = f'step_{_si:03d}'
+                tg = g_ts.create_group(_tname)
             else:
                 tg = g_ts.create_group(f'trial_{i:04d}')
                 _tname = f'trial_{i:04d}'
@@ -490,9 +495,9 @@ def export_primary_h5(
 
         # Per-trial condition manifest. trial_index / cycle_index columns are dropped: trial order
         # is the trial_names order, and per-sample cycle_index lives in 02_TimeSeries (PI decision).
-        # For continuous (flat) protocols trial_names reflects the flat layout ('02_TimeSeries');
-        # for segmented protocols it lists the subgroup names ('trial_0000', …) until Steps 3/4
-        # rename them to step_001, step_002, … .
+        # trial_names reflects the layout used above: '02_TimeSeries' for continuous (flat),
+        # 'step_001', 'step_002', … for segmented (isovelocity/FV, Step 3), and 'trial_0000', …
+        # for the not-yet-converted isometric/FL continuous-with-N-records path (until Step 4).
         g_idx = g_meta.create_group('trial_index')
         g_idx.create_dataset(
             'trial_names',
