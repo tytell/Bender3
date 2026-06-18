@@ -38,6 +38,7 @@
 - GUI behavior (session state, routing, widget rendering) is fully 
   testable on Mac without hardware.
 
+
 ---
 
 ## UI stack (non-negotiable)
@@ -60,6 +61,16 @@
 - Validation and status icons run only after Apply is clicked.
 - Downstream actions (hardware config, protocol load) trigger 
   only after Apply. Never on keystroke or widget change.
+
+ ## Config discovery paths
+- Config loader paths (_CONFIGS_DIR, _CONFIG_TEMPLATE_DIR) must always point 
+  to the canonical config location as a single constant — never hardwired to 
+  a subfolder (e.g. templates/configs/) in multiple places.
+- One source of truth for the configs directory. If config files move, update 
+  the constant in one place only.
+- New config files must be standalone and complete — no `from <old_config> 
+  import *` inheritance. Every config declares all hardware parameters 
+  explicitly.
 
 ### Widget rules
 - Every widget must have an explicit `key=` parameter.
@@ -88,8 +99,24 @@
       st.success("✅ Folder found")
   elif folder_path:
       st.error("❌ Folder not found — check path")
+      
 ```
 
+## NI DAQ task lifecycle — explicit close before device reset
+- All NI DAQ tasks (analog_in, analog_out, digital_out, counter) must be 
+  explicitly called with .close() in the finally block BEFORE reset_device() 
+  is called. Never rely on Python `with` block auto-close after reset_device() 
+  — the reset wipes driver-level handles first, causing silent close failures 
+  and handle leaks.
+- Order is mandatory: stop tasks → close tasks explicitly → reset_device().
+- Handle leaks accumulate across runs and hit NI error -200946 after ~3-4 
+  failed or partial runs. This will not appear in dev (no hardware) and only 
+  surfaces on the rig after repeated trials.
+- Any new DAQ task added to run() must be added to the explicit close sequence 
+  in the finally block. Never add a task and rely solely on context manager 
+  cleanup.
+
+  
 ---
 
 ## Debugging protocol
@@ -361,3 +388,18 @@ Specifically:
 Rationale: stale descriptions are silent misinformation — the 
 documentation-layer version of stale data. They cost future 
 debugging time by encoding a world that no longer exists.
+
+## Windows terminal encoding (cp1252 safety)
+- All print() and logging statements must use plain ASCII only — no emojis, 
+  Unicode symbols, superscripts, arrows, or special characters.
+- Streamlit display functions (st.success, st.error, st.warning, st.write, 
+  st.info) are exempt — they render in the browser and are encoding-safe.
+- Use bracketed ASCII prefixes in print() instead: [sono], [warn], [diag], 
+  [info], [error].
+- Math/units in plain ASCII: mm^2, g*mm^2, deg/s, not mm², g·mm², °/s.
+- This applies to every .py file. macOS dev will not catch cp1252 violations 
+  — Windows rig will crash mid-run.
+- stdout and stderr must be reconfigured to UTF-8 with errors='replace' at 
+  startup as defense-in-depth (bender_streamlit_gui.py, commit 5036691).
+
+ 

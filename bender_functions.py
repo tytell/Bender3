@@ -2655,14 +2655,28 @@ class Bender:
                 run_completed_ok = True
             except Exception:
                 time.sleep(0.05)
-                try:
-                    from bender_daq_kill import daq_emergency_stop
-                    daq_emergency_stop(device_name)
-                except Exception:
-                    pass
+                # Do NOT call daq_emergency_stop/reset_device here. The finally block below
+                # always runs and calls reset_device with the correct motor-release semantics
+                # (release_motor_enable_line on failure). Resetting the device here while task
+                # handles are still open invalidates them before finally's .close() loop runs,
+                # which re-introduces the same handle leak the .close() loop was added to fix.
                 raise
             finally:
                 _stop_run_tasks()
+                # Close task handles explicitly BEFORE reset_device() to prevent handle leaks.
+                # DAQmxResetDevice() releases NI driver-level resources for all associated tasks,
+                # invalidating their handles. If with __exit__ calls DAQmxClearTask() afterwards
+                # it fails (NI returns an error on an already-invalidated handle), the Python
+                # Task object is not properly freed, and the handle leaks. Each failed run leaks
+                # 4 handles; after ~3 failures the NI task counter (_unnamedTask<C>) exhausts
+                # available slots and digital_out.start() raises DaqError -200946. Closing here
+                # while handles are still valid means with __exit__ encounters already-cleared
+                # handles and no-ops cleanly.
+                for _tsk in (digital_out, angle_in, analog_out, analog_in):
+                    try:
+                        _tsk.close()
+                    except Exception:
+                        pass
                 # Reset/free the NI device after EVERY run (success or failure).
                 # On Windows/NI a second back-to-back FINITE acquisition wedges in
                 # wait_until_done() unless the device is released first. Fully guarded

@@ -573,7 +573,9 @@ class BenderTkApp:
             if not dev:
                 messagebox.showwarning("KILL DAQ", "No device_name (load a config first).")
                 return
-            daq_emergency_stop(dev)
+            motor_port = getattr(self.bender, "motor_port", None) if self.bender else None
+            enable_line = f"{motor_port}/line2" if motor_port else None
+            daq_emergency_stop(dev, release_motor_enable_line=enable_line)
             self.run_status.set(f"KILL DAQ: reset device '{dev}'.")
         except Exception as e:
             messagebox.showerror("KILL DAQ", f"{type(e).__name__}: {e}")
