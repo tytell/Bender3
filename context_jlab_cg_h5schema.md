@@ -157,7 +157,7 @@ Raw + calibration principle (see Governing Rule 2): both the immutable raw volta
 - No subgroups.
 
 **`segmented_finite`** — isometric, isovelocity, FL, FV:
-- `timeseries/` contains subgroups `step_000/`, `step_001/`, `step_002/`, … (zero-padded 3-digit index).
+- `timeseries/` contains subgroups `step_001/`, `step_002/`, `step_003/`, … (ONE-BASED, zero-padded 3-digit index; first step is `step_001`).
 - Each subgroup holds the same channel arrays as the flat structure.
 - `time_second` within each subgroup is **local** to that step, starting at 0.
 - Subgroup prefix is always `step_` — never `trial_` or any other prefix.
@@ -343,10 +343,10 @@ JSON dataset in `metadata/`. Present for **all** protocols.
 
 | Field | Type | Notes |
 |---|---|---|
-| `step_index` | int | 0-based; matches `step_NNN` subgroup index in `segmented_finite`, or 0 for `single_finite` |
+| `step_index` | int | 1-based; matches `step_NNN` subgroup index in `segmented_finite` (`step_001` → `step_index = 1`); 1 for `single_finite` |
 | `wall_clock_start` | string | ISO-8601 real-world start of this step |
 | `duration_second` | float | Recorded duration of this step |
-| `rest_before_second` | float | Unrecorded rest gap before this step; 0 for `step_index = 0` |
+| `rest_before_second` | float | Unrecorded rest gap before this step; 0 for `step_index = 1` (first step) |
 
 Additional fields for **`segmented_finite`** only:
 
@@ -355,7 +355,7 @@ Additional fields for **`segmented_finite`** only:
 | `operating_point` | float | Independent variable for this step |
 | `operating_point_units` | string | e.g. `millimeter` for FL/isometric, `bodylength_per_second` for FV/isovelocity |
 
-`single_finite` manifests have exactly 1 row (`step_index = 0`, `rest_before_second = 0`, no `operating_point` fields).
+`single_finite` manifests have exactly 1 row (`step_index = 1`, `rest_before_second = 0`, no `operating_point` fields).
 
 ---
 

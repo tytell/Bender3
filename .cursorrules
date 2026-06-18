@@ -294,27 +294,31 @@ not enforced/encoded) or [GOTCHA].
   Driven by NI AO `S1stim`/`S2stim` (`ao0`/`ao1`); `stim_monitor` (`ai7`) records actual
   stim on AI. Stim voltages must be finite and > 0 for any active side.
 
-### HDF5 schema contract (as written by bender_h5_export.py)
-- Root groups: `01_Metadata`, `02_TimeSeries`. Per-trial groups are
-  `02_TimeSeries/trial_XXXX`, ZERO-based (`trial_0000`, `trial_0001`, …).
-  [IN-FLIGHT — segmented_finite migration, plan "single_finite / segmented_finite
-  + step_manifest"] Segmented protocols (isometric, isovelocity, FL, FV) are
-  moving to `02_TimeSeries/step_XXX` subgroups (ONE-BASED, 3-digit, `step_`
-  prefix; `step_001`, `step_002`, …); single_finite (dynamic, sweep) moves to
-  FLAT channel datasets (no trial subgroup). Until those commits land the writer
-  still emits `trial_XXXX`. Do NOT "correct" new step_XXX / flat code back to
-  trial_XXXX.
-- `01_Metadata` is NOT flat: subgroups `calibration_link`, `trial_index` (the manifest:
-  `trial_names`/`trial_index`/`cycle_index`/`test_type` + per-condition columns),
+### HDF5 schema contract
+
+**CURRENT CODE STATE** (as written by bender_h5_export.py today):
+- Root groups: `01_Metadata` (has subgroups), `02_TimeSeries`.
+- `01_Metadata` is NOT flat: subgroups `calibration_link`, `trial_index`,
   `inertial_calibration_profile`, `protocol_metadata`, `bender_settings`.
-  [IN-FLIGHT] A `step_manifest` (JSON in `01_Metadata`) is being added by the
-  same plan: per-step `step_index`, `wall_clock_start`, `duration_second`,
-  `rest_before_second`, plus `operating_point`/`operating_point_units` for
-  segmented_finite. Not yet written; do not remove new code that adds it.
-- [FLAG] No `03_Derived` group is written by this exporter. If `03_Derived`/`step_XXXX` are
-  R-pipeline conventions, they are downstream — not part of the Python writer.
-- `bender_gui_preview.py` is OFF the run path (independent timeline builder that "mirrors"
-  the motion branches). Run-path fixes must be ported to it SEPARATELY.
+- Per-step groups: `02_TimeSeries/trial_XXXX`, ZERO-based
+  (`trial_0000`, `trial_0001`, …).
+- No `step_manifest`. No `03_Derived` — that is R-pipeline / hub-copy only;
+  not written by the Python exporter.
+
+**POST-MIGRATION TARGET** (per `context_jlab_cg_h5schema.md` — Tier 2 authority):
+- Root groups: `metadata` (flat, NO subgroups), `timeseries`.
+- `single_finite` (dynamic, sweep): flat channel datasets directly in `timeseries/`.
+- `segmented_finite` (isometric, isovelocity, FL, FV): `timeseries/step_NNN/`
+  subgroups, ONE-BASED (`step_001`, `step_002`, …), 3-digit, `step_` prefix.
+- `step_manifest` JSON dataset in `metadata/`; per-step `step_index`
+  (1-based), `wall_clock_start`, `duration_second`, `rest_before_second`,
+  plus `operating_point`/`operating_point_units` for segmented_finite.
+- Hub copy adds `derived/` — never written by the Python exporter.
+
+[IN-FLIGHT — plan "single_finite / segmented_finite + step_manifest"] Until
+migration commits land the writer still emits `01_Metadata`/`02_TimeSeries`/
+`trial_XXXX`. Do NOT "correct" new `step_NNN` / flat code back to `trial_XXXX`.
+`bender_gui_preview.py` is OFF the run path; port run-path fixes SEPARATELY.
 
 ### Known guard gaps (follow-ups — do NOT add asserts as part of a rulefile edit)
 - No clamp-geometry crash guard (see Teknic [FLAG] above).

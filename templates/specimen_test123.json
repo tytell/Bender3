@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "name": "test123",
+  "name": "specimen_test123",
   "description": "",
-  "saved_at": "2026-06-17T08:03:00Z",
+  "saved_at": "2026-06-17T16:44:22Z",
   "session": {
     "morpho_segment": "",
-    "morpho_fishmass": 32.0,
-    "morpho_fishlen_TL": 100.0,
-    "morpho_fishlen_SL": 90.0,
+    "morpho_fishmass": 0.0,
+    "morpho_fishlen_TL": 0.0,
+    "morpho_fishlen_SL": 0.0,
     "morpho_xsec_height": 8.0,
     "morpho_dvert": 0.0,
     "morpho_dhoriz": 0.0,
@@ -25,7 +25,7 @@
     "morpho_prof_rho": 0.00103,
     "morpho_prof_clamp": 20.0,
     "morpho_use_theoretical_inertial": false,
-    "gui_genus_species": "abc",
-    "gui_specimen_id": "123"
+    "gui_genus_species": "test ",
+    "gui_specimen_id": "test123"
   }
 }
