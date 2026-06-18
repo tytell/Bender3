@@ -149,6 +149,21 @@ Raw + calibration principle (see Governing Rule 2): both the immutable raw volta
 
 **Not in `timeseries`:** inertial-corrected torque series, `primary_torque_*`, and any computed derived quantities. These are regenerated in R from `forcetorque_raw` + correction parameters and written only to `derived` in the hub copy.
 
+### 3e. Timeseries group structure (by `protocol_sampling_mode`)
+
+**`single_finite`** — dynamic, sweep:
+- `timeseries/` contains flat channel arrays directly.
+- One continuous monotonic `time_second` axis.
+- No subgroups.
+
+**`segmented_finite`** — isometric, isovelocity, FL, FV:
+- `timeseries/` contains subgroups `step_000/`, `step_001/`, `step_002/`, … (zero-padded 3-digit index).
+- Each subgroup holds the same channel arrays as the flat structure.
+- `time_second` within each subgroup is **local** to that step, starting at 0.
+- Subgroup prefix is always `step_` — never `trial_` or any other prefix.
+
+The locked protocol→mode mapping is in §10.
+
 ---
 
 ## 4. `metadata`
@@ -279,6 +294,7 @@ protocol_isometric_initial / _final / _num_steps / _target_unit
 protocol_isovelocity_min_velocity / _max_velocity / _starting_strain / _*_unit
 protocol_step_frequency_hertz / _step_amplitude / _step_amplitude_unit / _step_curvature_per_meter
 protocol_amplitude_frequency_exponent / _velocity_exponent
+protocol_sampling_mode                  'single_finite' | 'segmented_finite'
 protocol_acquisition_mode               'continuous' for the stitched isometric engine (run-computed)
 protocol_guard_triggered                bool — isovelocity angle guard fired (run-computed)
 protocol_guard_angle_degree             angle (deg) the isovelocity guard fired at; NaN if not (run-computed)
@@ -320,6 +336,26 @@ specimen_prep_condition                 prep state, e.g. "in_vivo" / "in_vitro" 
 ```
 
 > **FLAG E — RESOLVED.** Rename `genus_species` → `specimen_genusspecies` approved (compound word, no underscore). Pending rename in `bender_functions.py` Python attr, GUI widget key, and `bender_h5_export.py`.
+
+### `step_manifest` — per-step timing and operating-point index
+
+JSON dataset in `metadata/`. Present for **all** protocols.
+
+| Field | Type | Notes |
+|---|---|---|
+| `step_index` | int | 0-based; matches `step_NNN` subgroup index in `segmented_finite`, or 0 for `single_finite` |
+| `wall_clock_start` | string | ISO-8601 real-world start of this step |
+| `duration_second` | float | Recorded duration of this step |
+| `rest_before_second` | float | Unrecorded rest gap before this step; 0 for `step_index = 0` |
+
+Additional fields for **`segmented_finite`** only:
+
+| Field | Type | Notes |
+|---|---|---|
+| `operating_point` | float | Independent variable for this step |
+| `operating_point_units` | string | e.g. `millimeter` for FL/isometric, `bodylength_per_second` for FV/isovelocity |
+
+`single_finite` manifests have exactly 1 row (`step_index = 0`, `rest_before_second = 0`, no `operating_point` fields).
 
 ---
 
@@ -399,7 +435,7 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 3. **Decode via metadata, not per-channel.** Channel identity lives in `daq_ai_channel_map`. Decoded F/T channels in `timeseries` (§3d) are the single decoded form; the export does not additionally hard-slice `aidata` into named channels.
 4. **Distance rule.** Any length/distance → `measurement_`, animal or apparatus. `specimen_` holds only non-spatial facts (id, species, sex, muscle type — no geometry, no mass).
 5. **Step parameters appear twice by design.** Global defaults in `protocol_*`; per-step realized values in `index_step_*`. Intentional, not duplication.
-6. **No per-step subgroups.** One continuous time series + `index_step_*` ranges. `trial_*` group naming is retired.
+6. **Two timeseries structures, determined by `protocol_sampling_mode`.** `single_finite`: flat channel arrays directly in `timeseries/`, one continuous monotonic time axis. `segmented_finite`: `step_NNN/` subgroups in `timeseries/`, each with a local time axis starting at 0; `step_manifest` in `metadata/` is the only cross-step index. Subgroup prefix is always `step_` — never `trial_` or any other prefix. The locked protocol→mode mapping is in §10.
 7. **Two files, shared group names.** Raw file = `metadata` + `timeseries`. Hub copy = same two groups + `derived`. Group names identical across both.
 8. **Don't reuse one variable for two physical quantities.** Curvature, strain, angle, width, frequency are distinct even though all floats. Verify each assignment by physical role.
 9. **Naming convention is locked.** `<description>_<unit>`, fully spelled-out units, no abbreviations. See §1.
@@ -425,3 +461,20 @@ All schema-level decisions are locked. Remaining work is code-side renames only:
 ## 9. Backlog (logged, not blocking)
 
 - Update `tier2_data_curation_sop` + `jlab_folder_architecture` to the new key names; update any provenance assertions (`apparatus_id` → `session_apparatus_id`, etc.).
+
+---
+
+## 10. Locked protocol → sampling mode mapping
+
+PI decision. This mapping is immutable; changing a protocol's mode requires a schema version bump.
+
+| Protocol | `protocol_sampling_mode` | Notes |
+|---|---|---|
+| dynamic | `single_finite` | One finite DAQmx task per trial; flat continuous timeseries |
+| sweep (frequency_sweep) | `single_finite` | One finite DAQmx task per trial; flat continuous timeseries |
+| isometric | `segmented_finite` | One finite DAQmx task per step; `step_NNN/` subgroups |
+| isovelocity | `segmented_finite` | One finite DAQmx task per step; `step_NNN/` subgroups |
+| FL (force-length) | `segmented_finite` | One finite DAQmx task per step; `step_NNN/` subgroups |
+| FV (force-velocity) | `segmented_finite` | One finite DAQmx task per step; `step_NNN/` subgroups |
+
+> **Current implementation note.** Isometric and isovelocity currently run as a stitched continuous timeline (one NI task per trial, not per step). The `segmented_finite` entry above is the **target architecture** — this schema defines the goal, not the current code state. Do not align future code to `single_finite` for these protocols; align to `segmented_finite` when the acquisition engine is updated.
