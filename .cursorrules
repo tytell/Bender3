@@ -116,7 +116,7 @@
   in the finally block. Never add a task and rely solely on context manager 
   cleanup.
 
-  
+
 ---
 
 ## Debugging protocol
@@ -200,14 +200,24 @@ below are VERIFIED in code unless tagged [FLAG] (operator-provided,
 not enforced/encoded) or [GOTCHA].
 
 ### Acquisition task model (NI USB-6361)
-- One trial = ONE finite acquisition. Stitch every step + dead-time/return-to-home
-  ramp into a single uniformly sampled timeline (`_build_isometric_continuous_timeline`),
-  run once via `run()`, then SLICE per step by sample index post-hoc. Never issue N
-  back-to-back finite tasks — the legacy per-step loop caused NI -200560
-  ("Wait Until Done … timeout").
-- `run()` resets the NI device ONCE at the END of each call (`daq_emergency_stop` in
-  `finally`) — the documented back-to-back-FINITE-wedge workaround. Never add a device
-  reset mid-timeline; never reset between the stitched steps of a trial.
+- TWO acquisition modes, set by `protocol_sampling_mode` (schema §10):
+  - `single_finite` (dynamic, sweep): ONE `run()` per trial — one uniformly
+    sampled timeline, run once, written flat.
+  - `segmented_finite` (isometric, isovelocity, FL, FV): ONE `run()` per STEP
+    in a per-step loop; each step builds its own local timeline and calls
+    `run()`. Rest gaps BETWEEN `run()` calls are UNRECORDED.
+- Per-step `run()` is the PROVEN-SAFE pattern, not a hazard: isovelocity
+  already runs one `run()` per step (`_run_isovelocity_steps`, loop ~:4729).
+  The NI -200560 ("Wait Until Done … timeout") failure came from the OLD
+  per-step loop that DE-ENERGIZED the motor and/or reset the device BETWEEN
+  steps without re-asserting enable — NOT from per-step `run()` itself.
+- Inter-step handling is MANDATORY for any segmented per-step loop: keep the
+  motor ENERGIZED across steps (`hold_motor_between_steps=True`), reassert the
+  idle hold word after each reset, start/end at home. Never de-energize
+  between steps (drift source, commit e7cee87).
+- `run()` resets the NI device ONCE at the END of each call (`daq_emergency_stop`
+  in `finally`). Never add a device reset MID-step. One reset per `run()` is
+  correct; N steps = N resets-in-finally, which is fine.
 - AI is `AcquisitionType.FINITE`, `samps_per_chan=len(self.t)`. Selective-write = read an
   array sub-range of `aidata`; never delete or segment the live acquisition.
 - Preserve the two co-clocked domains on any new acquisition:
@@ -222,6 +232,13 @@ not enforced/encoded) or [GOTCHA].
   so it equals 1000 Hz.
 - [FLAG] USB-6361 device/buffer-rate ceiling is NOT checked in code. Do not assume
   headroom when raising rates; verify against the device spec out-of-band.
+- [SEGMENTED PER-STEP CONVERSION] Converting a stitched protocol to a per-step
+  `run()` loop (e.g. isometric `_run_force_length_steps`) MUST mirror
+  `_run_isovelocity_steps` inter-step handling EXACTLY (energized hold, single
+  reset-in-finally, idle hold word reasserted, start/end at home). Capture
+  per-step `wall_clock_start` and `rest_before_second` (wall-clock delta across
+  the inter-step gap + any neutral-reset). Port the equivalent timeline change
+  to `bender_gui_preview.py` as a SEPARATE edit — it is OFF the run path.
 
 ### Teknic ClearPath servo — step/dir, open-loop
 - Motor model number: CPM-SDSK-2310H-ELS
@@ -280,11 +297,20 @@ not enforced/encoded) or [GOTCHA].
 ### HDF5 schema contract (as written by bender_h5_export.py)
 - Root groups: `01_Metadata`, `02_TimeSeries`. Per-trial groups are
   `02_TimeSeries/trial_XXXX`, ZERO-based (`trial_0000`, `trial_0001`, …).
-  [FLAG] NOT `step_XXXX` and NOT 1-based.
+  [IN-FLIGHT — segmented_finite migration, plan "single_finite / segmented_finite
+  + step_manifest"] Segmented protocols (isometric, isovelocity, FL, FV) are
+  moving to `02_TimeSeries/step_XXX` subgroups (ONE-BASED, 3-digit, `step_`
+  prefix; `step_001`, `step_002`, …); single_finite (dynamic, sweep) moves to
+  FLAT channel datasets (no trial subgroup). Until those commits land the writer
+  still emits `trial_XXXX`. Do NOT "correct" new step_XXX / flat code back to
+  trial_XXXX.
 - `01_Metadata` is NOT flat: subgroups `calibration_link`, `trial_index` (the manifest:
   `trial_names`/`trial_index`/`cycle_index`/`test_type` + per-condition columns),
   `inertial_calibration_profile`, `protocol_metadata`, `bender_settings`.
-  [FLAG] There is no `step_manifest` group.
+  [IN-FLIGHT] A `step_manifest` (JSON in `01_Metadata`) is being added by the
+  same plan: per-step `step_index`, `wall_clock_start`, `duration_second`,
+  `rest_before_second`, plus `operating_point`/`operating_point_units` for
+  segmented_finite. Not yet written; do not remove new code that adds it.
 - [FLAG] No `03_Derived` group is written by this exporter. If `03_Derived`/`step_XXXX` are
   R-pipeline conventions, they are downstream — not part of the Python writer.
 - `bender_gui_preview.py` is OFF the run path (independent timeline builder that "mirrors"
