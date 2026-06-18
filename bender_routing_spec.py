@@ -239,8 +239,10 @@ BENDER_ROUTING: Dict[str, Route] = {
     "block_sequence":         {"tier": "metadata", "key": "protocol_block_sequence",           "required": False, "source": "GUI",
                                "note": "list-of-dict block plan; serialized as a JSON string (json.dumps) by the exporter"},
     # run-computed protocol provenance (set during the run path; absent -> skipped)
-    "protocol_acquisition_mode":  {"tier": "metadata", "key": "protocol_acquisition_mode",  "required": False, "source": "computed",
-                                   "note": "'continuous' for the stitched isometric engine"},
+    "daq_collection_type":        {"tier": "metadata", "key": "daq_collection_type",         "required": False, "source": "computed",
+                                   "note": "'continuous' (single_finite) or 'segmented' (segmented_finite), derived from protocol"},
+    "protocol_sampling_mode":     {"tier": "metadata", "key": "protocol_sampling_mode",      "required": False, "source": "computed",
+                                   "note": "'single_finite' (dynamic/sweep) or 'segmented_finite' (isovelocity/FL/FV; isometric after Step 4)"},
     "protocol_guard_triggered":   {"tier": "metadata", "key": "protocol_guard_triggered",   "required": False, "source": "computed",
                                    "note": "bool: isovelocity angle guard fired"},
     "protocol_guard_angle_degree": {"tier": "metadata", "key": "protocol_guard_angle_degree", "required": False, "source": "computed",

@@ -508,6 +508,33 @@ def export_primary_h5(
 
         g_meta.attrs['n_trials'] = int(len(trial_records))
 
+        # step_manifest: per-step timing and operating-point index (schema §4).
+        # Scaffold: step_index (1-based), duration_second from t array, rest_before_second
+        # from rec field (0 until Steps 3/4 populate wall_clock timing). operating_point
+        # fields added for segmented protocols where the value is already in the record.
+        daq_ct = str(getattr(bender, 'daq_collection_type', '') or '')
+        _ai_rate = float(getattr(bender, 'daq_ai_sample_rate_hz', 1000.0) or 1000.0)
+        step_manifest_rows = []
+        for _j, _rec in enumerate(trial_records):
+            _t_arr = np.asarray(_rec.get('t', []), dtype=float).reshape(-1)
+            _dur = float(_t_arr.size) / max(_ai_rate, 1.0) if _t_arr.size > 0 else None
+            _row = {
+                'step_index': int(_rec.get('step_index', _j + 1)),
+                'wall_clock_start': _rec.get('wall_clock_start', None),
+                'duration_second': _dur,
+                'rest_before_second': float(_rec.get('rest_before_second', 0.0)),
+            }
+            if daq_ct == 'segmented':
+                _op = _rec.get('velocity_deg_s') if 'velocity_deg_s' in _rec else _rec.get('target_deg', None)
+                if _op is not None:
+                    _row['operating_point'] = float(_op)
+                _op_units = _rec.get('operating_point_units', None)
+                if _op_units is not None:
+                    _row['operating_point_units'] = str(_op_units)
+            step_manifest_rows.append(_row)
+        _step_manifest_json = json.dumps(step_manifest_rows, default=str)
+        g_meta.attrs.create('step_manifest', _step_manifest_json, dtype=h5py.special_dtype(vlen=str))
+
         prof = getattr(bender, 'inertial_calibration_profile', None)
         if isinstance(prof, dict):
             g_ic = g_meta.create_group('inertial_calibration_profile')

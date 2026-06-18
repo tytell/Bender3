@@ -109,7 +109,7 @@ def test_block_run_six_entries_shapes_and_tags():
     )
     # 3 steps x 2 blocks -> 6 trials, NOT 3.
     assert len(out) == 6
-    assert [e['step_index'] for e in out] == list(range(6))
+    assert [e['step_index'] for e in out] == list(range(1, 7))
     assert [e['trial_index'] for e in out] == list(range(6))
     for e in out:
         n = e['t'].size
@@ -130,8 +130,10 @@ def test_block_run_six_entries_shapes_and_tags():
     assert abs(float(b._last_commanded_angle_deg)) < 1e-6
     # Continuous-mode metadata, user-selectable keys preserved.
     md = b.h5_protocol_metadata
-    # acquisition_mode is now routed canonically as a Bender attr (protocol_acquisition_mode).
-    assert b.protocol_acquisition_mode == 'continuous'
+    # daq_collection_type and protocol_sampling_mode are routed canonically to 01_Metadata.
+    # Isometric stays 'continuous'/'single_finite' until Step 4 converts to per-step run().
+    assert b.daq_collection_type == 'continuous'
+    assert b.protocol_sampling_mode == 'single_finite'
     for k in ('rest_between_steps_s', 'reset_between_steps', 'isometric_inter_step_interval_s'):
         assert k in md
 

@@ -531,7 +531,8 @@ class Bender:
         # Run-computed metadata routed canonically to 01_Metadata via BENDER_ROUTING.
         # Default None so the exporter skips them for protocols that never set them
         # (Pass A skips None); each is assigned at its computation point in the run path.
-        self.protocol_acquisition_mode = None
+        self.daq_collection_type = None       # 'continuous' | 'segmented', derived from protocol
+        self.protocol_sampling_mode = None    # 'single_finite' | 'segmented_finite', derived from protocol
         self.protocol_guard_triggered = None
         self.protocol_guard_angle_degree = None
         self.inertial_specimen_from_geometry = None
@@ -1160,6 +1161,8 @@ class Bender:
             extra={'cycle_index_by_sample': cyc},
         )
         self.trial_records = [entry]
+        self.daq_collection_type = 'continuous'
+        self.protocol_sampling_mode = 'single_finite'
         # test_type is routed from self.test_type; n_trials is written directly by the exporter;
         # motion_test_type is dropped (redundant). No protocol-metadata mirror written here.
 
@@ -4031,7 +4034,7 @@ class Bender:
             rec_i = loc['rec']
             entry = {
                 'test_type': 'isometric',
-                'step_index': i,
+                'step_index': i + 1,
                 'trial_index': i,
                 'cycle_index': i,
                 'recruitment': rec_i,
@@ -4093,10 +4096,11 @@ class Bender:
         self.force_length_results = results
         self.test_type = 'isometric'
         self.trial_records = list(results)
-        # protocol_acquisition_mode routed canonically; test_type/n_trials are redundant
-        # (routed from self.test_type / written by the exporter). Realized continuous-mode
-        # settings are retained on the working dict for in-app inspection (not exported).
-        self.protocol_acquisition_mode = 'continuous'
+        # Gate D3: isometric uses a single stitched FINITE task today, so daq_collection_type
+        # stays 'continuous' and protocol_sampling_mode stays 'single_finite' until Step 4
+        # converts isometric to a true per-step run() loop (segmented_finite).
+        self.daq_collection_type = 'continuous'
+        self.protocol_sampling_mode = 'single_finite'
         self.h5_protocol_metadata.update({
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),
@@ -4831,7 +4835,7 @@ class Bender:
 
             entry = {
                 'test_type': 'isovelocity',
-                'step_index': i,
+                'step_index': i + 1,
                 'trial_index': i,
                 'cycle_index': i,
                 'recruitment': rec,
@@ -4904,6 +4908,8 @@ class Bender:
         self.isovelocity_results = results
         self.test_type = 'isovelocity'
         self.trial_records = list(results)
+        self.daq_collection_type = 'segmented'
+        self.protocol_sampling_mode = 'segmented_finite'
         # test_type routed from self.test_type; n_trials written by the exporter.
         self.h5_protocol_metadata.update({
             'rest_between_steps_s': float(gap_s),
@@ -5056,7 +5062,7 @@ class Bender:
             dev = sp.get('device_name', None) or getattr(self, 'device_name', None)
             all_out = []
             last_deg = 0.0
-            global_step = 0
+            global_step = 1
             step_order_blocks = []
             vels_mag_base = np.abs(vels)
             for bi, block in enumerate(block_seq):
