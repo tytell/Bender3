@@ -2551,7 +2551,8 @@ def _render_rest_between_steps_field(b: Bender) -> float:
             key=sk,
             help=(
                 'Seconds the motor holds position after each step finishes (after acquisition) '
-                'before the next step begins. Use **0** for back-to-back steps.'
+                'before the next step begins. A minimum of 2 s is enforced at Run for stepped '
+                'protocols to ensure clean recording buffers between steps.'
             ),
         )
     )
@@ -3484,6 +3485,33 @@ def _procedure_ready_for_run() -> tuple[bool, str]:
             'Click **Apply procedure** or **Refresh experiment preview** before **Run experiment**.',
         )
     return True, ''
+
+
+# Minimum inter-step rest enforced at Run (not at keystroke) for stepped protocols.
+SEGMENTED_REST_FLOOR_S = 2.0
+
+
+def _segmented_rest_floor_error(test_type: str, rest_between_steps_s) -> Optional[str]:
+    """Block message if a stepped protocol's rest is below the 2 s floor, else None (Run-gate only).
+
+    Returns the exact D4-mandated block message when ``test_type`` is ``'isometric'`` or
+    ``'isovelocity'`` and ``rest_between_steps_s`` is below ``SEGMENTED_REST_FLOOR_S``.
+    Returns ``None`` for non-stepped protocols or when the floor is met.
+    The engine accepts any non-negative inter_step_interval_s; this guard is intentionally
+    at the GUI Run layer so tests can pass 0 s gaps without sleeping.
+    """
+    if str(test_type) not in ('isometric', 'isovelocity'):
+        return None
+    try:
+        rest = float(rest_between_steps_s)
+    except (TypeError, ValueError):
+        return None
+    if rest < SEGMENTED_REST_FLOOR_S:
+        return (
+            'Reset duration must be at least 2s to ensure clean recording buffers between '
+            'steps. Physiological rest requirements will typically exceed this minimum.'
+        )
+    return None
 
 
 def _run_export_blocked_reason(b: Optional[Bender]) -> Optional[str]:
@@ -8854,6 +8882,10 @@ def main():
             _proc_ok, _proc_msg = _procedure_ready_for_run()
             if not _proc_ok:
                 st.error(_proc_msg)
+                return
+            _rest_err = _segmented_rest_floor_error(tt, getattr(b, 'rest_between_steps_s', None))
+            if _rest_err:
+                st.error(_rest_err)
                 return
             st.session_state['gui_run_in_progress'] = True
             _rehydrate_missing_morphometrics_from_bender(b)
