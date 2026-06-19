@@ -102,7 +102,8 @@ def test_dynamic_has_cycle_index_but_no_step_index(tmp_path):
 def test_forcetorque_raw_kept_not_split(tmp_path):
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
-        tg = f['02_TimeSeries']['trial_0000']
+        # Isometric is segmented_finite: per-step subgroups are step_NNN (one-based), not trial_XXXX.
+        tg = f['02_TimeSeries']['step_001']
         assert 'forcetorque_raw' in tg
         assert tg['forcetorque_raw'].shape[0] == 6
         assert 'forcetorque' not in tg, 'duplicate forcetorque dropped'
