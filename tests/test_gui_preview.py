@@ -117,6 +117,36 @@ class _PreviewBender:
         s1, s2 = self._route_recruitment_stim(pulse, kw.get('recruitment', 'bilateral_simultaneous'))
         return {'t': t, 'angle': ang, 'anglevel': w, 's1': s1, 's2': s2}
 
+    def _neutral_reset_ramp_duration_s(self, from_deg):
+        max_speed = 15.0
+        ramp = abs(float(from_deg)) / max_speed
+        return max(ramp, 2.0 / float(self.daq_ai_sample_rate_hz))
+
+    def _build_isometric_one_step(self, target_deg, *, prev_deg=0.0, ramp_duration_s,
+                                  hold_duration_s, pre_baseline_s=0.0, post_baseline_s=0.0,
+                                  is_stim=False, spr=75.0, stim_voltage=5.0, daq_hz=1000.0,
+                                  post_buffer_s=1.0, **kw):
+        # Stub mirroring the run-path single-step shape: ramp 0->target, baselines+hold at target,
+        # speed-capped return to home, trailing post_buffer hold at 0. Start/end at home.
+        total_hold = float(pre_baseline_s) + float(hold_duration_s) + float(post_baseline_s)
+        t1, a1, w1 = self._timeline_ramp_hold(
+            float(prev_deg), float(target_deg), float(ramp_duration_s), total_hold, daq_hz
+        )
+        ret_s = self._neutral_reset_ramp_duration_s(float(target_deg))
+        t2, a2, w2 = self._timeline_ramp_hold(float(target_deg), 0.0, ret_s, float(post_buffer_s), daq_hz)
+        t = np.concatenate([t1, float(t1[-1]) + np.asarray(t2, dtype=float)[1:]])
+        ang = np.concatenate([a1, np.asarray(a2, dtype=float)[1:]])
+        w = np.concatenate([w1, np.asarray(w2, dtype=float)[1:]])
+        stim_start = float(ramp_duration_s) + float(pre_baseline_s)
+        active = (t >= stim_start) & (t < stim_start + float(hold_duration_s))
+        if is_stim and np.any(active):
+            pulse = self._pulse_carrier_volts(t, active, spr, stim_voltage)
+            s1, s2 = self._route_recruitment_stim(pulse, kw.get('recruitment', 'bilateral_simultaneous'))
+        else:
+            s1 = np.zeros_like(t)
+            s2 = np.zeros_like(t)
+        return {'t': t, 'angle': ang, 'anglevel': w, 's1': s1, 's2': s2}
+
 
 def test_isometric_preview_includes_stim_and_native_units():
     b = _PreviewBender()
