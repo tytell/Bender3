@@ -476,9 +476,10 @@ class Bender:
         # for FV) before running. OFF = run in the generated linspace order. When a block
         # sequence is used, each block is shuffled independently.
         self.randomize_step_order = False
-        # Canonical toggle: after each step's rest, drive the motor back to angle = 0° (resting
-        # length) before the next step. OFF = motor stays at its current position. FL + FV only.
-        self.reset_between_steps = False
+        # Segmented protocols (isometric/isovelocity) always reset to home between steps.
+        # Forced True internally in _run_force_length_steps and _run_isovelocity_steps; no GUI
+        # control. Retained as an instance attribute so it is still written to h5_protocol_metadata.
+        self.reset_between_steps = True
         # Canonical toggle: keep the stepper driver ENABLED (energized/braked) across the
         # inter-segment gap so the motor holds position between steps. ON (default): the enable
         # line stays high through the end of each segment's playback and run() reasserts it after
@@ -5932,7 +5933,7 @@ class Bender:
             ],
             'isometric_optional': [
                 'isometric_mode', 'randomize_step_order', 'isometric_random_seed',
-                'rest_between_steps_s', 'reset_between_steps', 'hold_motor_between_steps',
+                'rest_between_steps_s',
                 'isometric_stim_params',
             ],
             'isovelocity_required': [
@@ -5946,8 +5947,7 @@ class Bender:
             'isovelocity_optional': [
                 'randomize_step_order',
                 'isovelocity_random_seed',
-                'rest_between_steps_s', 'reset_between_steps',
-                'hold_motor_between_steps',
+                'rest_between_steps_s',
                 'isovelocity_stim_params',
             ],
             'legacy_aliases_mirrored_to_canonical': {
