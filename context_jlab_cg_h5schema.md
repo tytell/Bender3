@@ -5,8 +5,14 @@
 - **Authority level:** Tier 2 (binding for all H5 write/read tasks — export routine, R pipeline, GUI→backend assignment).
 - **Scope:** `bender_h5_export.py` (write), `01_calibration.R` / `02_correct.R` / `03_analyze.R` (read), GUI variable assignment in `bender_streamlit_gui.py`.
 - **Owner:** PI (schema decisions are PI-only).
-- **Version:** v2.3 (Phase 0 + index/stim schema: ledger-driven canonical exporter; `forcetorque_raw` kept `[6×N]` not split; index fields `cycle_index`/`step_index`/`sequence_index`/`block_index`/`block_direction`/`block_stim_sides` converted to per-sample timeseries arrays; `trial_index` + `step_order` dropped; `protocol_metadata` subgroup removed, `block_sequence` → `protocol_block_sequence` JSON; `99_Unrouted` fallback)
-- **Last reviewed:** 2026-06-15
+- **Version:** v2.4 (Phase 1 spec freeze: `metadata`/`timeseries` flat groups, no `01_`/`02_` prefixes; `calibration_link` subgroup → flat `calibration_inertial_*` keys; complete `index_step_*` column map from D4 inventory; `metadata/99_Unrouted` placement confirmed; root attrs reduced to `schema_version` only)
+- **Last reviewed:** 2026-06-19
+
+### Changelog
+| Version | Date | Summary |
+|---|---|---|
+| v2.4 | 2026-06-19 | Phase-1 spec freeze: flat `metadata`/`timeseries` groups, `calibration_inertial_*` flat keys, complete `index_step_*` column map, `metadata/99_Unrouted`, root-attr reduction to `schema_version` only (decisions D1-D9 per migration plan) |
+| v2.3 | 2026-06-15 | Phase 0: ledger-driven canonical exporter; `forcetorque_raw` `[6×N]` unsplit; per-sample index/stim arrays; `trial_index`/`step_order` dropped; `protocol_metadata` removed; `protocol_block_sequence` JSON; `99_Unrouted` fallback |
 
 ---
 
@@ -85,13 +91,33 @@ sim_YYYY-MM-DD_<specimen_id>_bender_<NN>_<protocol>.h5
 
 Analysis-pipeline rule: `filename starts with sim_` **OR** `session_simulated = True` → quarantine; absent flag → unknown/legacy.
 
+### Root-level attributes (D6 — locked)
+
+After Phase 1 migration (M1) only **one** attribute survives at the HDF5 file root:
+
+| Root attr | Value | Notes |
+|---|---|---|
+| `schema_version` | e.g. `"2.4"` | File-level schema provenance; kept at root because it predates and outlives any group rename |
+
+All other previous root attrs are moved to flat `metadata/` keys:
+
+| Previous root attr | Disposition | Target key |
+|---|---|---|
+| `test_type` | MOVE | `metadata/protocol_type` |
+| `post-trial notes` | MOVE | `metadata/note_bench` (+ `note_posthoc`) |
+| `start_time_iso` | MOVE | `metadata/session_date` |
+| `filename` | DROP from root | `metadata/filename` (already mirrored there; root copy redundant) |
+
+After M1 the root contains exactly: `schema_version` attr + `metadata` group + `timeseries` group.
+M1 must print the actual surviving root attr set during a sim export for PI eyeball before finalizing.
+
 ---
 
 ## 3. `timeseries`
 
 Continuous streams, sample-indexed at the acquisition rate, sharing one `time_second` axis.
 
-> **Phase 0 status.** The canonical **dataset names** below are implemented in `bender_h5_export.py`, and the index/stim fields are now **per-sample timeseries arrays** (§3b-i). The on-disk group skeleton is still `02_TimeSeries/trial_XXXX` (one subgroup per step). The full §2 restructure — collapse to a single continuous `timeseries` group + `index_step_*` ranges, drop the numeric `01_/02_` prefixes — is a later, separate step. The per-sample index arrays are designed to concatenate cleanly into that flat timeline; the `index_step_*` range form (§4) is not yet written.
+> **Phase 1 migration target (build target from v2.4).** Dataset names below are the canonical target. The on-disk group skeleton migrates from `02_TimeSeries/trial_XXXX` (zero-based, numeric prefix) to flat `timeseries/` channel arrays for `single_finite`, and `timeseries/step_NNN/` subgroups (one-based, 3-digit) for `segmented_finite`. The `01_`/`02_` numeric prefixes are dropped — hard cut, no dual-name reader (D2). The `index_step_*` flat parallel arrays (§4 `index_` section) replace the old `trial_index` subgroup in the same M2 commit. Per-sample index streams (§3b-i) concatenate cleanly into the flat timeline once the skeleton is collapsed.
 
 ### 3a. Motor and time axes
 
@@ -177,7 +203,15 @@ calibration_forcetorque_matrix          [6×6]   ATI calibration matrix (raw vol
                                                   (Current: calibration; rename pending)
 calibration_sono_left                   [4 or 8] Sono calibration breakpoints, left channel
 calibration_sono_right                  [4 or 8] Sono calibration breakpoints, right channel
+calibration_inertial_used               bool    Whether an inertial calibration profile was loaded for this run
+                                                  (Phase 1: flattened from calibration_link/use_inertial_calibration)
+calibration_inertial_file               str     Path/name of the inertial calibration file used; empty string if none
+                                                  (Phase 1: flattened from calibration_link/calibration_file)
+calibration_inertial_available          bool    Whether the inertial calibration file was found on disk at write time
+                                                  (Phase 1: flattened from calibration_link/calibration_available)
 ```
+
+> **D3 (locked).** `calibration_link` was a subgroup holding real captured values (`use_inertial_calibration`, `calibration_file`, `calibration_available`). It is NOT deleted; it is flattened to the three `calibration_inertial_*` keys above in M1. The prior schema-doc description of `calibration_link` as empty/deleted was incorrect and is superseded here.
 
 ### `daq_` — acquisition / DAQ configuration + rig hardware/wiring provenance
 
@@ -213,27 +247,92 @@ daq_positive_motor_direction            "left" / "right" (Current: positive_moto
 daq_specimen_lateral_index_on_positive_motor_side   signed lateral index (Current: same name)
 daq_specimen_side_index_left / _right   derived per-side signed indices
 daq_motor_positive_bend_lateral_index   signed lateral index the positive motor direction bends toward (run-computed; isometric/isovelocity)
+daq_collection_type                     acquisition type string written by the exporter (D5 — kept alongside protocol_sampling_mode;
+                                          both are present; neither is deleted)
 ```
 
 ### `index_` — structural indices into the continuous `timeseries`
 
-Parallel arrays, **one element per step**. Replaces old per-trial subgroups (`trial_index`).
+Parallel arrays, **one element per step**. Replaces old per-trial subgroups (`trial_index`). Written
+by M2 in the same commit that removes `trial_index`. Source of truth: per-step `entry` dicts in the
+exporter, enumerated from `bender_h5_export.py:501-531` (D4 — no invented fields).
 
+> **D4 (locked).** Column set = code, not invention. Only fields present in the per-step `entry`
+> dicts collected by the acquisition engine appear here. Motor-position reference fields added by
+> `_record_motor_position_reference()` are included as a block below; M2 must enumerate their exact
+> names from the code before writing.
+
+#### All protocols (shared)
 ```
-index_step_sample_start                 [n_steps]
-index_step_sample_end                   [n_steps]
-index_step_type                         [n_steps]
-index_step_target_angle_degree          [n_steps]   (Current: index_step_target_angle_deg)
-index_step_target_value_native          [n_steps]
-index_step_curvature_per_meter          [n_steps]   (Current: index_step_curvature_1_per_m)
-index_step_stim_voltage_left_volt       [n_steps]
-index_step_stim_voltage_right_volt      [n_steps]
-index_step_stim_t0_second               [n_steps]
-index_step_stim_t1_second               [n_steps]
-index_step_t_active_start_second        [n_steps]
-index_step_t_active_end_second          [n_steps]
-... (one column per per-step realized parameter currently in trial_index)
+index_step_step_number                  [n_steps] int   1-based step number (matches step_NNN subgroup; source: step_index)
+index_step_wall_clock_start             [n_steps] str   ISO-8601 real-world start of this step (no unit suffix)
+index_step_duration_second              [n_steps] float Recorded acquisition duration of this step
+index_step_rest_before_second           [n_steps] float Unrecorded rest gap before this step; 0 for step 1
+index_step_operating_point              [n_steps] float Independent variable value for this step (protocol-dependent)
+index_step_operating_point_units        [n_steps] str   Units of operating_point (e.g. "millimeter", "bodylength_per_second")
+index_step_recruitment                  [n_steps]       Recruitment condition for this step
+index_step_unilateral_posture_lateral_index  [n_steps]  Signed lateral index for unilateral posture
+index_step_motor_positive_bend_lateral_index [n_steps]  Signed lateral index the positive motor direction bends toward
+index_step_bilateral_mirror_motor       [n_steps] bool  Whether bilateral mirror-motor mode was active
+index_step_stim_t0_second              [n_steps] float Stim onset time within the step (source: stim_t0)
+index_step_stim_t1_second              [n_steps] float Stim offset time within the step (source: stim_t1)
+index_step_t_pre_baseline_start_second  [n_steps] float Pre-stim baseline window start (source: t_pre_baseline_start)
+index_step_t_pre_baseline_end_second    [n_steps] float Pre-stim baseline window end   (source: t_pre_baseline_end)
+index_step_t_active_start_second        [n_steps] float Active window start             (source: t_active_start)
+index_step_t_active_end_second          [n_steps] float Active window end               (source: t_active_end)
+index_step_t_post_baseline_start_second [n_steps] float Post-stim baseline window start (source: t_post_baseline_start)
+index_step_t_post_baseline_end_second   [n_steps] float Post-stim baseline window end   (source: t_post_baseline_end)
 ```
+
+#### All protocols (structural — sample offsets into flat/concatenated timeseries)
+```
+index_step_sample_start                 [n_steps] int   First sample index of this step in the concatenated timeline
+index_step_sample_end                   [n_steps] int   Last sample index (inclusive) of this step
+index_step_type                         [n_steps] str   Step type label
+index_step_target_value_native          [n_steps] float Target value in protocol-native units
+index_step_curvature_per_meter          [n_steps] float Step curvature (source: curvature_1_per_m → renamed)
+```
+
+#### Isometric-only
+```
+index_step_target_angle_degree          [n_steps] float Target hold angle (source: target_deg)
+index_step_ramp_from_angle_degree       [n_steps] float Starting angle for ramp (source: ramp_from_deg)
+```
+
+#### Isovelocity-only
+```
+index_step_velocity_degree_per_second   [n_steps] float Commanded velocity (source: velocity_deg_s)
+index_step_theta_start_degree           [n_steps] float Start angle for isovelocity ramp (source: theta_start_deg)
+index_step_pre_stim_t0_second           [n_steps] float Pre-stim window start (source: pre_stim_t0)
+index_step_pre_stim_t1_second           [n_steps] float Pre-stim window end   (source: pre_stim_t1)
+index_step_iso_t0_second                [n_steps] float Isovelocity ramp onset  (source: iso_t0)
+index_step_iso_t1_second                [n_steps] float Isovelocity ramp offset (source: iso_t1)
+index_step_mean_xforce_stim_newton      [n_steps] float Mean x-axis force during stim window (source: mean_xforce_stim)
+index_step_guard_triggered              [n_steps] bool  Whether the isovelocity angle guard fired (source: guard_triggered)
+index_step_guard_angle_degree           [n_steps] float Angle at which guard fired; NaN if not triggered (source: guard_angle_deg)
+index_step_velocity_seg1_degree_per_second [n_steps] float Velocity of segment 1 (source: velocity_seg1_deg_s)
+index_step_velocity_seg2_degree_per_second [n_steps] float Velocity of segment 2, mirror only (source: velocity_seg2_deg_s)
+```
+
+#### Block metadata (present when `use_block_stim` is active)
+```
+index_step_block_number                 [n_steps] int   Block number (source: block_index; avoids index_step_block_index doubling)
+index_step_block_direction              [n_steps] str   Bending direction for the block (source: block_direction)
+index_step_block_stim_sides             [n_steps] str   Stim sides for the block (source: block_stim_sides)
+index_step_stim_voltage_left_volt       [n_steps] float Left-side stim voltage (source: left_stim_voltage)
+index_step_stim_voltage_right_volt      [n_steps] float Right-side stim voltage (source: right_stim_voltage)
+```
+
+#### Motor-position reference fields
+```
+# Fields added by _record_motor_position_reference() — exact names enumerated at M2 from code.
+# Apply index_step_ prefix and spelled-out units per §1 when writing.
+```
+
+> **Dropped (D4).** `trial_index`, `cycle_index`, and `step_order` per-step scalars are not written
+> as `index_step_*` arrays. `trial_index` and `cycle_index` are redundant with `step_manifest` +
+> per-sample timeseries streams. `step_order` is reconstructable from per-sample `sequence_index` +
+> `block_index`.
 
 ### `inertial_` — inertial-correction parameters + provenance
 
@@ -357,6 +456,23 @@ Additional fields for **`segmented_finite`** only:
 
 `single_finite` manifests have exactly 1 row (`step_index = 1`, `rest_before_second = 0`, no `operating_point` fields).
 
+### `99_Unrouted` — catch-all subgroup for unclassified fields
+
+**Location:** `metadata/99_Unrouted` (subgroup; D7 confirmed).
+
+Any config-sourced field that the routing ledger does not yet classify into a prefix group is written
+here rather than at the `metadata` root or the file root. This prevents unclassified fields from
+polluting the flat namespace while the routing ledger is being completed.
+
+- Present only when there are unrouted fields; absent from a fully-routed file.
+- **After M1** this is the only subgroup permitted under `metadata`; all other subgroups
+  (`calibration_link`, `inertial_calibration_profile`, `protocol_metadata`, `bender_settings`,
+  `trial_index`) are removed or flattened as part of M1/M2.
+- Keys inside `99_Unrouted` follow the same `<description>_<unit>` convention; they are candidates
+  for routing in a follow-up pass and should not be read as canonical.
+- Root holds only `schema_version` and the two groups `metadata` / `timeseries`; `99_Unrouted`
+  moves from root to `metadata/99_Unrouted` in M1 (D7).
+
 ---
 
 ## 5. Raw + decoded principle (LOCKED)
@@ -414,7 +530,9 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 | `protocol_metadata/step_order` | **dropped** | — | done (reconstructable from per-sample `sequence_index` + `block_index`) |
 | `protocol_metadata/block_sequence` | **`protocol_block_sequence` (JSON)** | — | done (routed, `json.dumps`) |
 | `protocol_metadata` (subgroup) | **removed** | — | done (attr-mirrors now canonical; redundant dict-only keys dropped) |
-| `calibration_link` (empty group) | empty | — | delete |
+| `calibration_link/use_inertial_calibration` | present | `calibration_inertial_used` | flatten from subgroup (M1) — D3 |
+| `calibration_link/calibration_file` | present | `calibration_inertial_file` | flatten from subgroup (M1) — D3 |
+| `calibration_link/calibration_available` | present | `calibration_inertial_available` | flatten from subgroup (M1) — D3 |
 | `daq_ai_sample_rate_hz` | present | `daq_ai_sample_rate_hertz` | rename |
 | `t` (timeseries) | present | `time_second` | rename |
 | `tnorm` (timeseries) | present | `time_normalized` | rename |
