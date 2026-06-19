@@ -48,6 +48,14 @@ import h5py
 # the angle to or past this magnitude, the ramp is stopped and the motor is returned to 0° (2.1).
 ISOVELOCITY_ANGLE_LIMIT_DEG = 45.0
 
+# --- Segmented recording bookend (plan D2, locked) ----------------------------
+# Fixed neutral hold duration at home (0 deg, motor energized) prepended AND appended to every
+# recorded segmented step: [1s hold] -> [approach ramp] -> [active] -> [return to neutral] ->
+# [1s hold]. Hardcoded by design (plan D2); no GUI field. Used by both the run path
+# (_run_isovelocity_steps) and the preview (_preview_concat_isovelocity_timeline) so both are
+# always in sync. Import this constant; never hardcode 1.0 in either caller.
+SEGMENTED_STEP_BUFFER_S = 1.0
+
 # --- DIR hold-after-step (motor reversal timing) ------------------------------
 # Number of idle AO samples after each STEP pulse during which the DIR line must keep that step's
 # direction before it may flip to the next step's direction. Flipping DIR on the very next sample
@@ -4711,10 +4719,11 @@ class Bender:
         self.set_stim_channels(*self.stim_channels)
         th0_fixed = float(theta_start_deg)
         post_b = max(0.0, float(post_baseline_s))
-        # Segmented recording bookend: a fixed 1 s neutral hold at home (0 deg) brackets each
-        # recorded step (pre-bookend prepended below; post-bookend is the trailing neutral hold
-        # inside the final block, sized by post_buffer_s). Hardcoded, no GUI field (plan D2).
-        step_buffer_s = 1.0
+        # Segmented recording bookend: a fixed neutral hold at home (0 deg) brackets each recorded
+        # step (pre-bookend prepended below; post-bookend is the trailing neutral hold inside the
+        # final block, sized by post_buffer_s). Duration from SEGMENTED_STEP_BUFFER_S (module
+        # constant); never hardcode the literal so the preview always stays in sync.
+        step_buffer_s = SEGMENTED_STEP_BUFFER_S
         iso_kw = dict(
             pre_hold_s=pre_hold_s,
             iso_duration_s=iso_duration_s,

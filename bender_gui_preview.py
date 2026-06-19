@@ -295,7 +295,11 @@ def _preview_concat_isovelocity_timeline(
     Concatenate per-step isovelocity command timelines (same geometry as
     :meth:`bender_functions.Bender._run_isovelocity_steps`, without DAQ).
     Each step starts again from ``theta0_fixed``.
+
+    Each step is bracketed by ``SEGMENTED_STEP_BUFFER_S`` (1 s) neutral holds at home (0 deg),
+    mirroring the run-path bookends so the preview reflects the actual recorded duration.
     """
+    from bender_functions import SEGMENTED_STEP_BUFFER_S  # single source of truth with run path
     vels = np.atleast_1d(np.asarray(velocities_deg_per_s, dtype=float)).reshape(-1)
     n = int(vels.size)
     if n < 1:
@@ -386,6 +390,7 @@ def _preview_concat_isovelocity_timeline(
                 sequential_left_frac=seq_frac,
                 mirror_stim_side='right',
                 post_baseline_s=post_b,
+                post_buffer_s=SEGMENTED_STEP_BUFFER_S,
                 **iso_timing_kw,
                 **iso_extra,
             )
@@ -417,11 +422,23 @@ def _preview_concat_isovelocity_timeline(
                 mirror_stim_side=None,
                 post_baseline_s=post_b,
                 approach_from_deg=0.0,
+                post_buffer_s=SEGMENTED_STEP_BUFFER_S,
                 **iso_timing_kw,
                 **iso_extra,
             )
             t_seg, a_seg, w_seg = d0['t'], d0['angle'], d0['anglevel']
             s1_seg, s2_seg = d0['s1'], d0['s2']
+        # Pre-bookend: prepend a SEGMENTED_STEP_BUFFER_S neutral hold at 0 deg before each step,
+        # mirroring the run-path prepend in _run_isovelocity_steps so the preview matches the
+        # recorded duration and shape (both bookends inside the step, start/end at home).
+        _n_pre = max(2, int(round(SEGMENTED_STEP_BUFFER_S * daq_hz)) + 1)
+        _t_pre = np.linspace(0.0, SEGMENTED_STEP_BUFFER_S, _n_pre)[:-1]
+        _n_pre_eff = int(_t_pre.size)
+        t_seg = np.concatenate([_t_pre, np.asarray(t_seg, dtype=float) + SEGMENTED_STEP_BUFFER_S])
+        a_seg = np.concatenate([np.zeros(_n_pre_eff), np.asarray(a_seg, dtype=float)])
+        w_seg = np.concatenate([np.zeros(_n_pre_eff), np.asarray(w_seg, dtype=float)])
+        s1_seg = np.concatenate([np.zeros(_n_pre_eff), np.asarray(s1_seg, dtype=float)])
+        s2_seg = np.concatenate([np.zeros(_n_pre_eff), np.asarray(s2_seg, dtype=float)])
         t_chunks.append(np.asarray(t_seg, dtype=float) + toff)
         a_chunks.append(np.asarray(a_seg, dtype=float))
         w_chunks.append(np.asarray(w_seg, dtype=float))
