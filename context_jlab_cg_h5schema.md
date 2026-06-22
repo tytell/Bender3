@@ -5,12 +5,13 @@
 - **Authority level:** Tier 2 (binding for all H5 write/read tasks — export routine, R pipeline, GUI→backend assignment).
 - **Scope:** `bender_h5_export.py` (write), `01_calibration.R` / `02_correct.R` / `03_analyze.R` (read), GUI variable assignment in `bender_streamlit_gui.py`.
 - **Owner:** PI (schema decisions are PI-only).
-- **Version:** v2.4 (Phase 1 spec freeze: `metadata`/`timeseries` flat groups, no `01_`/`02_` prefixes; `calibration_link` subgroup → flat `calibration_inertial_*` keys; complete `index_step_*` column map from D4 inventory; `metadata/99_Unrouted` placement confirmed; root attrs reduced to `schema_version` only)
-- **Last reviewed:** 2026-06-19
+- **Version:** v2.5 (Phase 1 spec freeze v2: D10 `index_cycle_*`/`protocol_*` per-cycle block (single_finite); D11 embedded calibration VALUES + raw-voltage-only archive + `calibration_forcetorque_file` (supersedes §3d / Governing Rule 2 / F/T channel-order lock); D12 `calibration_inertia_*` consolidation (drops `inertial_` section; drops `calibration_inertia_used`/`_available`); D8 R-pipeline amendment (`03_analyze.R` = PORT); "inertial" → "inertia" normalization in all field names)
+- **Last reviewed:** 2026-06-22
 
 ### Changelog
 | Version | Date | Summary |
 |---|---|---|
+| v2.5 | 2026-06-22 | D10: `index_cycle_*`/`protocol_*` per-cycle design-grid arrays for `single_finite` (key names locked at M0); D11: exporter embeds calibration VALUES in `metadata`, removes calibrated `forcetorque_raw` from `timeseries` when matrix present (fallback guard), adds `calibration_forcetorque_file` provenance — supersedes §3d + Governing Rule 2 + F/T channel-order lock; D12: all MOI under `calibration_inertia_*`, drop `inertial_` prefix section, drop `calibration_inertia_used`/`_available`; D8 amendment: `03_analyze.R` is a PORT of validated corpus (not fresh); "inertial" → "inertia" normalization in all field names |
 | v2.4 | 2026-06-19 | Phase-1 spec freeze: flat `metadata`/`timeseries` groups, `calibration_inertial_*` flat keys, complete `index_step_*` column map, `metadata/99_Unrouted`, root-attr reduction to `schema_version` only (decisions D1-D9 per migration plan) |
 | v2.3 | 2026-06-15 | Phase 0: ledger-driven canonical exporter; `forcetorque_raw` `[6×N]` unsplit; per-sample index/stim arrays; `trial_index`/`step_order` dropped; `protocol_metadata` removed; `protocol_block_sequence` JSON; `99_Unrouted` fallback |
 
@@ -97,7 +98,7 @@ After Phase 1 migration (M1) only **one** attribute survives at the HDF5 file ro
 
 | Root attr | Value | Notes |
 |---|---|---|
-| `schema_version` | e.g. `"2.4"` | File-level schema provenance; kept at root because it predates and outlives any group rename |
+| `schema_version` | e.g. `"2.5"` | File-level schema provenance; kept at root because it predates and outlives any group rename |
 
 All other previous root attrs are moved to flat `metadata/` keys:
 
@@ -117,7 +118,7 @@ M1 must print the actual surviving root attr set during a sim export for PI eyeb
 
 Continuous streams, sample-indexed at the acquisition rate, sharing one `time_second` axis.
 
-> **Phase 1 migration target (build target from v2.4).** Dataset names below are the canonical target. The on-disk group skeleton migrates from `02_TimeSeries/trial_XXXX` (zero-based, numeric prefix) to flat `timeseries/` channel arrays for `single_finite`, and `timeseries/step_NNN/` subgroups (one-based, 3-digit) for `segmented_finite`. The `01_`/`02_` numeric prefixes are dropped — hard cut, no dual-name reader (D2). The `index_step_*` flat parallel arrays (§4 `index_` section) replace the old `trial_index` subgroup in the same M2 commit. Per-sample index streams (§3b-i) concatenate cleanly into the flat timeline once the skeleton is collapsed.
+> **Phase 1 migration target (build target from v2.5).** Dataset names below are the canonical target. The on-disk group skeleton migrates from `02_TimeSeries/trial_XXXX` (zero-based, numeric prefix) to flat `timeseries/` channel arrays for `single_finite`, and `timeseries/step_NNN/` subgroups (one-based, 3-digit) for `segmented_finite`. The `01_`/`02_` numeric prefixes are dropped — hard cut, no dual-name reader (D2). The `index_step_*` flat parallel arrays (§4 `index_` section) replace the old `trial_index` subgroup in the same M2 commit. Per-sample index streams (§3b-i) concatenate cleanly into the flat timeline once the skeleton is collapsed.
 
 ### 3a. Motor and time axes
 
@@ -163,17 +164,17 @@ Each is a length-`[N]` array; within the current `trial_XXXX` skeleton the step-
 |---|---|---|
 | `aidata` | `[8 × N]` | Raw analog input buffer. **IMMUTABLE** — written as-acquired, never decoded or modified at write time. Channel identities live in `metadata/daq_ai_channel_map`. |
 
-### 3d. ATI 6-axis force/torque (decoded, in `timeseries`)
+### 3d. ATI 6-axis force/torque (D11 — supersedes prior §3d, Governing Rule 2, and F/T channel-order lock)
 
-Raw + calibration principle (see Governing Rule 2): both the immutable raw voltages **and** the calibrated physical-unit data live in the raw file. The raw buffer `aidata` rows 0–5 are the immutable original; `forcetorque_raw` is the calibrated `[6 × N]` array computed at write time from `aidata` + `metadata/calibration_forcetorque_matrix`.
+> **D11 (PI sign-off 2026-06-22) SUPERSEDES this section, Governing Rule 2, and the F/T channel-order lock.**
+>
+> **Architecture:** The raw file is a raw-voltage archive. The exporter does **not** compute or write a calibrated F/T array. Raw `aidata` rows 0–5 (F/T channels, identified via `metadata/daq_ai_channel_map`) are the immutable archive. The ATI 6×6 calibration matrix VALUES and sono calibration table VALUES are embedded in `metadata/` at collection time (see `calibration_forcetorque_matrix`, `calibration_forcetorque_file` in §4). Calibrated F/T output is computed in R and written only to hub `derived/`.
+>
+> **Removal of `forcetorque_raw`:** The `forcetorque_raw [6 × N]` timeseries dataset is **not written** by the exporter when `metadata/calibration_forcetorque_matrix` is present and `aidata` rows 0–5 are present. Fallback guard: if `calibration_forcetorque_matrix` is absent in the file (legacy or partial export), any pre-existing `forcetorque_raw` array is preserved.
+>
+> **F/T channel-order re-anchor (D11):** Channel identity (row index → physical quantity) is a `daq_ai_channel_map` metadata fact, not a hard-coded R slice rule. Per-channel order (`0=Fx, 1=Fy, 2=Fz, 3=Tx, 4=Ty, 5=Tz`, newton / newton_meter) is declared in `daq_ai_channel_map` and read from there. The prior "LOCKED" rule asserting that the R pipeline slices `forcetorque_raw` directly by row index is **superseded**; R reads `daq_ai_channel_map` to identify channels.
 
-| Dataset | Shape | Notes |
-|---|---|---|
-| `forcetorque_raw` | `[6 × N]` | Calibrated F/T in physical units, **unmodified post-write** (immutable decoded original). **Kept as a single `[6 × N]` array — NOT split into per-channel datasets (PI decision).** |
-
-> **Force/torque channel order — LOCKED (PI decision).** `forcetorque_raw` rows are, in order: `x_force`, `y_force`, `z_force` (newton), then `x_torque`, `y_torque`, `z_torque` (newton_meter). The Python writer does **not** split or rename these into per-channel datasets; the R pipeline slices `forcetorque_raw` and names/decodes the channels downstream. Row index → channel: `0=x_force, 1=y_force, 2=z_force, 3=x_torque, 4=y_torque, 5=z_torque`.
-
-**Not in `timeseries`:** inertial-corrected torque series, `primary_torque_*`, and any computed derived quantities. These are regenerated in R from `forcetorque_raw` + correction parameters and written only to `derived` in the hub copy.
+**Not in `timeseries`:** calibrated F/T arrays, inertial-corrected torque series, `primary_torque_*`, and any computed derived quantities. All correction and calibration happens in R and lands in hub `derived/` only.
 
 ### 3e. Timeseries group structure (by `protocol_sampling_mode`)
 
@@ -196,22 +197,38 @@ The locked protocol→mode mapping is in §10.
 
 Flat. **No subgroups.** Every key carries a descriptive prefix; alphabetical sort groups related fields.
 
-### `calibration_` — sensor → physical-unit conversions
+### `calibration_` — sensor → physical-unit conversions and inertia parameters
 
 ```
-calibration_forcetorque_matrix          [6×6]   ATI calibration matrix (raw voltages → newton / newton_meter)
-                                                  (Current: calibration; rename pending)
-calibration_sono_left                   [4 or 8] Sono calibration breakpoints, left channel
-calibration_sono_right                  [4 or 8] Sono calibration breakpoints, right channel
-calibration_inertial_used               bool    Whether an inertial calibration profile was loaded for this run
-                                                  (Phase 1: flattened from calibration_link/use_inertial_calibration)
-calibration_inertial_file               str     Path/name of the inertial calibration file used; empty string if none
-                                                  (Phase 1: flattened from calibration_link/calibration_file)
-calibration_inertial_available          bool    Whether the inertial calibration file was found on disk at write time
-                                                  (Phase 1: flattened from calibration_link/calibration_available)
+calibration_forcetorque_matrix          [6×6]   ATI calibration matrix VALUES (raw ADC → newton / newton_meter);
+                                                  embedded at collection (D11). (Current Python attr: calibration)
+calibration_forcetorque_file            str     ATI calibration file name/path (provenance string); D11.
+calibration_sono_left                   [4 or 8] Sono calibration breakpoints, left channel; VALUES embedded at
+                                                  collection (D11). (Current: sono_cal_left)
+calibration_sono_right                  [4 or 8] Sono calibration breakpoints, right channel; VALUES embedded (D11).
+                                                  (Current: sono_cal_right)
+
+calibration_inertia_file                str     Path/name of the inertia calibration file; empty string if none
+                                                  (D3, D12 — flattened from calibration_link/calibration_file in M1;
+                                                  "inertial" -> "inertia" normalization applied)
+calibration_inertia_specimen_moi        float   Specimen moment of inertia, geometry-derived (D12;
+                                                  replaces inertial_specimen_moi)
+calibration_inertia_specimen_from_geometry  bool  Analytic specimen MOI available from frustum geometry (D12;
+                                                  replaces inertial_specimen_from_geometry)
+calibration_inertia_system_moi          float   Full system MOI including apparatus (D12;
+                                                  replaces inertial_system_moi)
+calibration_inertia_total_moi           float   Total MOI including specimen + clamp (D12;
+                                                  replaces inertial_total_moi)
+calibration_inertia_moi_provenance      str     Which frustum dims / calibration profile fed each MOI value (D12;
+                                                  replaces inertial_moi_provenance + inertial_system_from_profile)
+calibration_inertia_matrix              [...]   Apparatus-MOI lookup table keyed by (clamp span,
+                                                  distance-from-AOR); empty array until apparatus-calibration
+                                                  workflow is implemented (D12, Deferred flag 4)
 ```
 
-> **D3 (locked).** `calibration_link` was a subgroup holding real captured values (`use_inertial_calibration`, `calibration_file`, `calibration_available`). It is NOT deleted; it is flattened to the three `calibration_inertial_*` keys above in M1. The prior schema-doc description of `calibration_link` as empty/deleted was incorrect and is superseded here.
+> **D3 (locked).** `calibration_link` subgroup (`use_inertial_calibration`, `calibration_file`, `calibration_available`) is flattened in M1. `calibration_link/calibration_file` → `calibration_inertia_file` (D3, D12). `calibration_link/use_inertial_calibration` and `calibration_link/calibration_available` are **dropped** — no correction runs at export time, so availability and used-flag are meaningless (D3, D12).
+
+> **D12 (locked).** All computed MOI and inertia-correction parameters live under `calibration_inertia_*`. The `inertial_` prefix section is retired. `calibration_inertia_used` and `calibration_inertia_available` are **not written** — dropped by PI decision. Raw geometry/mass stay under `measurement_specimen_*`.
 
 ### `daq_` — acquisition / DAQ configuration + rig hardware/wiring provenance
 
@@ -334,18 +351,38 @@ index_step_stim_voltage_right_volt      [n_steps] float Right-side stim voltage 
 > per-sample timeseries streams. `step_order` is reconstructable from per-sample `sequence_index` +
 > `block_index`.
 
-### `inertial_` — inertial-correction parameters + provenance
+### `index_cycle_*` — per-cycle design grid (`single_finite` only; D10)
 
-Parameters only. Inertial-torque **time series** are derived (hub `derived`), not here.
+Parallel arrays, **one element per bending cycle** (length C = total cycles in trial). **`single_finite` protocols only** — `segmented_finite` protocols have no per-cycle design grid. Join to per-sample data via the `cycle_index` stream already in `timeseries` (§3b-i). Key names locked at M0 (D10); implementation step is M2c (deferred; see Deferred flag 1 in migration plan).
+
+> **D10 (PI sign-off 2026-06-22).** `Lonoff`/`Ronoff` are omitted (redundant with per-sample `stim_side`/`stim_state`). Does not add `index_step_*` columns (D4 intact). `protocol_activation_start_cycle` is 0-based (see FLAG below); all other `index_cycle_index` values are 1-based.
 
 ```
-inertial_specimen_moi                   specimen moment of inertia (parameter)
-inertial_system_moi                     full system MOI (parameter)
-inertial_total_moi                      total MOI including clamp (parameter)
-inertial_moi_provenance                 which frustum dims / calibration fed each MOI
-inertial_specimen_from_geometry         bool — analytic specimen MOI available (run-computed)
-inertial_system_from_profile            bool — system-inertia calibration profile loaded (run-computed)
+index_cycle_index                       [C] int     1-based cycle number
+index_cycle_frequency_hertz             [C] float   Commanded cycle frequency for this cycle
+index_cycle_operating_point             [C] float   Drive amplitude in protocol-native unit
+                                                      (matches index_step_operating_point pattern)
+index_cycle_operating_point_units       [C] str     Unit string for operating_point (e.g. "degree", "millimeter")
+index_cycle_motor_amplitude_degree      [C] float   Motor commanded amplitude (degree)
+index_cycle_active                      [C] bool    Whether stimulation was commanded this cycle
+index_cycle_activation_duty             [C] float   Stim duty cycle, dimensionless (0–1)
+index_cycle_activation_phase            [C] float   Stim activation phase, dimensionless (0–1)
 ```
+
+### `inertial_` — **RETIRED (D12)**
+
+> **D12 (PI sign-off 2026-06-22).** The `inertial_` prefix section is retired. All computed MOI and inertia-correction parameters are now written under `calibration_inertia_*` (see `calibration_` section above). Field mapping:
+>
+> | Old `inertial_` key | New `calibration_inertia_*` key |
+> |---|---|
+> | `inertial_specimen_moi` | `calibration_inertia_specimen_moi` |
+> | `inertial_system_moi` | `calibration_inertia_system_moi` |
+> | `inertial_total_moi` | `calibration_inertia_total_moi` |
+> | `inertial_moi_provenance` | `calibration_inertia_moi_provenance` |
+> | `inertial_specimen_from_geometry` | `calibration_inertia_specimen_from_geometry` |
+> | `inertial_system_from_profile` | subsumed into `calibration_inertia_moi_provenance` (D12) |
+>
+> "inertial" → "inertia" normalization is applied by M1's structural flattening of `inertial_calibration_profile`; the `inertial_` prefix does not appear in any new code after M1.
 
 ### `measurement_` — ALL spatial geometry (animal AND apparatus)
 
@@ -409,6 +446,14 @@ protocol_prestim_time_second            (was: prestim_time)
 protocol_poststim_time_second           (was: poststim_time)
 protocol_ramp_mode                      linear/exponential (was: ramp_mode_default)
 protocol_amplitude_step_velocity_degree_per_second  (was: amp_step_vel)
+
+# Single_finite per-cycle design scalars (D10 — single_finite only; locked at M0)
+protocol_activation_start_cycle         int     0-based index of first activated cycle
+                                                  (FLAG: 0-based unlike index_cycle_index which is 1-based;
+                                                  PI-confirmed asymmetry, do not normalize)
+protocol_cycles_per_step                int     Nominal bending cycles per step (single_finite; 1 for non-sweep)
+protocol_cycle_count                    int     Total bending cycles in trial
+protocol_end_cycle_count                int     Number of post-stim passive cycles at end of trial
 ```
 
 ### `session_` — recording-session logistics
@@ -475,18 +520,20 @@ polluting the flat namespace while the routing ledger is being completed.
 
 ---
 
-## 5. Raw + decoded principle (LOCKED)
+## 5. Raw + calibration-values principle (D11 — supersedes prior §5)
 
-1. **Always store both.** Whenever raw sensor data and a calibration/correction exist, store **both** the raw (immutable original) and the decoded (calibrated) form. `forcetorque_raw` is the canonical example.
-2. **Raw is immutable.** Once written, a raw array is never overwritten, modified, or deleted. It is the permanent audit trail.
-3. **Decoded is computed at write time** from the live calibration and written alongside the raw.
-4. **Downstream always re-derives from raw + parameters.** The R pipeline reads `forcetorque_raw` + `calibration_forcetorque_matrix` and recomputes corrected/inertial series. It never modifies the raw array.
-5. **Rationale:** signal integrity, recalibration without re-acquisition, audit trail, reproducibility.
+> **D11 (PI sign-off 2026-06-22) SUPERSEDES the prior "raw + decoded, both in file" rule.** The new architecture is: raw voltages + embedded calibration VALUES in the raw file; calibrated output only in hub `derived/`.
+
+1. **Raw is immutable.** `aidata` (raw ADC voltages, all channels) is written as-acquired and never overwritten, modified, or deleted. It is the permanent audit trail.
+2. **Calibration VALUES are embedded at collection.** `calibration_forcetorque_matrix` (6×6 ATI matrix), `calibration_sono_left`/`right` (breakpoint tables), and inertia parameters (`calibration_inertia_*`) are written to `metadata/` at write time so the file is self-contained for re-processing without the original config.
+3. **No calibrated decoded array at write time.** The Python exporter does **not** compute or write a calibrated F/T array. `forcetorque_raw` is not written when `calibration_forcetorque_matrix` is present (fallback: kept if matrix absent).
+4. **Downstream re-derives from raw + embedded VALUES.** R reads `aidata` rows 0–5 (identified via `daq_ai_channel_map`) + `calibration_forcetorque_matrix` to produce calibrated F/T. All correction and calibration happens in R and lands in hub `derived/` only.
+5. **Rationale:** clean separation of immutable raw archive from analysis outputs; calibration values travel with the file; no decoded F/T to go stale if recalibration is needed.
 
 In `timeseries`, this means:
-- `aidata` (raw ADC voltages) — immutable, always present
-- `forcetorque_raw` (calibrated F/T, decoded at write time) — immutable post-write
-- Inertial-corrected torque — hub `derived` only, never in the raw file
+- `aidata` (raw ADC voltages, `[8 × N]`) — immutable, always present
+- `forcetorque_raw` — **not written** when `calibration_forcetorque_matrix` is present in `metadata/`; preserved in legacy files where it already exists and the matrix is absent
+- Calibrated F/T, inertial-corrected torque — hub `derived/` only, never in the raw file
 
 ---
 
@@ -520,9 +567,9 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 | `xsec_width` | present | `measurement_xsec_width_millimeter` | rename |
 | `xsec_height` | present | `measurement_xsec_height_millimeter` | rename |
 | `target_muscle_depth_mm` | present | `measurement_target_muscle_depth_millimeter` | rename |
-| `inertial_torque_specimen_primary` | empty `(0,)` | `inertial_specimen_moi` (param) | rename + reclassify |
-| `inertial_torque_system_primary` | empty `(0,)` | `inertial_system_moi` | rename + reclassify |
-| `inertial_torque_total_primary` | empty `(0,)` | `inertial_total_moi` | rename + reclassify |
+| `inertial_torque_specimen_primary` | empty `(0,)` | `calibration_inertia_specimen_moi` | rename + reclassify (D12) |
+| `inertial_torque_system_primary` | empty `(0,)` | `calibration_inertia_system_moi` | rename + reclassify (D12) |
+| `inertial_torque_total_primary` | empty `(0,)` | `calibration_inertia_total_moi` | rename + reclassify (D12) |
 | `primary_torque_raw` | empty `(0,)` | — | delete from metadata (derived series → hub) |
 | `primary_torque_corrected` | empty `(0,)` | — | delete from metadata (derived series → hub) |
 | `stim_clamp_notices` | empty `(0,)` | `note_bench` | rename |
@@ -530,9 +577,9 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 | `protocol_metadata/step_order` | **dropped** | — | done (reconstructable from per-sample `sequence_index` + `block_index`) |
 | `protocol_metadata/block_sequence` | **`protocol_block_sequence` (JSON)** | — | done (routed, `json.dumps`) |
 | `protocol_metadata` (subgroup) | **removed** | — | done (attr-mirrors now canonical; redundant dict-only keys dropped) |
-| `calibration_link/use_inertial_calibration` | present | `calibration_inertial_used` | flatten from subgroup (M1) — D3 |
-| `calibration_link/calibration_file` | present | `calibration_inertial_file` | flatten from subgroup (M1) — D3 |
-| `calibration_link/calibration_available` | present | `calibration_inertial_available` | flatten from subgroup (M1) — D3 |
+| `calibration_link/use_inertial_calibration` | present | — | **DROP** (no correction at export; D3, D12) |
+| `calibration_link/calibration_file` | present | `calibration_inertia_file` | flatten from subgroup (M1); "inertial" -> "inertia" (D3, D12) |
+| `calibration_link/calibration_available` | present | — | **DROP** (no correction at export; D3, D12) |
 | `daq_ai_sample_rate_hz` | present | `daq_ai_sample_rate_hertz` | rename |
 | `t` (timeseries) | present | `time_second` | rename |
 | `tnorm` (timeseries) | present | `time_normalized` | rename |
@@ -542,15 +589,15 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 | `S1stimcmd` (timeseries) | present | `stim_channel1_command_volt` | rename |
 | `S2stimcmd` (timeseries) | present | `stim_channel2_command_volt` | rename |
 | `forcetorque` (timeseries) | **dropped** | — | done (identical copy of `forcetorque_raw`; not split, PI decision) |
-| `forcetorque_raw` (timeseries) | present | `forcetorque_raw` `[6×N]` | conformant (keep, immutable, not split) |
+| `forcetorque_raw` (timeseries) | present | — | **NOT WRITTEN** when `calibration_forcetorque_matrix` is present (D11); preserved in legacy files where matrix is absent (fallback guard) |
 
 ---
 
 ## 7. Governing rules
 
 1. **Immutability.** `aidata` (and all raw streams) are written as-acquired and never modified post-hoc. All correction happens in R and lands in `derived` in the hub copy. R is the authoritative correction path.
-2. **Raw + decoded, both in file.** Whenever raw data + calibration parameters exist, store both: raw (immutable original) and decoded (computed at write). Never overwrite the raw. See §5 for the full rule.
-3. **Decode via metadata, not per-channel.** Channel identity lives in `daq_ai_channel_map`. Decoded F/T channels in `timeseries` (§3d) are the single decoded form; the export does not additionally hard-slice `aidata` into named channels.
+2. **Raw + calibration VALUES in file; decoded output in hub only (D11 — supersedes prior Rule 2).** The raw file stores raw ADC voltages (`aidata`) and embedded calibration VALUES (`calibration_forcetorque_matrix`, `calibration_sono_*`, `calibration_inertia_*`). Calibrated F/T, corrected torque, and all derived quantities are computed in R and written only to hub `derived/`. The exporter does not compute or write a decoded F/T array. See §5 for the full rule.
+3. **Decode via metadata, not per-channel.** Channel identity lives in `daq_ai_channel_map`. The exporter does not hard-slice `aidata` into named per-channel datasets; R reads `daq_ai_channel_map` to identify F/T rows and apply the calibration matrix (D11; see §3d).
 4. **Distance rule.** Any length/distance → `measurement_`, animal or apparatus. `specimen_` holds only non-spatial facts (id, species, sex, muscle type — no geometry, no mass).
 5. **Step parameters appear twice by design.** Global defaults in `protocol_*`; per-step realized values in `index_step_*`. Intentional, not duplication.
 6. **Two timeseries structures, determined by `protocol_sampling_mode`.** `single_finite`: flat channel arrays directly in `timeseries/`, one continuous monotonic time axis. `segmented_finite`: `step_NNN/` subgroups in `timeseries/`, each with a local time axis starting at 0; `step_manifest` in `metadata/` is the only cross-step index. Subgroup prefix is always `step_` — never `trial_` or any other prefix. The locked protocol→mode mapping is in §10.
