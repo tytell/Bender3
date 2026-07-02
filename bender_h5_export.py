@@ -495,44 +495,117 @@ def export_primary_h5(
                     manifest[str(k)] = str(v)
             manifest_rows.append(manifest)
 
-        # Per-trial condition manifest. trial_index / cycle_index columns are dropped: trial order
-        # is the trial_names order, and per-sample cycle_index lives in timeseries (PI decision).
-        # trial_names reflects the layout used above: 'timeseries' for continuous (flat),
-        # 'step_001', 'step_002', … for segmented (isometric/isovelocity/FL/FV).
-        # M2 owns the full trial_index -> index_step_* swap; this subgroup is left intact here.
-        g_idx = g_meta.create_group('trial_index')
-        g_idx.create_dataset(
-            'trial_names',
-            data=np.array([r.get('trial_name', f'trial_{i:04d}') for i, r in enumerate(manifest_rows)], dtype='S'),
-        )
-        g_idx.create_dataset(
-            'test_type',
-            data=np.array([str(r.get('test_type', test_type)) for r in manifest_rows], dtype='S'),
-        )
-        reserved = {'trial_name', 'test_type'}
-        all_keys = sorted({k for r in manifest_rows for k in r.keys() if k not in reserved})
-        for cond_key in all_keys:
-            col = [r.get(cond_key, np.nan) for r in manifest_rows]
-            numeric_vals = []
-            numeric_ok = True
-            has_numeric = False
-            for v in col:
-                try:
-                    fv = float(v)
-                    numeric_vals.append(fv)
-                    if np.isfinite(fv):
-                        has_numeric = True
-                except Exception:
-                    numeric_ok = False
-                    break
-            if numeric_ok and has_numeric:
-                g_idx.create_dataset(cond_key, data=np.array(numeric_vals, dtype=float))
-            else:
-                svals = ['' if (v is None) else str(v) for v in col]
-                if any(len(s) > 0 for s in svals):
-                    g_idx.create_dataset(cond_key, data=np.array(svals, dtype='S'))
-
         g_meta.attrs['n_trials'] = int(len(trial_records))
+
+        # protocol_motor_positive_bend_direction / protocol_sensor_positive_bend_direction --
+        # flat trial-level metadata attrs (constant within a trial; apparatus + mount choice).
+        # Source: positive_motor_direction config constant ('left' or 'right').
+        # The encoder (angle sensor) is co-mounted on the gearbox output shaft and shares the
+        # same sign convention as the motor, so both fields derive from the same config attr.
+        _pos_motor = str(getattr(bender, 'positive_motor_direction', '') or '').strip().lower()
+        if _pos_motor not in ('left', 'right'):
+            _pos_motor = 'none'
+        g_meta.attrs['protocol_motor_positive_bend_direction'] = _pos_motor
+        g_meta.attrs['protocol_sensor_positive_bend_direction'] = _pos_motor
+
+        # index_step_* -- flat parallel arrays (one element per step), replacing the trial_index
+        # subgroup (M2). Explicit name map: (source key in entry dict, hdf5 dataset name, dtype).
+        # dtype 'float'    : missing key or None -> NaN; written only when at least one finite value.
+        # dtype 'int'      : missing key or None -> 0; always written.
+        # dtype 'int_1based': 0-based source int -> write as 1-based float; absent -> NaN.
+        # dtype 'str'      : missing key or None -> ''; written only when at least one non-empty.
+        _INDEX_STEP_MAP = [
+            # Shared (all protocols)
+            ('step_index',                       'index_step_step_number',                         'int'),
+            ('wall_clock_start',                 'index_step_wall_clock_start',                    'str'),
+            ('duration_second',                  'index_step_duration_second',                     'float'),
+            ('rest_before_second',               'index_step_rest_before_second',                  'float'),
+            ('operating_point',                  'index_step_operating_point',                     'float'),
+            ('operating_point_units',            'index_step_operating_point_units',               'str'),
+            ('recruitment',                      'index_step_recruitment',                         'str'),
+            # None -> NaN when bilateral (unilateral returns an int, bilateral returns None)
+            ('unilateral_posture_lateral_index', 'index_step_unilateral_posture_lateral_index',    'float'),
+            ('stim_t0',                          'index_step_stim_t0_second',                      'float'),
+            ('stim_t1',                          'index_step_stim_t1_second',                      'float'),
+            ('t_pre_baseline_start',             'index_step_t_pre_baseline_start_second',         'float'),
+            ('t_pre_baseline_end',               'index_step_t_pre_baseline_end_second',           'float'),
+            ('t_active_start',                   'index_step_t_active_start_second',               'float'),
+            ('t_active_end',                     'index_step_t_active_end_second',                 'float'),
+            ('t_post_baseline_start',            'index_step_t_post_baseline_start_second',        'float'),
+            ('t_post_baseline_end',              'index_step_t_post_baseline_end_second',          'float'),
+            # Motor-position reference (_record_motor_position_reference).
+            # cumulative_commanded_steps is Teknic motor-shaft MICROSTEPS (1600/rev on motor shaft,
+            # gear ratio 5:1); NOT output-shaft steps or degrees. Flagged for D9 rename pass.
+            ('cumulative_commanded_steps',       'index_step_cumulative_commanded_steps',          'float'),
+            ('encoder_cumulative_deg',           'index_step_encoder_cumulative_degree',           'float'),
+            # Isometric-only (absent in isovelocity / single_finite -> NaN / '')
+            ('target_deg',                       'index_step_target_angle_degree',                 'float'),
+            ('ramp_from_deg',                    'index_step_ramp_from_angle_degree',              'float'),
+            # Isovelocity-only (absent in isometric / single_finite -> NaN / '')
+            ('velocity_deg_s',                   'index_step_velocity_degree_per_second',          'float'),
+            ('theta_start_deg',                  'index_step_theta_start_degree',                  'float'),
+            ('pre_stim_t0',                      'index_step_pre_stim_t0_second',                  'float'),
+            ('pre_stim_t1',                      'index_step_pre_stim_t1_second',                  'float'),
+            ('iso_t0',                           'index_step_iso_t0_second',                       'float'),
+            ('iso_t1',                           'index_step_iso_t1_second',                       'float'),
+            # None when F/T cal absent or no stim-active samples (sim mode -> NaN)
+            ('mean_xforce_stim',                 'index_step_mean_xforce_stim_newton',             'float'),
+            ('guard_triggered',                  'index_step_guard_triggered',                     'int'),
+            ('guard_angle_deg',                  'index_step_guard_angle_degree',                  'float'),
+            # Absent from entry dict when mirror mode inactive (not set at all -> NaN)
+            ('velocity_seg1_deg_s',              'index_step_velocity_seg1_degree_per_second',     'float'),
+            ('velocity_seg2_deg_s',              'index_step_velocity_seg2_degree_per_second',     'float'),
+            # Block metadata: absent when use_block_stim=False; block_index is 0-based in entry
+            # dict -> written 1-based here per schema convention.
+            ('block_index',                      'index_step_block_number',                        'int_1based'),
+            ('block_direction',                  'index_step_block_direction',                     'str'),
+            ('block_stim_sides',                 'index_step_block_stim_sides',                    'str'),
+            ('left_stim_voltage',                'index_step_stim_voltage_left_volt',              'float'),
+            ('right_stim_voltage',               'index_step_stim_voltage_right_volt',             'float'),
+        ]
+        if trial_records:
+            for _src, _dst, _dtype in _INDEX_STEP_MAP:
+                if _dtype in ('float', 'int_1based'):
+                    _col = []
+                    for _j, _r in enumerate(trial_records):
+                        v = _r.get(_src)
+                        if _src == 'step_index' and v is None:
+                            v = _j + 1
+                        if _dtype == 'int_1based':
+                            try:
+                                _col.append(float(int(v) + 1) if v is not None else float('nan'))
+                            except (TypeError, ValueError):
+                                _col.append(float('nan'))
+                        else:
+                            try:
+                                _col.append(float(v) if v is not None else float('nan'))
+                            except (TypeError, ValueError):
+                                _col.append(float('nan'))
+                    if any(np.isfinite(x) for x in _col):
+                        g_meta.create_dataset(_dst, data=np.array(_col, dtype=float))
+                elif _dtype == 'int':
+                    _col = []
+                    for _j, _r in enumerate(trial_records):
+                        v = _r.get(_src)
+                        if _src == 'step_index' and v is None:
+                            v = _j + 1
+                        try:
+                            _col.append(int(v) if v is not None else 0)
+                        except (TypeError, ValueError):
+                            _col.append(0)
+                    g_meta.create_dataset(_dst, data=np.array(_col, dtype=np.int64))
+                else:  # 'str'
+                    _col = []
+                    for _r in trial_records:
+                        v = _r.get(_src)
+                        if v is None:
+                            _col.append('')
+                        elif isinstance(v, (bytes, bytearray)):
+                            _col.append(v.decode('utf-8', errors='replace'))
+                        else:
+                            _col.append(str(v))
+                    if any(len(s) > 0 for s in _col):
+                        g_meta.create_dataset(_dst, data=np.array(_col, dtype='S'))
 
         # step_manifest: per-step timing and operating-point index (schema §4).
         # Scaffold: step_index (1-based), duration_second from t array, rest_before_second

@@ -1,9 +1,10 @@
-"""Phase 0 canonical export schema (lockstep regression).
+"""Phase 1 canonical export schema (lockstep regression).
 
 Runs sim-mode protocols end-to-end and asserts the canonical HDF5 contract:
 ledger-driven metadata, canonical timeseries names, per-sample index/stim arrays,
-dropped fields (trial_index / step_order / forcetorque / protocol_metadata), the
-block_sequence -> protocol_block_sequence JSON route, and an empty 99_Unrouted.
+dropped fields (trial_index subgroup / step_order / forcetorque / protocol_metadata),
+flat index_step_* parallel arrays (M2), protocol direction attrs,
+the block_sequence -> protocol_block_sequence JSON route, and an empty 99_Unrouted.
 """
 import json
 from pathlib import Path
@@ -70,6 +71,7 @@ def test_no_unrouted_and_no_legacy_groups(tmp_path):
             assert 'timeseries' in f, 'root must have timeseries group'
             assert '01_Metadata' not in f, 'old 01_Metadata group must be absent'
             assert '02_TimeSeries' not in f, 'old 02_TimeSeries group must be absent'
+            assert 'trial_index' not in f['metadata'], 'trial_index subgroup must be absent (replaced by index_step_* arrays in M2)'
 
 
 def test_step_protocol_per_sample_index_arrays(tmp_path):
@@ -126,13 +128,37 @@ def test_block_sequence_is_json_and_step_order_dropped(tmp_path):
         assert 'step_order' not in meta and 'step_order' not in meta.attrs
 
 
-def test_manifest_drops_trial_index_column(tmp_path):
+def test_index_step_arrays_replace_trial_index_subgroup(tmp_path):
+    """M2: trial_index subgroup removed; flat index_step_* parallel arrays written to metadata."""
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
-        gi = f['metadata/trial_index']
-        assert 'trial_names' in gi
-        assert 'trial_index' not in gi, 'trial_index column dropped'
-        assert 'cycle_index' not in gi, 'cycle_index column dropped (now per-sample)'
+        meta = f['metadata']
+        assert 'trial_index' not in meta, 'trial_index subgroup must be absent after M2'
+        # Shared fields present as datasets (not attrs)
+        for key in (
+            'index_step_step_number',
+            'index_step_duration_second',
+            'index_step_rest_before_second',
+            'index_step_wall_clock_start',
+            'index_step_recruitment',
+            'index_step_stim_t0_second',
+            'index_step_stim_t1_second',
+        ):
+            assert key in meta, f'missing expected index_step dataset: {key}'
+        # Isometric-specific fields
+        assert 'index_step_target_angle_degree' in meta, 'isometric target angle missing'
+        assert 'index_step_ramp_from_angle_degree' in meta, 'isometric ramp-from angle missing'
+        # Array length matches n_trials
+        n = int(meta.attrs['n_trials'])
+        assert meta['index_step_step_number'].shape[0] == n, 'index_step_step_number length mismatch'
+        assert meta['index_step_duration_second'].shape[0] == n, 'index_step_duration_second length mismatch'
+        # step_number is 1-based
+        assert int(meta['index_step_step_number'][0]) == 1, 'step_number must be 1-based'
+        # Protocol direction attrs
+        assert 'protocol_motor_positive_bend_direction' in meta.attrs
+        assert 'protocol_sensor_positive_bend_direction' in meta.attrs
+        v = meta.attrs['protocol_motor_positive_bend_direction']
+        assert v in ('left', 'right', 'none'), f'unexpected protocol_motor_positive_bend_direction value: {v}'
 
 
 def test_root_holds_only_schema_version(tmp_path):

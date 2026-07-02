@@ -414,8 +414,19 @@ index_step_stim_voltage_right_volt      [n_steps] float Right-side stim voltage 
 #### Motor-position reference fields
 
 ```
-# Fields added by _record_motor_position_reference() — exact names enumerated at M2 from code.
-# Apply index_step_ prefix and spelled-out units per §1 when writing.
+index_step_cumulative_commanded_steps   [n_steps] float  Cumulative Teknic motor-shaft MICROSTEPS commanded
+                                                          (round(self._motor_continuous_step_pos)); NOT re-zeroed
+                                                          between steps. Units: motor-shaft microsteps (1600/rev
+                                                          on the ClearPath shaft; gear ratio 5:1 to specimen frame
+                                                          → 8000 microsteps per output-shaft revolution). NOT
+                                                          degrees. Flagged for D9 rename pass to carry explicit
+                                                          unit suffix. (source: cumulative_commanded_steps)
+index_step_encoder_cumulative_degree    [n_steps] float  Running sum of per-step net encoder displacement
+                                                          (angle_measured[-1] - angle_measured[0] per step);
+                                                          accumulated without re-zeroing across step boundaries.
+                                                          Encoder is US Digital E6 on the gearbox output
+                                                          (specimen frame) — values are in specimen-frame degrees.
+                                                          (source: encoder_cumulative_deg)
 ```
 
 > **Dropped (D4).** `trial_index`, `cycle_index`, and `step_order` per-step scalars are not written
