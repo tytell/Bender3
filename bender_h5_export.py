@@ -775,6 +775,13 @@ def export_primary_h5(
                 if _fv is not None:
                     g_meta.attrs[_fdst] = float(_fv)
 
+        # written_keys tracks canonical keys already emitted so the ledger Pass A (below) does not
+        # re-write them. Defined HERE (not at the ledger) so the guarded direct-write of
+        # calibration_inertia_apparatus_aor_to_clamp_millimeter can CLAIM the key -- otherwise the
+        # ledger default-writes 0.0 from specimen_profile_clamp_offset_mm (default 0.0) and defeats
+        # the zero-omission. Many-to-one routes still write the FIRST present source per key.
+        written_keys: set = set()
+
         # calibration_inertia_apparatus_aor_to_clamp_millimeter -- many-to-one from two sources.
         # Primary: specimen_profile_clamp_offset_mm (set by live GUI path).
         # Fallback: frustum_inputs['clamp_offset_mm'] (set by frustum path).
@@ -789,6 +796,12 @@ def export_primary_h5(
                 _aor_val = float(_aor_fb)
         if _aor_val is not None:
             g_meta.attrs['calibration_inertia_apparatus_aor_to_clamp_millimeter'] = _aor_val
+        else:
+            print('[info] export_primary_h5: calibration_inertia_apparatus_aor_to_clamp_millimeter '
+                  'omitted (no positive clamp-offset source); key not written (v2.7).')
+        # CLAIM the key UNCONDITIONALLY -- even when omitted above -- so the ledger Pass A never
+        # default-writes 0.0 from specimen_profile_clamp_offset_mm / frustum_clamp_offset_mm.
+        written_keys.add('calibration_inertia_apparatus_aor_to_clamp_millimeter')
 
         # protocol_metadata subgroup REMOVED (PI decision, post-Phase-0 audit). Its attr-mirror keys
         # are written canonically by the ledger pass below; block_sequence is routed as
@@ -815,8 +828,9 @@ def export_primary_h5(
         # (ledger insertion order) to avoid dataset collisions.
         # 'calibration' is written ONLY by the real-matrix-gated block above (D11, M2b) -- bypass
         # the ledger so it is never emitted as the np.eye(6) identity fallback.
+        # written_keys was initialized before the direct-write blocks above (do NOT re-init here --
+        # that would wipe the claimed calibration_inertia_apparatus_aor_to_clamp_millimeter guard).
         special_metadata: set = {'calibration', 'h5_schema_version', 'inertial_calibration_file'}
-        written_keys: set = set()
         for name, route in BENDER_ROUTING.items():
             if route.get('tier') != 'metadata' or name in special_metadata:
                 continue
