@@ -463,7 +463,7 @@ EXCLUDED: Set[str] = {
     "organized_stimduties", "organized_stimphases",
     "all_degs", "all_strains", "all_strainrates",
     "tout", "endTime", "max_commanded_rotation_deg",
-    # self.filename: duplicate of the portable name written to 01_Metadata/filename by exporter.
+    # self.filename: duplicate of the portable name written to metadata/filename by exporter.
     "filename",
     # stim_monitor: redundant slice of the immutable raw aidata buffer (raw lives in aidata).
     "stim_monitor",

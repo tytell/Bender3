@@ -1,5 +1,5 @@
 """
-Read Bender-exported HDF5 files for Streamlit custom plots (time series from ``02_TimeSeries``).
+Read Bender-exported HDF5 files for Streamlit custom plots (time series from ``timeseries``).
 """
 from __future__ import annotations
 
@@ -49,9 +49,9 @@ def _decode_attr(val: Any) -> str:
 
 
 def _read_input_channel_names(f: h5py.File) -> List[str]:
-    # Canonical (Phase 0): instrumentation list at 01_Metadata/daq_instrumentation.
+    # Canonical (Phase 1): instrumentation list at metadata/daq_instrumentation.
     try:
-        meta = f['01_Metadata']
+        meta = f['metadata']
         if 'daq_instrumentation' in meta:
             return _coerce_channel_name_list(meta['daq_instrumentation'][()])
         v = meta.attrs.get('daq_instrumentation', None)
@@ -83,10 +83,10 @@ def h5_custom_plot_summary(path: str) -> Dict[str, Any]:
         with h5py.File(path, 'r') as f:
             tt = _decode_attr(f.attrs.get('test_type', ''))
             schema = _decode_attr(f.attrs.get('schema_version', ''))
-            if '02_TimeSeries' not in f:
+            if 'timeseries' not in f:
                 return {
                     'ok': False,
-                    'error': 'This file has no `02_TimeSeries` group (not a Bender experiment export?).',
+                    'error': 'This file has no `timeseries` group (not a Bender experiment export?).',
                     'test_type': tt,
                     'schema_version': schema,
                     'trial_names': [],
@@ -94,12 +94,12 @@ def h5_custom_plot_summary(path: str) -> Dict[str, Any]:
                     'primary_bending_axis': '',
                     'n_trials': 0,
                 }
-            g_ts = f['02_TimeSeries']
-            trial_names = sorted(k for k in g_ts.keys() if str(k).startswith('trial_'))
+            g_ts = f['timeseries']
+            trial_names = sorted(k for k in g_ts.keys() if str(k).startswith('step_'))
             ch = _read_input_channel_names(f)
             paxis = ''
             try:
-                meta = f['01_Metadata']
+                meta = f['metadata']
                 paxis = _decode_attr(meta.attrs.get('daq_primary_bending_axis', ''))
                 if not paxis and 'bender_settings' in meta:
                     # Legacy fallback for pre-Phase-0 files.
@@ -152,7 +152,7 @@ def list_h5_plot_variables(path: str, trial_name: str, channel_names: Optional[L
     channel_names = list(channel_names or [])
     out: List[Dict[str, Any]] = []
     with h5py.File(path, 'r') as f:
-        tg = f['02_TimeSeries'][trial_name]
+        tg = f['timeseries'][trial_name]
         trial_tt = _decode_attr(tg.attrs.get('test_type', ''))
         for key in sorted(tg.keys()):
             ds = tg[key]
@@ -204,7 +204,7 @@ def list_h5_plot_variables(path: str, trial_name: str, channel_names: Optional[L
 def read_h5_series(path: str, trial_name: str, var_id: str) -> np.ndarray:
     """Load a 1-D float vector for plotting."""
     with h5py.File(path, 'r') as f:
-        tg = f['02_TimeSeries'][trial_name]
+        tg = f['timeseries'][trial_name]
         if '@row' in var_id:
             name, _, idx_s = var_id.partition('@row')
             i = int(idx_s)

@@ -1,5 +1,5 @@
 """
-Read experiment `.h5` files for the **H5 Data Explorer** (Streamlit): schema v2 (``02_TimeSeries``),
+Read experiment `.h5` files for the **H5 Data Explorer** (Streamlit): schema v2 (``timeseries``),
 legacy layouts (``Calibrated`` / optional ``NominalStimulus`` / ``RawInput``), and a **generic**
 fallback that discovers 1D numeric series (and 6-channel FT blocks) anywhere in the file.
 """
@@ -179,7 +179,7 @@ def detect_h5_schema(path: str) -> str:
         return 'unknown'
     try:
         with h5py.File(path, 'r') as f:
-            if '02_TimeSeries' in f:
+            if 'timeseries' in f:
                 return 'v2'
             if _legacy_heuristic(f):
                 return 'legacy'
@@ -192,10 +192,10 @@ def detect_h5_schema(path: str) -> str:
 
 def list_v2_trials(path: str) -> List[str]:
     with h5py.File(path, 'r') as f:
-        g = f.get('02_TimeSeries')
+        g = f.get('timeseries')
         if g is None:
             return []
-        return sorted(k for k in g.keys() if str(k).startswith('trial_'))
+        return sorted(k for k in g.keys() if str(k).startswith('step_'))
 
 
 def _as_float_1d(ds: h5py.Dataset) -> np.ndarray:
@@ -233,7 +233,7 @@ def build_series_catalog_v2(path: str, trial: str) -> Tuple[Dict[str, np.ndarray
         return None
 
     with h5py.File(path, 'r') as f:
-        tg = f['02_TimeSeries'][trial]
+        tg = f['timeseries'][trial]
         t_key = _pick(tg, 'time_second', 't')
         if t_key:
             out['Time (s)'] = _as_float_1d(tg[t_key])

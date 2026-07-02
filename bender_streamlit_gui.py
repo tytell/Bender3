@@ -2652,10 +2652,10 @@ def _needs_missing_calibration_confirmation(b: Bender) -> bool:
 
 
 def _append_note_to_h5_file(h5_path: str, note_text: str):
-    """Append a timestamped note to an existing .h5 file's ``01_Metadata/user_notes``.
+    """Append a timestamped note to an existing .h5 file's ``metadata/user_notes``.
 
     ``user_notes`` is a 1-D variable-length (vlen) UTF-8 string dataset; each append adds one new
-    timestamped entry and never overwrites existing entries. The dataset (and ``01_Metadata`` group)
+    timestamped entry and never overwrites existing entries. The dataset (and ``metadata`` group)
     is created on first use, so files saved before this feature gain notes without losing data.
     """
     note = str(note_text or '').strip()
@@ -2667,7 +2667,7 @@ def _append_note_to_h5_file(h5_path: str, note_text: str):
     entry = f'[{ts}] {note}'
     str_dt = h5py.string_dtype(encoding='utf-8')
     with h5py.File(h5_path, 'r+') as f:
-        g = f.require_group('01_Metadata')
+        g = f.require_group('metadata')
         existing: list[str] = []
         if 'user_notes' in g:
             raw = g['user_notes'][()]
@@ -6193,7 +6193,7 @@ def _render_h5_attribute_editor(loaded: str) -> None:
         st.text_input(
             'Path inside the file (blank = file root)',
             key='gui_h5_attr_path_typed',
-            placeholder='e.g. Calibrated or 02_TimeSeries/trial_1',
+            placeholder='e.g. Calibrated or timeseries/step_001',
             help='Use forward slashes. Leave empty to edit attributes on the file itself.',
         )
         if st.button('Load attributes', key='gui_h5_attr_load_btn', type='secondary'):
@@ -6418,7 +6418,7 @@ def _render_h5_explorer() -> None:
             if schema == 'v2':
                 trials = list_v2_trials(loaded)
                 if not trials:
-                    st.error('Schema v2 file has no `02_TimeSeries/trial_*` groups.')
+                    st.error('Schema v2 file has no `timeseries/step_*` groups.')
                     return
                 tid = str(st.session_state.get('gui_h5_explore_trial') or trials[0])
                 if tid not in trials:
@@ -6480,7 +6480,7 @@ def _render_h5_explorer() -> None:
             if st.session_state.get('gui_h5_explore_trial') not in trials:
                 st.session_state['gui_h5_explore_trial'] = trials[0]
             st.selectbox(
-                'Trial group (`02_TimeSeries/…`)',
+                'Step group (`timeseries/…`)',
                 options=trials,
                 key='gui_h5_explore_trial',
                 on_change=_cb_h5_explorer_trial_changed,
@@ -7144,7 +7144,7 @@ def main():
         st.warning(
             '**Simulation mode active** — NI-DAQ hardware will NOT be accessed. '
             'Acquisition uses a synthetic cantilever model. '
-            'Output files will be prefixed `sim_` and tagged `simulated=True` in `01_Metadata`.',
+            'Output files will be prefixed `sim_` and tagged `simulated=True` in `metadata`.',
             icon='⚠️',
         )
 
@@ -7310,7 +7310,7 @@ def main():
                             'Apparatus ID',
                             key='gui_cfg_bld_apparatus_id',
                             placeholder='e.g. bender',
-                            help='Rig identity label written to `01_Metadata/session_apparatus_id`. Empty value accepted.',
+                            help='Rig identity label written to `metadata/session_apparatus_id`. Empty value accepted.',
                         )
                         st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
                         st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
@@ -7801,7 +7801,7 @@ def main():
                         'Genus-species',
                         key='gui_genus_species',
                         placeholder='e.g. Danio rerio',
-                        help='Stored in the exported `.h5` under `01_Metadata` as `specimen_genusspecies` when you run or export.',
+                        help='Stored in the exported `.h5` under `metadata` as `specimen_genusspecies` when you run or export.',
                     )
                 with id2:
                     st.text_input(
@@ -7817,7 +7817,7 @@ def main():
                     'Prep note',
                     key='morpho_prep_condition',
                     placeholder='e.g. anesthetized, recovered 24 h, fasted',
-                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `specimen_prep_condition` in `01_Metadata` on export.',
+                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `specimen_prep_condition` in `metadata` on export.',
                 )
                 if 'gui_specimen_sex' not in st.session_state:
                     st.session_state['gui_specimen_sex'] = ''
@@ -9193,7 +9193,7 @@ def main():
     
                         trial_names = summ['trial_names']
                         if not trial_names:
-                            st.info('No `trial_*` groups found under `02_TimeSeries`.')
+                            st.info('No `step_*` groups found under `timeseries`.')
                         else:
                             def_trial = trial_names[0]
                             if st.session_state.get('gui_h5_trial_select') not in trial_names:
@@ -9295,7 +9295,7 @@ def main():
                 if st.session_state.pop('gui_clear_selected_file_note', False):
                     st.session_state['gui_selected_file_note'] = ''
                 note_file = st.text_area(
-                    'New note text (timestamped, appended to 01_Metadata/user_notes for .h5 files)',
+                    'New note text (timestamped, appended to metadata/user_notes for .h5 files)',
                     key='gui_selected_file_note',
                     height=90,
                 )

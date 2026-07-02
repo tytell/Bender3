@@ -64,14 +64,18 @@ def test_no_unrouted_and_no_legacy_groups(tmp_path):
     for maker in (_isometric, _dynamic):
         path = _run(maker, tmp_path)
         with h5py.File(path, 'r') as f:
-            assert '99_Unrouted' not in f, '99_Unrouted must be empty/absent'
-            assert 'protocol_metadata' not in f['01_Metadata'], 'protocol_metadata subgroup removed'
+            assert '99_Unrouted' not in f, '99_Unrouted must not be at root (moved under metadata)'
+            assert 'protocol_metadata' not in f['metadata'], 'protocol_metadata subgroup removed'
+            assert 'metadata' in f, 'root must have metadata group'
+            assert 'timeseries' in f, 'root must have timeseries group'
+            assert '01_Metadata' not in f, 'old 01_Metadata group must be absent'
+            assert '02_TimeSeries' not in f, 'old 02_TimeSeries group must be absent'
 
 
 def test_step_protocol_per_sample_index_arrays(tmp_path):
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
-        ts = f['02_TimeSeries']
+        ts = f['timeseries']
         for tn in ts.keys():
             tg = ts[tn]
             n = tg['time_second'].shape[0]
@@ -90,10 +94,10 @@ def test_step_protocol_per_sample_index_arrays(tmp_path):
 def test_dynamic_has_cycle_index_but_no_step_index(tmp_path):
     path = _run(_dynamic, tmp_path)
     with h5py.File(path, 'r') as f:
-        # continuous (single_finite): datasets written flat directly under 02_TimeSeries, no subgroup
-        ts = f['02_TimeSeries']
+        # continuous (single_finite): datasets written flat directly under timeseries, no subgroup
+        ts = f['timeseries']
         assert 'trial_0000' not in ts, 'continuous layout must not create a trial_0000 subgroup'
-        assert 'time_second' in ts, 'continuous layout must have time_second flat under 02_TimeSeries'
+        assert 'time_second' in ts, 'continuous layout must have time_second flat under timeseries'
         n = ts['time_second'].shape[0]
         assert 'cycle_index' in ts and ts['cycle_index'].shape[0] == n
         assert 'step_index' not in ts, 'dynamic has no discrete shuffled steps'
@@ -102,8 +106,8 @@ def test_dynamic_has_cycle_index_but_no_step_index(tmp_path):
 def test_forcetorque_raw_kept_not_split(tmp_path):
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
-        # Isometric is segmented_finite: per-step subgroups are step_NNN (one-based), not trial_XXXX.
-        tg = f['02_TimeSeries']['step_001']
+        # Isometric is segmented_finite: per-step subgroups are step_NNN (one-based).
+        tg = f['timeseries']['step_001']
         assert 'forcetorque_raw' in tg
         assert tg['forcetorque_raw'].shape[0] == 6
         assert 'forcetorque' not in tg, 'duplicate forcetorque dropped'
@@ -114,7 +118,7 @@ def test_forcetorque_raw_kept_not_split(tmp_path):
 def test_block_sequence_is_json_and_step_order_dropped(tmp_path):
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
-        meta = f['01_Metadata']
+        meta = f['metadata']
         assert 'protocol_block_sequence' in meta.attrs, 'block_sequence must be routed canonically'
         parsed = json.loads(meta.attrs['protocol_block_sequence'])
         assert isinstance(parsed, list) and isinstance(parsed[0], dict)
@@ -125,7 +129,28 @@ def test_block_sequence_is_json_and_step_order_dropped(tmp_path):
 def test_manifest_drops_trial_index_column(tmp_path):
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
-        gi = f['01_Metadata/trial_index']
+        gi = f['metadata/trial_index']
         assert 'trial_names' in gi
         assert 'trial_index' not in gi, 'trial_index column dropped'
         assert 'cycle_index' not in gi, 'cycle_index column dropped (now per-sample)'
+
+
+def test_root_holds_only_schema_version(tmp_path):
+    for maker in (_isometric, _dynamic):
+        path = _run(maker, tmp_path)
+        with h5py.File(path, 'r') as f:
+            root_attrs = list(f.attrs.keys())
+            assert root_attrs == ['schema_version'], (
+                f'Root must have only schema_version; got {root_attrs}'
+            )
+            assert 'test_type' not in f.attrs, 'test_type must not be at root (moved to metadata/protocol_type)'
+            assert 'filename' not in f.attrs, 'filename must not be at root (in metadata)'
+            assert 'start_time_iso' not in f.attrs, 'start_time_iso must not be at root (metadata/session_date)'
+
+
+def test_metadata_has_session_date_and_no_calibration_link_subgroup(tmp_path):
+    path = _run(_isometric, tmp_path)
+    with h5py.File(path, 'r') as f:
+        meta = f['metadata']
+        assert 'session_date' in meta.attrs, 'session_date must be a flat metadata attr'
+        assert 'calibration_link' not in meta, 'calibration_link subgroup must be absent (D3/D12: replaced by flat attr)'

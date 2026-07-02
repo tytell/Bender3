@@ -270,7 +270,7 @@ class Bender:
 
         # 2. Assign Hardware settings from cfg
         self.device_name = cfg.device_name
-        # Rig identity label; empty string accepted. Written to 01_Metadata/session_apparatus_id.
+        # Rig identity label; empty string accepted. Written to metadata/session_apparatus_id.
         self.session_apparatus_id = str(getattr(cfg, 'apparatus_id', '') or '')
         self.motor_port = cfg.motor_port 
         self.encoder_chan = cfg.encoder_chan
@@ -532,12 +532,12 @@ class Bender:
         self.dig = np.zeros((1, 2), dtype='uint32')
 
         # Specimen / session identity — set by GUI before run and routed to canonical
-        # 01_Metadata keys via BENDER_ROUTING (bender_h5_export.py). Defaults ensure these
+        # metadata keys via BENDER_ROUTING (bender_h5_export.py). Defaults ensure these
         # keys are always present in the file even when the GUI Apply buttons are skipped.
         self.specimen_id = ''
         self.specimen_genusspecies = ''
         self.specimen_prep_condition = ''
-        # Run-computed metadata routed canonically to 01_Metadata via BENDER_ROUTING.
+        # Run-computed metadata routed canonically to metadata via BENDER_ROUTING.
         # Default None so the exporter skips them for protocols that never set them
         # (Pass A skips None); each is assigned at its computation point in the run path.
         self.daq_collection_type = None       # 'continuous' | 'segmented', derived from protocol

@@ -30,7 +30,7 @@ REQUIRED_METADATA_KEYS = sorted(
     {route['key'] for route in BENDER_ROUTING.values() if route.get('required') and route.get('tier') == 'metadata'}
 )
 
-REQUIRED_ROOT_ATTRS = ('schema_version', 'test_type', 'start_time_iso', 'filename')
+REQUIRED_ROOT_ATTRS = ('schema_version',)
 
 REQUIRED_META_DATASETS = (
     'calibration_forcetorque_matrix',
@@ -71,8 +71,8 @@ FILENAME_PATTERN = re.compile(
 
 
 def _meta_lookup(f: h5py.File, key: str) -> Any:
-    """Return a metadata value from ``01_Metadata`` attrs or top-level datasets."""
-    meta = f['01_Metadata']
+    """Return a metadata value from ``metadata`` attrs or top-level datasets."""
+    meta = f['metadata']
     if key in meta.attrs:
         return meta.attrs[key]
     if key in meta:
@@ -113,17 +113,17 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
                 if key not in f.attrs:
                     critical.append(f'Root attr missing: {key}')
             stats['schema_version'] = str(f.attrs.get('schema_version', ''))
-            stats['test_type'] = str(f.attrs.get('test_type', ''))
-            stats['start_time_iso'] = str(f.attrs.get('start_time_iso', ''))
 
-            if '01_Metadata' not in f:
-                critical.append('Missing group 01_Metadata')
+            if 'metadata' not in f:
+                critical.append('Missing group metadata')
                 return {'ok': False, 'critical': critical, 'warnings': warnings, 'info': info, 'stats': stats}
-            if '02_TimeSeries' not in f:
-                critical.append('Missing group 02_TimeSeries')
+            if 'timeseries' not in f:
+                critical.append('Missing group timeseries')
                 return {'ok': False, 'critical': critical, 'warnings': warnings, 'info': info, 'stats': stats}
 
-            meta = f['01_Metadata']
+            meta = f['metadata']
+            stats['test_type'] = str(_meta_lookup(f, 'protocol_type') or '')
+            stats['session_date'] = str(_meta_lookup(f, 'session_date') or '')
             simulated = bool(_meta_lookup(f, 'session_simulated'))
             stats['session_simulated'] = simulated
 
@@ -141,13 +141,9 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
                 if ds not in meta:
                     critical.append(f'Required metadata dataset/group missing: {ds}')
 
-            if 'calibration_link' not in meta:
-                warnings.append('Missing subgroup calibration_link (legacy path still usable via attrs)')
-            else:
-                cl = meta['calibration_link']
-                for attr in ('calibration_file', 'calibration_available', 'use_inertial_calibration'):
-                    if attr not in cl.attrs:
-                        warnings.append(f'calibration_link missing attr: {attr}')
+            # calibration_link subgroup was removed in M1 (D3/D12); provenance is now a flat attr.
+            if 'calibration_inertia_file' not in meta.attrs and 'calibration_inertia_file' not in meta:
+                warnings.append('calibration_inertia_file absent from metadata (optional -- only expected when a cal file is set)')
 
             if 'trial_index' in meta and 'trial_names' not in meta['trial_index']:
                 critical.append('trial_index missing trial_names dataset')
@@ -183,16 +179,16 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
                     warnings.append('Filename has sim_ prefix but session_simulated=False')
 
             # --- per-trial timeseries ---
-            trials = sorted(k for k in f['02_TimeSeries'].keys() if str(k).startswith('trial_'))
+            trials = sorted(k for k in f['timeseries'].keys() if str(k).startswith('step_'))
             stats['n_trials'] = len(trials)
             if not trials:
-                critical.append('No trial_* groups in 02_TimeSeries')
+                critical.append('No step_* groups in timeseries')
 
             step_protocols = {'isometric', 'isovelocity'}
             file_tt = str(stats.get('test_type') or '').lower()
 
             for tn in trials:
-                tg = f['02_TimeSeries'][tn]
+                tg = f['timeseries'][tn]
                 try:
                     t = _trial_time(tg)
                 except KeyError:
@@ -229,8 +225,7 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
             for gap in MISSING_REQUIRED:
                 info.append(f'Known schema gap (not in raw file): {gap["key"]} — {gap.get("note", "")}')
             info.append(
-                'Phase-0 on-disk layout uses 01_Metadata / 02_TimeSeries groups '
-                '(flat metadata/timeseries is a later restructure per schema doc §2).'
+                'Phase-1 on-disk layout uses flat metadata / timeseries groups (no 01_/02_ prefixes).'
             )
             if _meta_lookup(f, 'measurement_specimen_body_width_millimeter') is None:
                 info.append('measurement_specimen_body_width_millimeter absent (no GUI source yet; expected).')
@@ -347,7 +342,7 @@ def _pick_dataset(group: h5py.Group, *names: str) -> Optional[str]:
 
 def _load_sono_cal(f: h5py.File, sono_name: str) -> np.ndarray:
     side = 'right' if 'right' in sono_name.lower() else 'left'
-    meta = f['01_Metadata']
+    meta = f['metadata']
     canon = f'calibration_sono_{side}_millimeter_per_volt'
     if canon in meta:
         return np.asarray(meta[canon][()], dtype=float)
@@ -381,7 +376,7 @@ def _sono_mm_from_volts(volts: np.ndarray, cal: np.ndarray) -> np.ndarray:
 
 
 def _inter_trial_gap_s(f: h5py.File) -> float:
-    meta = f['01_Metadata']
+    meta = f['metadata']
     for group_name in ('bender_settings', 'protocol_metadata'):
         if group_name not in meta:
             continue
@@ -425,7 +420,7 @@ def validate_h5(path: str) -> Dict:
                     'n_trials': summ['n_trials'],
                     'channels': summ['channel_names'],
                     'primary_axis': summ['primary_bending_axis'],
-                    'start_time_iso': str(f.attrs.get('start_time_iso', '')),
+                    'session_date': str(_meta_lookup(f, 'session_date') or ''),
                 }
             )
 
@@ -433,9 +428,9 @@ def validate_h5(path: str) -> Dict:
             if len(ch) != summ['n_trials'] and len(ch) < 6:
                 warnings.append(f'Unexpected channel count: {len(ch)}')
 
-            trials = sorted(k for k in f['02_TimeSeries'].keys() if str(k).startswith('trial_'))
+            trials = sorted(k for k in f['timeseries'].keys() if str(k).startswith('step_'))
             if not trials:
-                issues.append('No trial_* groups in 02_TimeSeries')
+                issues.append('No step_* groups in timeseries')
 
             sono_idx = next((i for i, n in enumerate(ch) if str(n).lower().startswith('sono_')), None)
             sono_name = ch[sono_idx] if sono_idx is not None else None
@@ -459,7 +454,7 @@ def validate_h5(path: str) -> Dict:
             angle_ranges: List[float] = []
 
             for tn in trials:
-                tg = f['02_TimeSeries'][tn]
+                tg = f['timeseries'][tn]
                 try:
                     t = _trial_time(tg)
                 except KeyError:
@@ -529,8 +524,8 @@ def validate_h5(path: str) -> Dict:
 
 def _stitch_trials(f: h5py.File) -> Dict[str, np.ndarray]:
     gap = _inter_trial_gap_s(f)
-    g_ts = f['02_TimeSeries']
-    trials = sorted(k for k in g_ts.keys() if str(k).startswith('trial_'))
+    g_ts = f['timeseries']
+    trials = sorted(k for k in g_ts.keys() if str(k).startswith('step_'))
     t_parts: List[np.ndarray] = []
     ang_cmd: List[np.ndarray] = []
     ang_meas: List[np.ndarray] = []

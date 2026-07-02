@@ -221,7 +221,7 @@ def export_primary_h5(
         raise ValueError("export_primary_h5 requires bender.outputfile or outputfile=...")
 
     # Prefix all sim-mode files so they sort separately and the analysis pipeline can quarantine
-    # them by name alone (belt-and-suspenders alongside 01_Metadata.attrs['session_simulated']).
+    # them by name alone (belt-and-suspenders alongside metadata.attrs['session_simulated']).
     # Idempotent: never double-prefixes if the caller has already named the file sim_*. The GUI
     # auto-namer already composes the sim_ name (so its disk scan and preview match this output);
     # this branch still covers manual-override, legacy, and direct (non-GUI) export paths.
@@ -291,25 +291,26 @@ def export_primary_h5(
     start_time_iso = start_dt.isoformat()
 
     with h5py.File(final_path, 'w') as f:
+        # Root holds only schema_version (file-level provenance, D6). All other formerly root-level
+        # attrs (test_type, post-trial notes, filename, start_time_iso) are written into metadata:
+        # test_type -> protocol_type via ledger, post_trial_notes -> note_posthoc via ledger,
+        # filename -> metadata/filename directly, start_time_iso -> metadata/session_date directly.
         f.attrs['schema_version'] = h5_schema_version
-        f.attrs['test_type'] = test_type
-        f.attrs['post-trial notes'] = notes
-        f.attrs['filename'] = filename_only
-        f.attrs['start_time_iso'] = start_time_iso
 
-        g_meta = f.create_group('01_Metadata')
+        g_meta = f.create_group('metadata')
         # Canonical scalar metadata (protocol_type, session_*, schema_version, note_posthoc,
         # starting_angle, etc.) is written by the ledger-driven loop near the end of this block
-        # from BENDER_ROUTING -- no hardcoded per-field writes here. Only the portable file name
-        # (not a schema field) is kept as provenance.
+        # from BENDER_ROUTING. Portable file name and session date are kept here as direct writes
+        # (filename is not a schema field; session_date is computed from bender.timestamp here).
         g_meta.attrs['filename'] = filename_only
+        g_meta.attrs['session_date'] = start_time_iso
 
-        g_cal_link = g_meta.create_group('calibration_link')
-        g_cal_link.attrs['use_inertial_calibration'] = bool(use_cal)
-        g_cal_link.attrs['calibration_file'] = cal_file
-        g_cal_link.attrs['calibration_available'] = bool(cal_available)
+        # calibration_link subgroup removed (D3, D12): flatten to a single provenance attr.
+        # use_inertial_calibration and calibration_available dropped -- no correction runs at export.
+        if cal_file:
+            g_meta.attrs['calibration_inertia_file'] = cal_file
 
-        g_ts = f.create_group('02_TimeSeries')
+        g_ts = f.create_group('timeseries')
         manifest_rows = []
 
         # Canonical per-trial timeseries dataset names (PI decision: full spelled-out rename).
@@ -345,14 +346,13 @@ def export_primary_h5(
         # doc 6 -- belongs in the research-hub ``derived`` group, not the raw file).
         ts_drop = {'forcetorque', 'primary_torque_raw'}
 
-        # Branch on daq_collection_type + record count (Steps 2/3).
+        # Branch on daq_collection_type (Steps 2/3).
         # 'continuous' with exactly 1 record (single_finite, dynamic/sweep): write channel
-        # datasets flat under 02_TimeSeries — no per-step subgroup.
-        # 'segmented' (isovelocity/FV, Step 3): one subgroup per step named step_{step_index:03d}
+        # datasets flat under timeseries — no per-step subgroup.
+        # 'segmented' (isometric/isovelocity/FL/FV): one subgroup per step named step_{step_index:03d}
         # (one-based, 3-digit, step_ prefix); step_NNN suffix == rec['step_index'].
-        # 'continuous' with N > 1 records (isometric/FL still behind the Step-4 gate, which
-        # produces N slice records from the stitched task): keep trial_{i:04d} subgroups until
-        # Step 4 converts isometric to a per-step run() loop.
+        # The old trial_{i:04d} branch is removed: all protocols are either single_finite
+        # (continuous, 1 record) or segmented_finite (per-step run() loop) after Step 4.
         _daq_ct = str(getattr(bender, 'daq_collection_type', '') or '')
         _is_flat = (_daq_ct == 'continuous' and len(trial_records) <= 1)
         _is_segmented = (_daq_ct == 'segmented')
@@ -360,14 +360,16 @@ def export_primary_h5(
         for i, rec in enumerate(trial_records):
             if _is_flat:
                 tg = g_ts
-                _tname = '02_TimeSeries'
+                _tname = 'timeseries'
             elif _is_segmented:
                 _si = int(rec.get('step_index', i + 1))
                 _tname = f'step_{_si:03d}'
                 tg = g_ts.create_group(_tname)
             else:
-                tg = g_ts.create_group(f'trial_{i:04d}')
-                _tname = f'trial_{i:04d}'
+                raise ValueError(
+                    f'export_primary_h5: unrecognized daq_collection_type={_daq_ct!r}. '
+                    'Expected "continuous" (single record) or "segmented".'
+                )
             rec_tt = str(rec.get('test_type', test_type))
             tg.attrs['test_type'] = rec_tt
             manifest = {
@@ -379,7 +381,7 @@ def export_primary_h5(
             # the acquisition GUI: empirical apparatus inertia is fit from an empty calibration run
             # post-hoc in R, and specimen inertia is analytic from geometry. The parameters needed
             # for that post-hoc correction (the use_theoretical_inertial_correction flag, specimen
-            # MOI, and the inertial_calibration_profile I_est/bias) are stored in 01_Metadata, not
+            # MOI, and the inertial_calibration_profile I_est/bias) are stored in metadata, not
             # baked into a corrected time series here. So forcetorque_corrected,
             # primary_torque_corrected, and the inertial_torque_* traces are intentionally omitted.
             # Source rec keys we know how to canonicalize (written below under ts_rename names).
@@ -494,10 +496,10 @@ def export_primary_h5(
             manifest_rows.append(manifest)
 
         # Per-trial condition manifest. trial_index / cycle_index columns are dropped: trial order
-        # is the trial_names order, and per-sample cycle_index lives in 02_TimeSeries (PI decision).
-        # trial_names reflects the layout used above: '02_TimeSeries' for continuous (flat),
-        # 'step_001', 'step_002', … for segmented (isovelocity/FV, Step 3), and 'trial_0000', …
-        # for the not-yet-converted isometric/FL continuous-with-N-records path (until Step 4).
+        # is the trial_names order, and per-sample cycle_index lives in timeseries (PI decision).
+        # trial_names reflects the layout used above: 'timeseries' for continuous (flat),
+        # 'step_001', 'step_002', … for segmented (isometric/isovelocity/FL/FV).
+        # M2 owns the full trial_index -> index_step_* swap; this subgroup is left intact here.
         g_idx = g_meta.create_group('trial_index')
         g_idx.create_dataset(
             'trial_names',
@@ -617,11 +619,11 @@ def export_primary_h5(
         # (n_trials/protocol/motion_test_type/frequency_hz/curvature_1_per_m/*movedur*/
         # simulation_model/theoretical_i_total_system/step_order) are dropped as redundant.
 
-        # === Ledger-driven canonical metadata (Phase 0) ===================
+        # === Ledger-driven canonical metadata (Phase 1) ===================
         # Replaces BOTH the old ``bender_settings`` catch-all (raw bender.__dict__ dump) AND the
         # verbatim config-provenance writer. Every public Bender attribute is routed via
         # bender_routing_spec.BENDER_ROUTING to its canonical schema key:
-        #   * tier == 'metadata'   -> written here into 01_Metadata under route['key']
+        #   * tier == 'metadata'   -> written here into metadata under route['key']
         #   * tier == 'timeseries' -> already written per-trial above (skip here)
         #   * in EXCLUDED / underscore / None -> skipped
         #   * unmapped (neither routed nor excluded) -> preserved under 99_Unrouted + loud warning
@@ -661,7 +663,8 @@ def export_primary_h5(
                 written_keys.add(key)
 
         # Pass B -- unmapped detection over the instance __dict__: any public attribute that is
-        # neither routed nor excluded is preserved (lossless) under 99_Unrouted with a loud warning.
+        # neither routed nor excluded is preserved (lossless) under metadata/99_Unrouted (D7) with
+        # a loud warning.
         unrouted: Dict[str, Any] = {}
         for name, value in list(vars(bender).items()):
             if name.startswith('_') or value is None:
@@ -670,14 +673,18 @@ def export_primary_h5(
                 continue
             unrouted[name] = value
         if unrouted:
-            g_un = f.create_group('99_Unrouted')
+            g_un = g_meta.create_group('99_Unrouted')
             for name, value in unrouted.items():
                 _store_metadata_canonical(g_un, name, value)
             logging.warning(
-                'export_primary_h5: %d unrouted Bender attribute(s) preserved under 99_Unrouted '
+                'export_primary_h5: %d unrouted Bender attribute(s) preserved under metadata/99_Unrouted '
                 '(add each to BENDER_ROUTING or EXCLUDED in bender_routing_spec.py): %s',
                 len(unrouted), sorted(unrouted),
             )
+
+        # Print surviving root-attr set for PI eyeball (D6). After M1 only schema_version
+        # should remain at root; all other formerly root attrs live in metadata.
+        print('[info] export_primary_h5: surviving root attrs = ' + str(list(f.attrs.keys())))
 
         # === RA-inspection derived/ group (D11 amendment, Point 4) ==============
         # Written into the raw file for live signal checking during/after a run.

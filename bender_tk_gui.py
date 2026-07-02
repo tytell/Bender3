@@ -293,8 +293,7 @@ class BenderTkApp:
         lf = self._section(parent, "6 - Parked (pending PI decisions)")
         ttk.Label(
             lf,
-            text="Append note to existing .h5  -  PARKED (Decision A: 01_Metadata/note_bench vs "
-            "flat metadata/note_bench).",
+            text="Append note to existing .h5  -  PARKED (Decision A resolved: metadata/note_bench).",
             foreground="gray",
             wraplength=700,
             justify="left",

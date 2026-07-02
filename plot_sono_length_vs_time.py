@@ -97,7 +97,7 @@ def _trial_time_seconds(tg: h5py.Group) -> np.ndarray:
 
 def _load_sono_cal_table(f: h5py.File, sono_name: str) -> Tuple[np.ndarray, str]:
     side = 'right' if 'right' in sono_name.lower() else 'left'
-    meta = f['01_Metadata']
+    meta = f['metadata']
     canon = f'calibration_sono_{side}_millimeter_per_volt'
     if canon in meta:
         return np.asarray(meta[canon][()], dtype=float), canon
@@ -109,7 +109,7 @@ def _load_sono_cal_table(f: h5py.File, sono_name: str) -> Tuple[np.ndarray, str]
 
 
 def inter_trial_gap_s(f: h5py.File) -> float:
-    meta = f['01_Metadata']
+    meta = f['metadata']
     for group_name in ('bender_settings', 'protocol_metadata'):
         if group_name not in meta:
             continue
@@ -136,8 +136,8 @@ def load_stitched_series(
 ) -> Tuple[np.ndarray, np.ndarray, str, dict]:
     meta: dict = {}
     with h5py.File(path, 'r') as f:
-        if '02_TimeSeries' not in f:
-            raise ValueError(f'{path}: no 02_TimeSeries group')
+        if 'timeseries' not in f:
+            raise ValueError(f'{path}: no timeseries group')
         ch = _read_input_channel_names(f)
         sono = next((n for n in ch if str(n).lower().startswith('sono_')), None)
         if not sono:
@@ -161,8 +161,8 @@ def load_stitched_series(
             }
         )
         gap = inter_trial_gap_s(f)
-        g_ts = f['02_TimeSeries']
-        trials = sorted(k for k in g_ts.keys() if str(k).startswith('trial_'))
+        g_ts = f['timeseries']
+        trials = sorted(k for k in g_ts.keys() if str(k).startswith('step_'))
         meta['n_trials'] = len(trials)
         t_parts: List[np.ndarray] = []
         L_parts: List[np.ndarray] = []
