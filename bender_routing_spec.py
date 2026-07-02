@@ -314,7 +314,7 @@ BENDER_ROUTING: Dict[str, Route] = {
     "stim_cycles_in_step": {"tier": "metadata", "key": "protocol_stim_cycles_in_step", "required": False, "source": "GUI", "note": "count"},
     "stim_pulse_rate":    {"tier": "metadata", "key": "protocol_stim_pulse_rate_hertz", "required": False, "source": "GUI"},
     "cycles_per_step":    {"tier": "metadata", "key": "protocol_cycles_per_step",    "required": False, "source": "GUI", "note": "count"},
-    "n_end_cycles":       {"tier": "metadata", "key": "protocol_end_cycles_count",   "required": False, "source": "GUI", "note": "count"},
+    "n_end_cycles":       {"tier": "metadata", "key": "protocol_end_cycle_count",    "required": False, "source": "GUI", "note": "count (D10 name; was protocol_end_cycles_count)"},
     "randomize":          {"tier": "metadata", "key": "protocol_randomize",          "required": False, "source": "GUI", "note": "legacy bool; mirrors randomize_step_order"},
     "random_seed":        {"tier": "metadata", "key": "protocol_random_seed",        "required": False, "source": "GUI"},
     "sweep_nominal_frequency": {"tier": "metadata", "key": "protocol_sweep_nominal_frequency_hertz",  "required": False, "source": "GUI"},

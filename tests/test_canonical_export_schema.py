@@ -159,6 +159,49 @@ def test_calibration_matrix_and_derived_absent_on_identity(tmp_path):
             )
 
 
+def test_index_cycle_arrays_single_finite_only(tmp_path):
+    """M2c (D10): single_finite writes the index_cycle_* per-cycle design grid; segmented does not."""
+    # single_finite (dynamic): index_cycle_* present as parallel arrays of equal length C.
+    path = _run(_dynamic, tmp_path)
+    with h5py.File(path, 'r') as f:
+        meta = f['metadata']
+        assert 'index_cycle_index' in meta, 'single_finite must write index_cycle_index'
+        C = int(meta['index_cycle_index'].shape[0])
+        assert C > 0
+        assert int(meta['index_cycle_index'][0]) == 1, 'index_cycle_index is 1-based'
+        for key in (
+            'index_cycle_frequency_hertz',
+            'index_cycle_motor_amplitude_degree',
+            'index_cycle_active',
+            'index_cycle_activation_duty',
+            'index_cycle_activation_phase',
+            'index_cycle_operating_point',
+            'index_cycle_operating_point_units',
+        ):
+            assert key in meta, f'missing per-cycle array: {key}'
+            assert meta[key].shape[0] == C, f'{key} length != C'
+        # protocol scalars
+        assert int(meta.attrs['protocol_cycle_count']) == C
+        assert 'protocol_activation_start_cycle' in meta.attrs
+        # protocol_end_cycle_count (D10 name; routed from n_end_cycles)
+        assert 'protocol_end_cycle_count' in meta.attrs
+        assert 'protocol_end_cycles_count' not in meta.attrs, 'old plural key must be gone'
+        # D4 intact: the per-cycle block adds no index_step_operating_point-style CYCLE columns
+        # into the step family (no index_step_cycle_* cross-contamination).
+        assert not any(k.startswith('index_step_cycle') for k in meta.keys()), (
+            'index_cycle_* must not create index_step_cycle_* columns (D4 intact)'
+        )
+
+    # segmented_finite (isometric): no per-cycle design grid.
+    seg = _run(_isometric, tmp_path)
+    with h5py.File(seg, 'r') as f:
+        meta = f['metadata']
+        assert not any(k.startswith('index_cycle_') for k in meta.keys()), (
+            'segmented_finite must not write index_cycle_* arrays'
+        )
+        assert 'protocol_cycle_count' not in meta.attrs, 'segmented has no per-cycle scalar block'
+
+
 def test_block_sequence_is_json_and_step_order_dropped(tmp_path):
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:

@@ -626,6 +626,91 @@ def export_primary_h5(
                     if any(len(s) > 0 for s in _col):
                         g_meta.create_dataset(_dst, data=np.array(_col, dtype='S'))
 
+        # index_cycle_* -- per-cycle design grid, single_finite ONLY (D10, M2c). Parallel arrays,
+        # one element per bending cycle (length C); R joins them to samples via the per-sample
+        # cycle_index stream (already in timeseries, section 3b-i). The source per-cycle arrays are
+        # built by organize_cycles() and live on the Bender (EXCLUDED from the ledger), so they are
+        # written here directly. segmented_finite has no per-cycle design grid, so this whole block
+        # is gated on _is_flat; frequency_sweep (also single_finite) may not populate these arrays,
+        # so each dataset is guarded on a present, non-empty source of consistent length.
+        # Does NOT add or touch index_step_* columns (D4 intact).
+        if _is_flat:
+            _freq_by_cycle = getattr(bender, 'freq_by_cycle', None)
+            _cyc = np.asarray(_freq_by_cycle, dtype=float).reshape(-1) if _freq_by_cycle is not None else np.array([])
+            _C = int(_cyc.size)
+            if _C > 0:
+                def _cycle_col(attr, dtype=float):
+                    """Per-cycle source array as length-C dtype array, or None if absent/ragged."""
+                    v = getattr(bender, attr, None)
+                    if v is None:
+                        return None
+                    a = np.asarray(v).reshape(-1)
+                    if a.size != _C:
+                        return None
+                    return a.astype(dtype)
+
+                g_meta.create_dataset('index_cycle_index', data=np.arange(1, _C + 1, dtype=np.int64))
+                g_meta.create_dataset('index_cycle_frequency_hertz', data=_cyc.astype(float))
+                _amp_deg = _cycle_col('amp_by_cycle', float)
+                if _amp_deg is not None:
+                    g_meta.create_dataset('index_cycle_motor_amplitude_degree', data=_amp_deg)
+                _active = _cycle_col('is_stim_cycle', bool)
+                if _active is not None:
+                    g_meta.create_dataset('index_cycle_active', data=_active)
+                _duty = _cycle_col('duty_by_cycle', float)
+                if _duty is not None:
+                    g_meta.create_dataset('index_cycle_activation_duty', data=_duty)
+                _phase = _cycle_col('phase_by_cycle', float)
+                if _phase is not None:
+                    g_meta.create_dataset('index_cycle_activation_phase', data=_phase)
+
+                # operating_point + units: user's native drive amplitude per cycle (mode-approved
+                # mapping, PI sign-off 2026-07-02). motor amplitude (deg) is written above regardless
+                # so R always has degrees plus the native operating point.
+                _mode = str(getattr(bender, 'all_amps_mode', '') or '').strip().lower()
+                _strain = _cycle_col('strain_by_cycle', float)
+                _op_val = None
+                _op_units = None
+                if _mode == 'angle':
+                    _op_val, _op_units = _amp_deg, 'degree'
+                elif _mode == 'strain' and _strain is not None:
+                    _op_val, _op_units = _strain, 'strain'
+                elif _mode == 'strain_pct' and _strain is not None:
+                    _op_val, _op_units = _strain * 100.0, 'percent'
+                elif _mode == 'curvature' and _strain is not None:
+                    # curvature = strain / lever_arm; lever_arm = (xsec_width/2 - depth)/1000 (m).
+                    try:
+                        _xw = float(getattr(bender, 'xsec_width', 0.0) or 0.0)
+                        _md = float(getattr(bender, 'target_muscle_depth_mm', 0.0) or 0.0)
+                        _lever_m = (_xw / 2.0 - _md) / 1000.0
+                        if np.isfinite(_lever_m) and _lever_m > 0:
+                            _op_val, _op_units = _strain / _lever_m, 'per_meter'
+                    except (TypeError, ValueError):
+                        _op_val = None
+                if _op_val is None:
+                    # Unknown/fallback: expose the realized motor amplitude in degrees.
+                    _op_val, _op_units = _amp_deg, 'degree'
+                if _op_val is not None:
+                    g_meta.create_dataset('index_cycle_operating_point', data=np.asarray(_op_val, dtype=float))
+                    # units as a [C] parallel array (schema section 4: index_cycle_operating_point_units
+                    # is [C] str), matching the index_step_operating_point_units pattern.
+                    g_meta.create_dataset(
+                        'index_cycle_operating_point_units',
+                        data=np.array([_op_units] * _C, dtype='S'),
+                    )
+
+                # protocol_ per-cycle scalars (D10). protocol_cycles_per_step is already written by
+                # the ledger (cycles_per_step route); protocol_end_cycle_count by the ledger too.
+                g_meta.attrs['protocol_cycle_count'] = _C
+                _active_arr = _cycle_col('is_stim_cycle', bool)
+                if _active_arr is not None and bool(np.any(_active_arr)):
+                    # 0-based index of the first activated cycle (schema documents the deliberate
+                    # 0-based/1-based asymmetry vs index_cycle_index; do not normalize).
+                    _start = int(np.argmax(_active_arr))
+                else:
+                    _start = -1
+                g_meta.attrs['protocol_activation_start_cycle'] = _start
+
         # step_manifest: per-step timing and operating-point index (schema §4).
         # Scaffold: step_index (1-based), duration_second from t array, rest_before_second
         # from rec field (0 until Steps 3/4 populate wall_clock timing). operating_point
