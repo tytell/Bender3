@@ -392,7 +392,7 @@ start M3 until flag 1 is resolved. Flag 2 is closed (resolved into M1).
 ## Cutover record
 
 - Pre-migration HEAD at planning: `4503a06` (segmented-finite Step 5 + checkbox no-op).
-- Migration cutover commit (fill in after M1 lands): `_________`_.
+- Migration cutover commit (fill in after M1 lands): `75ec2ea`.
 - Files written with `01_Metadata`/`02_TimeSeries` exist only at or before the cutover
 commit's parent; read them by checking out that commit.
 
