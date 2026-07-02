@@ -534,9 +534,10 @@ def export_primary_h5(
             ('t_post_baseline_start',            'index_step_t_post_baseline_start_second',        'float'),
             ('t_post_baseline_end',              'index_step_t_post_baseline_end_second',          'float'),
             # Motor-position reference (_record_motor_position_reference).
-            # cumulative_commanded_steps is Teknic motor-shaft MICROSTEPS (1600/rev on motor shaft,
-            # gear ratio 5:1); NOT output-shaft steps or degrees. Flagged for D9 rename pass.
-            ('cumulative_commanded_steps',       'index_step_cumulative_commanded_steps',          'float'),
+            # index_step_cumulative_commanded_motor_microstep: Teknic motor-shaft MICROSTEPS
+            # (1600/rev on motor shaft; gear ratio 5:1 to specimen frame = 8000/output-shaft rev).
+            # NOT output-shaft steps or degrees (D9 rename from cumulative_commanded_steps).
+            ('cumulative_commanded_steps',       'index_step_cumulative_commanded_motor_microstep', 'float'),
             ('encoder_cumulative_deg',           'index_step_encoder_cumulative_degree',           'float'),
             # Isometric-only (absent in isovelocity / single_finite -> NaN / '')
             ('target_deg',                       'index_step_target_angle_degree',                 'float'),

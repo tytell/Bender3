@@ -414,13 +414,13 @@ index_step_stim_voltage_right_volt      [n_steps] float Right-side stim voltage 
 #### Motor-position reference fields
 
 ```
-index_step_cumulative_commanded_steps   [n_steps] float  Cumulative Teknic motor-shaft MICROSTEPS commanded
+index_step_cumulative_commanded_motor_microstep [n_steps] float  Cumulative Teknic motor-shaft microsteps commanded
                                                           (round(self._motor_continuous_step_pos)); NOT re-zeroed
                                                           between steps. Units: motor-shaft microsteps (1600/rev
                                                           on the ClearPath shaft; gear ratio 5:1 to specimen frame
-                                                          → 8000 microsteps per output-shaft revolution). NOT
-                                                          degrees. Flagged for D9 rename pass to carry explicit
-                                                          unit suffix. (source: cumulative_commanded_steps)
+                                                          = 8000 microsteps per output-shaft revolution). NOT
+                                                          output-shaft steps or degrees.
+                                                          (source: cumulative_commanded_steps; renamed D9)
 index_step_encoder_cumulative_degree    [n_steps] float  Running sum of per-step net encoder displacement
                                                           (angle_measured[-1] - angle_measured[0] per step);
                                                           accumulated without re-zeroing across step boundaries.
@@ -582,7 +582,7 @@ specimen_muscle_type                    preparation region, e.g. "epaxial" (now 
 specimen_prep_condition                 prep state, e.g. "in_vivo" / "in_vitro" (Current: prep_condition)
 ```
 
-> **FLAG E — RESOLVED.** Rename `genus_species` → `specimen_genusspecies` approved (compound word, no underscore). Pending rename in `bender_functions.py` Python attr, GUI widget key, and `bender_h5_export.py`.
+> **FLAG E — DONE (D9).** `genus_species` → `specimen_genusspecies` implemented: Python attr `bender.specimen_genusspecies` in `bender_functions.py`; `BENDER_ROUTING` source key `specimen_genusspecies`; GUI session key `gui_genus_species` intentionally kept for JSON template compatibility (see §8).
 
 ### `step_manifest` — per-step timing and operating-point index
 
@@ -662,19 +662,19 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 | `calibration` (bender_settings)                                    | present                                          | `calibration_forcetorque_matrix`                                         | rename                                                                                                                                     |
 | `sono_cal_left`                                                    | present                                          | `calibration_sono_left`                                                  | rename                                                                                                                                     |
 | `sono_cal_right`                                                   | present                                          | `calibration_sono_right`                                                 | rename                                                                                                                                     |
-| `genus_species` (bender_settings)                                  | present                                          | `specimen_genusspecies`                                                  | rename                                                                                                                                     |
+| `genus_species` (bender_settings)                                  | present                                          | `specimen_genusspecies`                                                  | **done (D9)** — Python attr + routing spec use `specimen_genusspecies`; GUI key `gui_genus_species` kept for JSON compat                   |
 | `prep_condition` (bender_settings)                                 | present                                          | `specimen_prep_condition`                                                | rename                                                                                                                                     |
 | `specimen_sex` (bender_settings)                                   | present                                          | `specimen_sex`                                                           | conformant                                                                                                                                 |
 | `specimen_muscle_type` (bender_settings)                           | present                                          | `specimen_muscle_type`                                                   | conformant                                                                                                                                 |
 | `session_analyst` (bender_settings)                                | present                                          | `session_analyst`                                                        | conformant                                                                                                                                 |
 | `session_date` (01_Metadata top attrs)                             | present                                          | `session_date`                                                           | conformant; schema rename to `session_date` pending (already correct)                                                                      |
 | `apparatus_id` (01_Metadata top attrs)                             | present                                          | `session_apparatus_id`                                                   | rename                                                                                                                                     |
-| `simulated` (01_Metadata top attrs)                                | present                                          | `session_simulated`                                                      | rename                                                                                                                                     |
+| `simulated` (01_Metadata top attrs)                                | present                                          | `session_simulated`                                                      | **done (D9)** — Python attr `bender.session_simulated` + routing spec already use `session_simulated`                                      |
 | `specimen_geometry_heights_mm`                                     | present                                          | `measurement_specimen_frustum_heights_millimeter`                        | rename                                                                                                                                     |
 | `specimen_geometry_depths_mm`                                      | present                                          | `measurement_specimen_frustum_depths_millimeter`                         | rename                                                                                                                                     |
 | `specimen_geometry_positions_mm`                                   | present                                          | `measurement_specimen_frustum_positions_millimeter`                      | rename                                                                                                                                     |
-| `fishlen_TL`                                                       | present                                          | `measurement_specimen_bodylength_millimeter`                             | rename                                                                                                                                     |
-| `fishlen_SL`                                                       | present                                          | `measurement_specimen_standardlength_millimeter`                         | rename                                                                                                                                     |
+| `fishlen_TL`                                                       | present                                          | `measurement_specimen_bodylength_millimeter`                             | **done (D9)** — routing spec maps `fishlen_TL` to canonical name; Python attr kept as `fishlen_TL` for JSON template compat                |
+| `fishlen_SL`                                                       | present                                          | `measurement_specimen_standardlength_millimeter`                         | **done (D9)** — routing spec maps `fishlen_SL` to canonical name; Python attr kept as `fishlen_SL` for JSON template compat                |
 | `fishmass`                                                         | present                                          | `measurement_specimen_body_mass_gram`                                    | rename                                                                                                                                     |
 | `dclamp`                                                           | present                                          | `measurement_clamp_separation_millimeter`                                | rename                                                                                                                                     |
 | `dvert`                                                            | present                                          | `measurement_clamp_offset_vertical_millimeter`                           | rename                                                                                                                                     |
@@ -736,18 +736,18 @@ From the audit of `2026-06-04_bass13_bender_24_isometric.h5` and the sim-validat
 
 ---
 
-## 8. Resolved flags / pending code changes
+## 8. Resolved flags (D9 — all done)
 
-All schema-level decisions are locked. Remaining work is code-side renames only:
+All schema-level decisions are locked. All code-side renames are complete as of D9 (commit following M2):
 
 
-| Flag                    | Decision                                                                                                  | Code change pending                                             |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| A — ATI units           | newton / newton_meter (SI)                                                                                | channel names already use `newton` / `newton_meter` in this doc |
-| B — stim channel naming | `stim_channel1_command_volt` / `stim_channel2_command_volt`                                               | rename `S1stimcmd` / `S2stimcmd` in export                      |
-| C — body length keys    | `measurement_specimen_bodylength_millimeter` (TL) + `measurement_specimen_standardlength_millimeter` (SL) | rename `fishlen_TL` / `fishlen_SL` in export                    |
-| D — simulated key       | `session_simulated`                                                                                       | one-line rename in `bender_h5_export.py`                        |
-| E — species key         | `specimen_genusspecies`                                                                                   | rename `genus_species` in `bender_functions.py`, GUI, export    |
+| Flag                    | Decision                                                                                                  | Status (D9)                                                                                                                                                               |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A — ATI units           | newton / newton_meter (SI)                                                                                | **DONE** — `ts_rename` in exporter already uses `_newton` / `_newton_meter` in channel names                                                                             |
+| B — stim channel naming | `stim_channel1_command_volt` / `stim_channel2_command_volt`                                               | **DONE** — `bender_h5_export.py` `ts_rename` maps `S1stimcmd` → `stim_channel1_command_volt`, `S2stimcmd` → `stim_channel2_command_volt`                                  |
+| C — body length keys    | `measurement_specimen_bodylength_millimeter` (TL) + `measurement_specimen_standardlength_millimeter` (SL) | **DONE** — `BENDER_ROUTING` maps `fishlen_TL` / `fishlen_SL` to canonical names; Python attrs and GUI session keys intentionally keep old names for JSON template compat  |
+| D — simulated key       | `session_simulated`                                                                                       | **DONE** — Python attr `bender.session_simulated` and `BENDER_ROUTING` source key already use `session_simulated`                                                        |
+| E — species key         | `specimen_genusspecies`                                                                                   | **DONE** — Python attr `bender.specimen_genusspecies` renamed; `BENDER_ROUTING` source key `specimen_genusspecies`; GUI session key `gui_genus_species` intentionally kept for JSON template compat |
 
 
 - **Decision 2 — body-width timing.** Is the rig collecting fish *before* the schema rewrite ships? If yes, fix `measurement_specimen_body_width_millimeter` as a standalone commit on the current structure first.
