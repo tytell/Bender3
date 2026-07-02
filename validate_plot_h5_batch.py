@@ -26,8 +26,10 @@ from bender_routing_spec import BENDER_ROUTING, MISSING_REQUIRED
 DEFAULT_FOLDER = r'C:\Users\jimen\Desktop\bender_summer_2026'
 
 # Metadata keys marked required=True in bender_routing_spec (ledger canonical names).
+# schema_version is excluded: it lives at the file ROOT (REQUIRED_ROOT_ATTRS), not in metadata/ (D6).
 REQUIRED_METADATA_KEYS = sorted(
     {route['key'] for route in BENDER_ROUTING.values() if route.get('required') and route.get('tier') == 'metadata'}
+    - {'schema_version'}
 )
 
 REQUIRED_ROOT_ATTRS = ('schema_version',)
@@ -107,6 +109,50 @@ def _is_empty_meta(value: Any) -> bool:
     return False
 
 
+def _meta_bool(f: h5py.File, key: str):
+    """Read a 3-state bool metadata field: 'true'->True, 'false'->False, 'NA'/None->None.
+
+    Null-sentinel rule (2026-07-02): booleans are stored as strings, so bool(value) is wrong
+    (the string 'false' is truthy). Tolerates pre-amendment native bool/int for older files.
+    """
+    v = _meta_lookup(f, key)
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        v = v.decode('utf-8', 'replace')
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s == 'true':
+            return True
+        if s == 'false':
+            return False
+        return None
+    return bool(v)
+
+
+def _is_na_meta(value: Any) -> bool:
+    """True when a metadata scalar is NA/empty: None, '' or 'NA' (any case), or float NaN.
+
+    Enforces Guardrail 1 (schema doc 11.2): a required field must be present AND non-NA.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode('utf-8', 'replace')
+    if isinstance(value, str):
+        s = value.strip().lower()
+        return s == '' or s == 'na'
+    try:
+        arr = np.asarray(value)
+    except (TypeError, ValueError):
+        return False
+    if arr.size == 0:
+        return True
+    if arr.dtype.kind == 'f':
+        return bool(np.all(np.isnan(arr)))
+    return False
+
+
 def audit_h5_schema(path: str) -> Dict[str, Any]:
     """
     Check a schema-v2 export against critical contract fields from
@@ -135,18 +181,19 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
             meta = f['metadata']
             stats['test_type'] = str(_meta_lookup(f, 'protocol_type') or '')
             stats['session_date'] = str(_meta_lookup(f, 'session_date') or '')
-            simulated = bool(_meta_lookup(f, 'session_simulated'))
+            simulated = _meta_bool(f, 'session_simulated')
             stats['session_simulated'] = simulated
 
-            # --- required metadata (ledger) ---
+            # --- required metadata (ledger): must be PRESENT and non-NA (Guardrail 1, schema 11.2) ---
             for key in REQUIRED_METADATA_KEYS:
                 val = _meta_lookup(f, key)
                 if val is None and key not in meta.attrs and key not in meta:
                     critical.append(f'Required metadata missing: {key}')
-                elif key == 'specimen_id' and _is_empty_meta(val) and not simulated:
-                    critical.append('Required metadata empty: specimen_id')
-                elif _is_empty_meta(val) and key not in ('specimen_id',):
-                    warnings.append(f'Required metadata empty: {key}')
+                elif _is_na_meta(val):
+                    # specimen_id may be NA only for a simulated run (no physical specimen).
+                    if key == 'specimen_id' and simulated is True:
+                        continue
+                    critical.append(f'Required metadata is NA/empty: {key}')
 
             for ds in REQUIRED_META_DATASETS:
                 if ds not in meta:
@@ -160,10 +207,6 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
                     'calibration_forcetorque_matrix absent -- file is NOT calibrated '
                     '(no real ATI matrix embedded; derived/forcetorque_calibrated will be absent)'
                 )
-
-            # calibration_link subgroup was removed in M1 (D3/D12); provenance is now a flat attr.
-            if 'calibration_inertia_file' not in meta.attrs and 'calibration_inertia_file' not in meta:
-                warnings.append('calibration_inertia_file absent from metadata (optional -- only expected when a cal file is set)')
 
             # --- filename convention ---
             basename = os.path.basename(path)
@@ -259,7 +302,7 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
                 info.append('measurement_specimen_body_width_millimeter absent (no GUI source yet; expected).')
 
             # --- run-specific flags ---
-            if bool(_meta_lookup(f, 'protocol_guard_triggered')):
+            if _meta_bool(f, 'protocol_guard_triggered') is True:
                 guard_deg = _meta_lookup(f, 'protocol_guard_angle_degree')
                 warnings.append(f'Isovelocity guard triggered at {guard_deg} deg')
 
@@ -319,7 +362,7 @@ def plot_torque_vs_time(
     with h5py.File(path, 'r') as f:
         data = _stitch_trials(f)
         tt = str(f.attrs.get('test_type', 'unknown'))
-        simulated = bool(_meta_lookup(f, 'session_simulated'))
+        simulated = _meta_bool(f, 'session_simulated') is True
         primary = str(_meta_lookup(f, 'daq_primary_bending_axis') or 'zTorque')
         if primary not in TORQUE_ROW_IDX:
             primary = 'zTorque'

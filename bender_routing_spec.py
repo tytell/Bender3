@@ -85,8 +85,10 @@ BENDER_ROUTING: Dict[str, Route] = {
     "fishlen_TL":            {"tier": "metadata", "key": "measurement_specimen_bodylength_millimeter",        "required": False, "source": "GUI"},
     "fishlen_SL":            {"tier": "metadata", "key": "measurement_specimen_standardlength_millimeter",    "required": False, "source": "GUI"},
     "fishmass":              {"tier": "metadata", "key": "measurement_specimen_body_mass_gram",               "required": False, "source": "GUI"},
-    "xsec_width":            {"tier": "metadata", "key": "measurement_xsec_width_millimeter",                 "required": True,  "source": "GUI"},
-    "xsec_height":           {"tier": "metadata", "key": "measurement_xsec_height_millimeter",                "required": False, "source": "GUI"},
+    "xsec_width":            {"tier": "metadata", "key": "measurement_specimen_local_body_width_millimeter",   "required": True,  "source": "GUI",
+                             "note": "local body width at the test-section site; renamed 2026-07-02 (retired measurement_xsec_width_millimeter). GUI field 'Local body width (mm)'."},
+    "xsec_height":           {"tier": "metadata", "key": "measurement_specimen_local_body_height_millimeter",  "required": False, "source": "GUI",
+                             "note": "local body height at the test-section site; renamed 2026-07-02 (retired measurement_xsec_height_millimeter). GUI field 'Local body height (mm)'."},
     "dclamp":                {"tier": "metadata", "key": "measurement_clamp_separation_millimeter",           "required": True,  "source": "GUI"},
     "dvert":                 {"tier": "metadata", "key": "measurement_clamp_offset_vertical_millimeter",      "required": False, "source": "GUI"},
     "dhoriz":                {"tier": "metadata", "key": "measurement_clamp_offset_horizontal_millimeter",    "required": False, "source": "GUI"},
@@ -496,8 +498,6 @@ EXCLUDED: Set[str] = {
 # MISSING_REQUIRED -- schema fields with no Bender source today
 # ---------------------------------------------------------------------------
 MISSING_REQUIRED: List[Dict[str, str]] = [
-    {"key": "measurement_specimen_body_width_millimeter", "tier": "metadata",
-     "source": "GUI", "note": "Test-section body width; no Bender attr. Needs a GUI widget (distinct from xsec_width)."},
     {"key": "note_posthoc", "tier": "metadata",
      "source": "analysis", "note": "Populated post-hoc in the pipeline; expected absent at acquisition unless post_trial_notes is routed here."},
     # The three flat profile keys are written by the direct block in bender_h5_export.py

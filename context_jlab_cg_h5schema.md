@@ -14,6 +14,7 @@
 
 | Version        | Date       | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| null-sentinel  | 2026-07-02 | Fixed-schema null-sentinel rule (see section 11): every canonical metadata scalar is ALWAYS emitted; absent values use a typed NA sentinel (float->NaN, string->"NA", int->float+NaN, bool->3-state string "true"/"false"/"NA", array->empty). Replaces omit-on-zero / skip-on-None. `required` fields must be present AND non-NA. Timeseries channels are exempt (absent = absent/empty dataset, never NaN-filled). Routing renames: `xsec_width` -> `measurement_specimen_local_body_width_millimeter`, `xsec_height` -> `measurement_specimen_local_body_height_millimeter` (retired `measurement_xsec_width_millimeter` / `measurement_xsec_height_millimeter`). |
 | v2.7 (M2c)     | 2026-07-02 | D10 implementation (M2c): exporter writes the `single_finite` per-cycle design grid `index_cycle_*` (index/frequency/motor_amplitude/active/duty/phase/operating_point + units) from the `organize_cycles` per-cycle arrays, plus scalars `protocol_cycle_count` and `protocol_activation_start_cycle` (0-based). `segmented_finite` writes none of these. Routing key `n_end_cycles` renamed `protocol_end_cycles_count` → `protocol_end_cycle_count` to match this section. `index_step_*` untouched (D4 intact). |
 | v2.7 (M2b)     | 2026-07-02 | D11 implementation (M2b): `forcetorque_raw` is NEVER written to `timeseries` (unconditional; simplified from the fallback-guard design). `calibration_forcetorque_matrix` is embedded ONLY when a REAL ATI matrix is loaded — the `np.eye(6)` identity fallback is REFUSED, so an absent matrix means "not calibrated" and `derived/forcetorque_calibrated` is likewise skipped. `derived/forcetorque_calibrated` re-anchored to `aidata` rows 0–5 via `daq_ai_channel_map`. Sono cal keys renamed to `calibration_sono_{left,right}_volt_millimeter_breakpoints`. Readers (`validate_plot_h5_batch.py`, `bender_h5_explore.py`) point at `derived/forcetorque_calibrated`. |
 | v2.7           | 2026-06-30 | Frustum model raw inputs captured as first-class scalars (PI decision 2026-06-30). `tip_scale` DROPPED.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -510,8 +511,8 @@ measurement_clamp_separation_millimeter                   (Current: dclamp)
 measurement_clamp_offset_vertical_millimeter              (Current: dvert)
 measurement_clamp_offset_horizontal_millimeter            (Current: dhoriz)
 measurement_target_muscle_depth_millimeter                (Current: target_muscle_depth_mm)
-measurement_xsec_width_millimeter                         (Current: xsec_width)
-measurement_xsec_height_millimeter                        (Current: xsec_height)
+measurement_specimen_local_body_width_millimeter          Local body width at the test-section site (mm). Distinct from whole-body summary morphometrics. (Current: xsec_width; renamed 2026-07-02, retired measurement_xsec_width_millimeter)
+measurement_specimen_local_body_height_millimeter         Local body height at the test-section site (mm). Distinct from whole-body summary morphometrics. (Current: xsec_height; renamed 2026-07-02, retired measurement_xsec_height_millimeter)
 ```
 
 > **Body length — LOCKED:** two keys, compound words run together per naming convention: `measurement_specimen_bodylength_millimeter` (TL) and `measurement_specimen_standardlength_millimeter` (SL).
@@ -782,4 +783,66 @@ PI decision. This mapping is immutable; changing a protocol's mode requires a sc
 
 
 > **Current implementation note.** Isometric and isovelocity currently run as a stitched continuous timeline (one NI task per trial, not per step). The `segmented_finite` entry above is the **target architecture** — this schema defines the goal, not the current code state. Do not align future code to `single_finite` for these protocols; align to `segmented_finite` when the acquisition engine is updated.
+
+---
+
+## 11. Fixed-schema null-sentinel rule (2026-07-02)
+
+The schema is **fixed**: every canonical metadata **scalar** is **always emitted**. There is no
+omit-on-zero and no skip-on-None. When a value is unrecorded/absent, the writer emits a **typed NA
+sentinel** instead of dropping the key. A reader can therefore assume the full canonical key set is
+present in every post-amendment file and never has to distinguish "key absent" from "value missing."
+
+### 11.1 Per-dtype sentinel table
+
+| dtype       | present value            | absent (NA) sentinel                    |
+| ----------- | ------------------------ | --------------------------------------- |
+| float       | the float                | `NaN`                                   |
+| int / count | stored as float          | float `NaN`                             |
+| string      | the string               | `"NA"`                                  |
+| bool        | `"true"` / `"false"`     | `"NA"` (3-state string)                 |
+| array       | the array                | empty array (shape `(0,)`)              |
+
+Booleans are stored as **3-state strings** (`"true"`, `"false"`, `"NA"`) — never native HDF5 bool —
+so absence is representable in the same field. Readers must parse the string, not coerce with
+`bool()` (the Python string `"false"` is truthy).
+
+Fields representing counts or indices are integer-valued floats; a present value will always be
+whole-numbered. Readers may cast to int after confirming non-NaN.
+
+The writer infers the sentinel dtype for an absent key from its **name suffix** (D0-B):
+numeric suffixes (`_millimeter`, `_second`, `_hertz`, `_degree`, `_volt`, `_count`, `_index`,
+`_squared`, `_celsius`, `_newton`, `_gram`, `_num_steps`) -> `NaN`; bool suffixes (`_enabled`,
+`_simulated`, `_triggered`, `_bilateral`, `_randomize`, `_from_geometry`) and any no-match ->
+`"NA"`. A *present* value always keeps its native type; suffix inference is used only to pick the
+sentinel for an absent field.
+
+### 11.2 Guardrail 1 — required fields reject NA
+
+A field marked `required: True` must be **present AND non-NA**. Validation treats a required field
+that is missing, `""`, `"NA"`, or `NaN` as a **CRITICAL** failure — not a warning. NA is legitimate
+only for optional / unrecorded fields. (The one narrow exception: `specimen_id` may be NA for a
+simulated run, where there is no physical specimen.)
+
+### 11.3 Guardrail 2 — canonical schema only; dropped keys stay dropped
+
+"Always present" means every field in the **canonical** schema is emitted. It must **not** resurrect
+deliberately-dropped legacy keys. The NA-fill sweep iterates the routing table only; it never
+invents keys. The following stay **dropped** and must never be re-added by the always-present rule:
+
+- `calibration_inertia_system_moi` (and `_used`, `_available` variants)
+- the `protocol_metadata` subgroup (flattened to `protocol_*` scalars)
+- `calibration_forcetorque_matrix_used` / `_available`
+- `measurement_xsec_width_millimeter` (retired 2026-07-02; replaced by `measurement_specimen_local_body_width_millimeter`)
+- `measurement_xsec_height_millimeter` (retired 2026-07-02; replaced by `measurement_specimen_local_body_height_millimeter`)
+- `measurement_specimen_body_width_millimeter` (retired -- superseded by `measurement_specimen_local_body_width_millimeter`)
+
+### 11.4 Boundary — this rule covers metadata SCALARS ONLY
+
+The null-sentinel rule applies to **metadata scalars** (attributes and scalar datasets under
+`metadata/`). It does **not** apply to **timeseries channels**. A timeseries channel that was not
+recorded is an **absent or empty dataset** — never a NaN-filled array of run length. A NaN-filled
+timeseries would falsely imply the channel was acquired; an absent/empty dataset correctly signals
+it was not. Matrix datasets (e.g. `calibration_forcetorque_matrix`) likewise remain present-only
+when real: an absent calibration matrix means uncalibrated, not a NaN matrix.
 

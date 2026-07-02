@@ -106,6 +106,11 @@ def _store_metadata_canonical(group: Any, key: str, value: Any) -> bool:
     if isinstance(value, (str, bytes)):
         group.attrs[k] = value
         return True
+    if isinstance(value, (bool, np.bool_)):
+        # Null-sentinel rule (2026-07-02): bool -> 3-state string ('true'/'false'; 'NA' when absent).
+        # Must precede the numeric branch: Python bool is a subclass of int.
+        group.attrs[k] = 'true' if bool(value) else 'false'
+        return True
     if isinstance(value, (bool, int, float, complex)) or isinstance(value, np.generic):
         group.attrs[k] = value
         return True
@@ -129,6 +134,33 @@ def _store_metadata_canonical(group: Any, key: str, value: Any) -> bool:
         return True
     group.attrs[k] = str(value)
     return True
+
+
+# Null-sentinel dtype inference by key suffix (D0-B, 2026-07-02). Used ONLY to pick the sentinel
+# for an ABSENT canonical metadata scalar; a PRESENT value keeps its native type (written by
+# _store_metadata_canonical, including bool -> 'true'/'false'). See schema doc section 11.
+_NA_BOOL_SUFFIXES = (
+    '_enabled', '_simulated', '_triggered', '_bilateral', '_randomize', '_from_geometry',
+)
+_NA_NUMERIC_SUFFIXES = (
+    '_millimeter', '_second', '_hertz', '_degree', '_volt', '_count',
+    '_index', '_squared', '_celsius', '_newton', '_gram', '_num_steps',
+)
+
+
+def _emit_na_sentinel(group, key: str) -> None:
+    """Write the typed NA sentinel for an ABSENT canonical metadata scalar (schema doc section 11).
+
+    numeric suffix -> float NaN; bool suffix or no-match -> 'NA' string. An absent bool and the
+    string fallback are both 'NA', so the three buckets collapse to two written values.
+    """
+    k = str(key)
+    if any(k.endswith(s) for s in _NA_NUMERIC_SUFFIXES):
+        group.attrs[k] = float('nan')
+    elif any(k.endswith(s) for s in _NA_BOOL_SUFFIXES):
+        group.attrs[k] = 'NA'
+    else:
+        group.attrs[k] = 'NA'
 
 
 def _read_existing_post_trial_notes(h5_path: str) -> str:
@@ -741,66 +773,60 @@ def export_primary_h5(
         _step_manifest_json = json.dumps(step_manifest_rows, default=str)
         g_meta.attrs.create('step_manifest', _step_manifest_json, dtype=h5py.special_dtype(vlen=str))
 
+        # written_keys tracks canonical keys already emitted so ledger Pass A (below) and the
+        # NA-fill sweep do not re-write (or overwrite with NA) a key a direct block handled.
+        # Defined HERE (above the direct-write blocks) so frustum/aor writes can CLAIM their keys.
+        written_keys: set = set()
+
         # inertial_calibration_profile -> three flat calibration_inertia_* attrs (D12, Point 2).
-        # I_est is a MOI in N*m/(deg/s^2); multiply by (180/pi)*1e9 to convert to g*mm^2
-        # so it sits in the same units as the geometry-derived specimen MOI.
-        # bias_est is already N*m (no conversion). axis_sensor is categorical.
+        # I_est is a MOI in N*m/(deg/s^2); multiply by (180/pi)*1e9 to convert to g*mm^2 so it sits
+        # in the same units as the geometry-derived specimen MOI. bias_est is already N*m (no
+        # conversion). axis_sensor is categorical. Null-sentinel rule (2026-07-02): each key is
+        # ALWAYS written -- NaN (numeric) / 'NA' (categorical) when no profile is loaded.
         _prof = getattr(bender, 'inertial_calibration_profile', None)
-        if isinstance(_prof, dict):
-            _i_est = _prof.get('I_est', None)
-            if _i_est is not None:
-                g_meta.attrs['calibration_inertia_apparatus_moi_gram_millimeter_squared'] = (
-                    float(_i_est) * (180.0 / np.pi) * 1e9
-                )
-            _bias = _prof.get('bias_est', None)
-            if _bias is not None:
-                g_meta.attrs['calibration_inertia_bias_newton_meter'] = float(_bias)
-            _axis = _prof.get('axis_sensor', None)
-            if _axis is not None:
-                g_meta.attrs['calibration_inertia_axis_sensor'] = str(_axis)
+        _prof = _prof if isinstance(_prof, dict) else {}
+        _i_est = _prof.get('I_est', None)
+        g_meta.attrs['calibration_inertia_apparatus_moi_gram_millimeter_squared'] = (
+            float(_i_est) * (180.0 / np.pi) * 1e9 if _i_est is not None else float('nan')
+        )
+        _bias = _prof.get('bias_est', None)
+        g_meta.attrs['calibration_inertia_bias_newton_meter'] = (
+            float(_bias) if _bias is not None else float('nan')
+        )
+        _axis = _prof.get('axis_sensor', None)
+        g_meta.attrs['calibration_inertia_axis_sensor'] = str(_axis) if _axis is not None else 'NA'
 
         # frustum_inputs dict -> four flat measurement_specimen_inertia_frustum_* attrs (v2.7 amended).
         # set_frustum_inertial_model stores values in the dict and does NOT set the four attrs
         # individually, so the ledger pass misses them. This block reads from the dict directly.
-        # The ledger still fires for any attr set independently via update_metadata.
+        # Null-sentinel rule (2026-07-02): each key is ALWAYS written (NaN when the frustum path is
+        # unused) and CLAIMED in written_keys so the ledger and NA-fill sweep skip it.
         _finp = getattr(bender, 'frustum_inputs', None)
-        if isinstance(_finp, dict):
-            for _fsrc, _fdst in (
-                ('height_mm',         'measurement_specimen_inertia_frustum_height_millimeter'),
-                ('width_mm',          'measurement_specimen_inertia_frustum_width_millimeter'),
-                ('length_mm',         'measurement_specimen_inertia_frustum_length_millimeter'),
-                ('density_g_per_mm3', 'measurement_specimen_inertia_frustum_density_gram_per_cubic_millimeter'),
-            ):
-                _fv = _finp.get(_fsrc, None)
-                if _fv is not None:
-                    g_meta.attrs[_fdst] = float(_fv)
-
-        # written_keys tracks canonical keys already emitted so the ledger Pass A (below) does not
-        # re-write them. Defined HERE (not at the ledger) so the guarded direct-write of
-        # calibration_inertia_apparatus_aor_to_clamp_millimeter can CLAIM the key -- otherwise the
-        # ledger default-writes 0.0 from specimen_profile_clamp_offset_mm (default 0.0) and defeats
-        # the zero-omission. Many-to-one routes still write the FIRST present source per key.
-        written_keys: set = set()
+        _finp = _finp if isinstance(_finp, dict) else {}
+        for _fsrc, _fdst in (
+            ('height_mm',         'measurement_specimen_inertia_frustum_height_millimeter'),
+            ('width_mm',          'measurement_specimen_inertia_frustum_width_millimeter'),
+            ('length_mm',         'measurement_specimen_inertia_frustum_length_millimeter'),
+            ('density_g_per_mm3', 'measurement_specimen_inertia_frustum_density_gram_per_cubic_millimeter'),
+        ):
+            _fv = _finp.get(_fsrc, None)
+            g_meta.attrs[_fdst] = float(_fv) if _fv is not None else float('nan')
+            written_keys.add(_fdst)
 
         # calibration_inertia_apparatus_aor_to_clamp_millimeter -- many-to-one from two sources.
-        # Primary: specimen_profile_clamp_offset_mm (set by live GUI path).
-        # Fallback: frustum_inputs['clamp_offset_mm'] (set by frustum path).
-        # OMIT entirely if neither source resolves to a positive value; never default-write 0.
-        _aor_val = None
+        # Primary: specimen_profile_clamp_offset_mm (live GUI path). Fallback: frustum clamp_offset_mm.
+        # Null-sentinel rule (2026-07-02): ALWAYS written; float NaN when no POSITIVE source resolves
+        # (replaces the earlier omit-on-zero branch -- one convention only). The key is CLAIMED so the
+        # ledger Pass A never default-writes 0.0 from specimen_profile_clamp_offset_mm (default 0.0).
+        _aor_val = float('nan')
         _aor_primary = getattr(bender, 'specimen_profile_clamp_offset_mm', None)
         if _aor_primary is not None and float(_aor_primary) > 0:
             _aor_val = float(_aor_primary)
-        if _aor_val is None and isinstance(_finp, dict):
+        elif isinstance(_finp, dict):
             _aor_fb = _finp.get('clamp_offset_mm', None)
             if _aor_fb is not None and float(_aor_fb) > 0:
                 _aor_val = float(_aor_fb)
-        if _aor_val is not None:
-            g_meta.attrs['calibration_inertia_apparatus_aor_to_clamp_millimeter'] = _aor_val
-        else:
-            print('[info] export_primary_h5: calibration_inertia_apparatus_aor_to_clamp_millimeter '
-                  'omitted (no positive clamp-offset source); key not written (v2.7).')
-        # CLAIM the key UNCONDITIONALLY -- even when omitted above -- so the ledger Pass A never
-        # default-writes 0.0 from specimen_profile_clamp_offset_mm / frustum_clamp_offset_mm.
+        g_meta.attrs['calibration_inertia_apparatus_aor_to_clamp_millimeter'] = _aor_val
         written_keys.add('calibration_inertia_apparatus_aor_to_clamp_millimeter')
 
         # protocol_metadata subgroup REMOVED (PI decision, post-Phase-0 audit). Its attr-mirror keys
@@ -858,10 +884,24 @@ def export_primary_h5(
             elif _store_metadata_canonical(g_meta, key, value):
                 written_keys.add(key)
 
-        # note_bench fallback: schema marks this as a required field. The ledger writes it
-        # when stim_clamp_notices is non-empty; emit an empty string when absent or empty.
-        if 'note_bench' not in written_keys:
-            g_meta.attrs['note_bench'] = ''
+        # Null-sentinel rule (2026-07-02): every canonical metadata SCALAR is ALWAYS present.
+        # Any routed metadata key not written by Pass A (source None, or ALL sources of a
+        # many-to-one key None) gets its typed NA sentinel here. This supersedes the earlier
+        # note_bench '' fallback: an absent note_bench (stim_clamp_notices None) now resolves to
+        # the string sentinel 'NA' like every other absent string, and a REAL note claimed by
+        # Pass A is left untouched (note_bench is required:False, so 'NA' is legitimate).
+        # Skipped: special_metadata ('calibration' matrix is real-gated, schema_version at root,
+        # inertial_calibration_file written by its direct block). Array/dataset-valued routes are
+        # EXEMPT too (schema doc 11.4): an absent array is an absent/empty dataset, never scalar NA.
+        _na_array_suffixes = ('_matrix', '_breakpoints', 'daq_instrumentation')
+        for _na_name, _na_route in BENDER_ROUTING.items():
+            if _na_route.get('tier') != 'metadata' or _na_name in special_metadata:
+                continue
+            _na_key = _na_route['key']
+            if _na_key in written_keys or _na_key.endswith(_na_array_suffixes):
+                continue
+            _emit_na_sentinel(g_meta, _na_key)
+            written_keys.add(_na_key)
 
         # Pass B -- unmapped detection over the instance __dict__: any public attribute that is
         # neither routed nor excluded is preserved (lossless) under metadata/99_Unrouted (D7) with
