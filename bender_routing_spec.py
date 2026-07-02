@@ -144,13 +144,16 @@ BENDER_ROUTING: Dict[str, Route] = {
                            "note": "ASSUMED session_ placement (MC #4 default)"},
 
     # === metadata / calibration_ ===========================================
-    "calibration":   {"tier": "metadata", "key": "calibration_forcetorque_matrix", "required": True,  "source": "config",
-                      "note": "ATI 6x6, raw volts -> newton / newton_meter"},
+    "calibration":   {"tier": "metadata", "key": "calibration_forcetorque_matrix", "required": False,  "source": "config",
+                      "note": "ATI 6x6, raw volts -> newton / newton_meter. Written ONLY by the "
+                              "real-matrix-gated block in export_primary_h5 (bypassed here via "
+                              "special_metadata): an np.eye(6) identity fallback is REFUSED so an "
+                              "absent matrix unambiguously means 'not calibrated' (D11, M2b)."},
     "forcetorque_calibration_file": {"tier": "metadata", "key": "calibration_forcetorque_file", "required": False, "source": "config",
                                      "note": "referenced .cal filename; pairs with calibration_forcetorque_matrix"},
-    "sono_cal_left":  {"tier": "metadata", "key": "calibration_sono_left_millimeter_per_volt",  "required": False, "source": "config",
+    "sono_cal_left":  {"tier": "metadata", "key": "calibration_sono_left_volt_millimeter_breakpoints",  "required": False, "source": "config",
                        "note": "V->mm breakpoint table [Low_V,High_V,Low_mm,High_mm] (or longer multi-point)"},
-    "sono_cal_right": {"tier": "metadata", "key": "calibration_sono_right_millimeter_per_volt", "required": False, "source": "config",
+    "sono_cal_right": {"tier": "metadata", "key": "calibration_sono_right_volt_millimeter_breakpoints", "required": False, "source": "config",
                        "note": "V->mm breakpoint table [Low_V,High_V,Low_mm,High_mm] (or longer multi-point)"},
 
     # === metadata / daq_ (acquisition + rig wiring/hardware) ================

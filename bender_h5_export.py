@@ -310,13 +310,30 @@ def export_primary_h5(
         if cal_file:
             g_meta.attrs['calibration_inertia_file'] = cal_file
 
+        # calibration_forcetorque_matrix (D11, M2b): embed the ATI 6x6 VALUES ONLY when a REAL
+        # calibration matrix is loaded. loadCalibration() in bender_functions falls back to
+        # np.eye(6) when the .cal file is missing (sim / uncalibrated bench). An identity matrix
+        # is NOT a calibration; embedding it would masquerade uncalibrated data as calibrated.
+        # Refuse it: leave calibration_forcetorque_matrix ABSENT so an absent matrix unambiguously
+        # means "not calibrated" (and derived/forcetorque_calibrated is likewise skipped below).
+        # 'calibration' is bypassed in the ledger (special_metadata) so it is written only here.
+        _cal_mat = getattr(bender, 'calibration', None)
+        _cal_is_real = False
+        if _cal_mat is not None:
+            _cal_arr = np.asarray(_cal_mat, dtype=float)
+            if _cal_arr.shape == (6, 6) and not np.array_equal(_cal_arr, np.eye(6)):
+                _cal_is_real = True
+                g_meta.create_dataset('calibration_forcetorque_matrix', data=_cal_arr)
+
         g_ts = f.create_group('timeseries')
         manifest_rows = []
 
         # Canonical per-trial timeseries dataset names (PI decision: full spelled-out rename).
-        # forcetorque is kept as the immutable (6, N) ``forcetorque_raw`` and is NOT split into
-        # per-channel datasets -- channel order is x_force, y_force, z_force, x_torque, y_torque,
-        # z_torque (newton / newton_meter); R decodes/names channels downstream.
+        # timeseries holds ONLY the immutable raw ADC buffer ``aidata`` (D11, M2b). The F/T rows
+        # live in aidata rows 0-5 (identity is declared in metadata/daq_ai_channel_map); the
+        # calibrated F/T copy is NOT written to timeseries -- it is derived in R (authoritative
+        # hub ``derived/``) and, for live RA inspection only, into this file's ``derived/`` group
+        # when a REAL calibration matrix is present (see the derived/ block below).
         ts_rename = {
             't': 'time_second',
             'tnorm': 'time_normalized',
@@ -326,7 +343,6 @@ def export_primary_h5(
             'S1stimcmd': 'stim_channel1_command_volt',
             'S2stimcmd': 'stim_channel2_command_volt',
             'aidata': 'aidata',
-            'forcetorque_raw': 'forcetorque_raw',
             'stim_type': 'stim_type',
             'stim_state': 'stim_state',
             'stim_side': 'stim_side',
@@ -341,10 +357,12 @@ def export_primary_h5(
         ts_converted = set(ts_index_int) | set(ts_index_str) | {
             'cycle_index', 'cycle_index_by_sample', 'trial_index',
         }
-        # Dropped from the raw file: ``forcetorque`` (identical copy of forcetorque_raw, see
-        # bender_functions L1080) and ``primary_torque_raw`` (derived; recomputed in R per schema
-        # doc 6 -- belongs in the research-hub ``derived`` group, not the raw file).
-        ts_drop = {'forcetorque', 'primary_torque_raw'}
+        # Dropped from the raw file's timeseries (D11, M2b): ``forcetorque`` and ``forcetorque_raw``
+        # (both are CALIBRATED F/T copies -- forcetorque_raw is a copy=True of the decoded
+        # self.forcetorque, bender_functions L1114 -- so neither belongs in the raw-voltage archive;
+        # aidata rows 0-5 are the sole archived F/T source) and ``primary_torque_raw`` (derived;
+        # recomputed in R -- belongs in the research-hub ``derived`` group, not the raw file).
+        ts_drop = {'forcetorque', 'forcetorque_raw', 'primary_torque_raw'}
 
         # Branch on daq_collection_type (Steps 2/3).
         # 'continuous' with exactly 1 record (single_finite, dynamic/sweep): write channel
@@ -707,7 +725,9 @@ def export_primary_h5(
         # @property-backed routed attributes (e.g. daq_ai_sample_rate_hz) are captured; instance
         # __dict__ never contains properties. Many-to-one routes write the FIRST present source
         # (ledger insertion order) to avoid dataset collisions.
-        special_metadata: set = set()  # no special-cased ledger bypasses remain
+        # 'calibration' is written ONLY by the real-matrix-gated block above (D11, M2b) -- bypass
+        # the ledger so it is never emitted as the np.eye(6) identity fallback.
+        special_metadata: set = {'calibration'}
         written_keys: set = set()
         for name, route in BENDER_ROUTING.items():
             if route.get('tier') != 'metadata' or name in special_metadata:
@@ -766,24 +786,37 @@ def export_primary_h5(
         # Unit discipline: I_est is N*m/(deg/s^2); specimen MOI is g*mm^2 and must be
         # converted to N*m/(deg/s^2) before adding. Do NOT reuse get_corrected_torque
         # (dead code, unit-inconsistent: multiplies g*mm^2 by deg/s^2).
-        _has_cal_matrix = getattr(bender, 'calibration', None) is not None
+        # Gated on _cal_is_real (D11, M2b): with no REAL matrix embedded there is no calibrated
+        # output to derive -- an identity fallback would just echo raw voltages, so skip entirely.
         _ft_cal = None  # shared between the two derived/ blocks below
-        if _has_cal_matrix:
-            # Block A: forcetorque_calibrated -- independent of the inertia correction.
+        if _cal_is_real:
+            # Block A: forcetorque_calibrated -- re-anchored to aidata rows 0-5 via the channel
+            # map (D11, M2b). Locate the 6 F/T rows by identity in input_channel_names (the same
+            # source zipped into metadata/daq_ai_channel_map) rather than reusing the removed
+            # in-memory forcetorque_raw, so derived is computed from the immutable aidata archive
+            # x the embedded matrix -- exactly what R re-derives downstream.
             try:
                 _combined = _concat_trial_records(trial_records)
-                _ft_raw = _combined.get('forcetorque_raw', None)
-                if _ft_raw is not None and np.asarray(_ft_raw).size > 0:
-                    _ft_raw = np.asarray(_ft_raw, dtype=float)
-                    if _ft_raw.ndim == 2 and _ft_raw.shape[0] == 6:
-                        g_der = f.create_group('derived')
-                        g_der.attrs['note'] = (
-                            'RA inspection only -- not ground truth. '
-                            'R re-derives from raw aidata + embedded calibration VALUES.'
-                        )
-                        g_der.create_dataset('forcetorque_calibrated', data=_ft_raw)
-                        _ft_cal = _ft_raw   # signal Block B that the group and data are ready
+                _ai = _combined.get('aidata', None)
+                _ft_names = ['xForce', 'yForce', 'zForce', 'xTorque', 'yTorque', 'zTorque']
+                _ch_names = list(getattr(bender, 'input_channel_names', []) or [])
+                _ft_rows = [_ch_names.index(_nm) for _nm in _ft_names if _nm in _ch_names]
+                if (
+                    _ai is not None and np.asarray(_ai).size > 0
+                    and len(_ft_rows) == 6 and np.asarray(_ai).ndim == 2
+                ):
+                    _ai = np.asarray(_ai, dtype=float)
+                    # apply_calibration_forcetorque orientation: (raw6[6,N].T @ cal[6,6]).T -> [6,N].
+                    _ft_cal = np.dot(_ai[_ft_rows, :].T, _cal_arr).T
+                    g_der = f.create_group('derived')
+                    g_der.attrs['note'] = (
+                        'RA inspection only -- not ground truth. '
+                        'R re-derives from raw aidata rows 0-5 (daq_ai_channel_map) + '
+                        'embedded calibration_forcetorque_matrix VALUES.'
+                    )
+                    g_der.create_dataset('forcetorque_calibrated', data=_ft_cal)
             except Exception as _der_exc:
+                _ft_cal = None
                 logging.warning(
                     'export_primary_h5: derived/forcetorque_calibrated skipped: %s', _der_exc
                 )
@@ -861,6 +894,8 @@ def _concat_trial_records(records):
     keys_1d = ['angle_cmd', 'anglevel_cmd', 'angle_measured', 'S1stimcmd', 'S2stimcmd']
     parts_1d = {k: [] for k in keys_1d}
     ft_raw_parts = []
+    ai_parts = []
+    ai_rows = None  # channel count of the first record with a 2D aidata buffer
     t_offset = 0.0
     for r in records:
         tr = np.asarray(r.get('t', np.array([])), dtype=float).reshape(-1)
@@ -876,12 +911,27 @@ def _concat_trial_records(records):
         raw = np.asarray(raw, dtype=float) if raw is not None else np.array([])
         ft_raw_parts.append(raw if (raw.ndim == 2 and raw.shape[1] == n and raw.shape[0] >= 6)
                             else np.full((6, n), np.nan, dtype=float))
+        # aidata: immutable raw ADC buffer [n_channels, n]; concatenated along the sample axis so
+        # the derived/ block can re-anchor F/T to aidata rows via daq_ai_channel_map (D11, M2b).
+        ai = np.asarray(r.get('aidata', np.array([])), dtype=float)
+        if ai.ndim == 2 and ai.shape[1] == n:
+            if ai_rows is None:
+                ai_rows = ai.shape[0]
+            ai_parts.append(ai if ai.shape[0] == ai_rows else None)
+        else:
+            ai_parts.append(None)
         dt = (tr[-1] - tr[0]) / max(1, n - 1)
         t_offset = float(tr0[-1] + dt)
     combined: dict = {'t': np.concatenate(t_parts) if t_parts else np.array([])}
     for k in keys_1d:
         combined[k] = np.concatenate(parts_1d[k]) if parts_1d[k] else np.array([])
     combined['forcetorque_raw'] = np.concatenate(ft_raw_parts, axis=1) if ft_raw_parts else np.array([])
+    # Only expose a concatenated aidata when every recorded segment supplied a consistent buffer;
+    # a missing/ragged segment makes a whole-timeline decode meaningless, so fall back to empty.
+    if ai_rows is not None and ai_parts and all(p is not None for p in ai_parts):
+        combined['aidata'] = np.concatenate(ai_parts, axis=1)
+    else:
+        combined['aidata'] = np.array([])
     return combined
 
 

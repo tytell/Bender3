@@ -52,13 +52,22 @@ def _dynamic():
     return b, 'dynamic'
 
 
-def _run(maker, tmp_path):
+def _run(maker, tmp_path, *, calibration=None):
     b, tt = maker()
     out = str(tmp_path / f'{tt}.h5')
     b.outputfile = out
     b.run_experiment(test_type=tt)
+    # Optionally pin the F/T calibration matrix so the identity-refusal branch (M2b) is
+    # deterministic regardless of whether the config's .cal file resolved on this machine.
+    if calibration is not None:
+        b.calibration = np.asarray(calibration, dtype=float)
     res = export_primary_h5(b, outputfile=out)
     return res['outputfile']
+
+
+# A non-identity 6x6 stands in for a REAL ATI calibration matrix (M2b embeds it; identity is
+# refused). Diagonal keeps the calibrated F/T finite and easy to reason about.
+_REAL_CAL = np.diag([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).astype(float)
 
 
 def test_no_unrouted_and_no_legacy_groups(tmp_path):
@@ -105,16 +114,49 @@ def test_dynamic_has_cycle_index_but_no_step_index(tmp_path):
         assert 'step_index' not in ts, 'dynamic has no discrete shuffled steps'
 
 
-def test_forcetorque_raw_kept_not_split(tmp_path):
+def test_forcetorque_raw_absent_and_aidata_present(tmp_path):
+    """M2b (D11): timeseries holds ONLY raw aidata; no calibrated forcetorque copy is written."""
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
         # Isometric is segmented_finite: per-step subgroups are step_NNN (one-based).
         tg = f['timeseries']['step_001']
-        assert 'forcetorque_raw' in tg
-        assert tg['forcetorque_raw'].shape[0] == 6
-        assert 'forcetorque' not in tg, 'duplicate forcetorque dropped'
+        assert 'forcetorque_raw' not in tg, 'forcetorque_raw must not be written to timeseries (D11, M2b)'
+        assert 'forcetorque' not in tg, 'calibrated forcetorque must not be in timeseries'
+        assert 'aidata' in tg, 'raw aidata must remain the timeseries F/T archive (rows 0-5)'
+        assert np.asarray(tg['aidata']).ndim == 2, 'aidata must be the 2D [n_channels, N] buffer'
         for split in ('force_x_newton', 'torque_z_newton_meter'):
             assert split not in tg, 'F/T must not be split into per-channel datasets'
+
+
+def test_calibration_matrix_and_derived_present_when_real(tmp_path):
+    """M2b: a REAL matrix is embedded in metadata and derived/forcetorque_calibrated is written.
+
+    Covers both sampling modes: segmented_finite (isometric) and single_finite (dynamic).
+    """
+    for maker in (_isometric, _dynamic):
+        path = _run(maker, tmp_path, calibration=_REAL_CAL)
+        with h5py.File(path, 'r') as f:
+            meta = f['metadata']
+            assert 'calibration_forcetorque_matrix' in meta, 'real matrix must be embedded in metadata'
+            assert tuple(np.asarray(meta['calibration_forcetorque_matrix']).shape) == (6, 6)
+            assert 'derived' in f and 'forcetorque_calibrated' in f['derived'], (
+                'derived/forcetorque_calibrated must be present when the matrix is real'
+            )
+            ftc = np.asarray(f['derived']['forcetorque_calibrated'])
+            assert ftc.ndim == 2 and ftc.shape[0] == 6, 'calibrated F/T must be [6, N]'
+
+
+def test_calibration_matrix_and_derived_absent_on_identity(tmp_path):
+    """M2b: an np.eye(6) identity fallback is REFUSED -- no matrix, no calibrated derived output."""
+    path = _run(_isometric, tmp_path, calibration=np.eye(6))
+    with h5py.File(path, 'r') as f:
+        assert 'calibration_forcetorque_matrix' not in f['metadata'], (
+            'identity matrix must NOT be embedded (absent = "not calibrated", M2b)'
+        )
+        if 'derived' in f:
+            assert 'forcetorque_calibrated' not in f['derived'], (
+                'no calibrated output may be written without a real matrix'
+            )
 
 
 def test_block_sequence_is_json_and_step_order_dropped(tmp_path):

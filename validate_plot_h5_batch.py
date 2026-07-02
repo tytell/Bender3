@@ -33,9 +33,7 @@ REQUIRED_METADATA_KEYS = sorted(
 REQUIRED_ROOT_ATTRS = ('schema_version',)
 
 REQUIRED_META_DATASETS = (
-    'calibration_forcetorque_matrix',
     'daq_instrumentation',
-    'trial_index',
 )
 
 REQUIRED_TRIAL_DATASETS = (
@@ -44,7 +42,6 @@ REQUIRED_TRIAL_DATASETS = (
     'angle_commanded_degree',
     'angle_measured_degree',
     'angular_velocity_commanded_degree_per_second',
-    'forcetorque_raw',
     'aidata',
     'stim_channel1_command_volt',
     'stim_channel2_command_volt',
@@ -68,6 +65,20 @@ TORQUE_ROW_IDX = {'xTorque': 3, 'yTorque': 4, 'zTorque': 5}
 FILENAME_PATTERN = re.compile(
     r'^(sim_)?(\d{4}-\d{2}-\d{2})_([A-Za-z0-9]+)_bender_(\d+)_([a-z_]+)\.h5$'
 )
+
+
+def _read_derived_ft(f: h5py.File) -> Optional[np.ndarray]:
+    """Return the exporter's inspection-only calibrated F/T ``[6, N]`` from ``derived/``, or None.
+
+    D11 / M2b: ``timeseries`` holds only the raw ``aidata`` archive; the calibrated F/T copy lives
+    in ``derived/forcetorque_calibrated`` (whole-timeline concatenation, written only when a REAL
+    calibration matrix was embedded). Readers point here instead of re-decoding aidata x matrix.
+    """
+    g = f.get('derived')
+    if g is None or 'forcetorque_calibrated' not in g:
+        return None
+    ft = np.asarray(g['forcetorque_calibrated'][()], dtype=float)
+    return ft if (ft.ndim == 2 and ft.shape[0] == 6) else None
 
 
 def _meta_lookup(f: h5py.File, key: str) -> Any:
@@ -141,12 +152,18 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
                 if ds not in meta:
                     critical.append(f'Required metadata dataset/group missing: {ds}')
 
+            # calibration_forcetorque_matrix (D11, M2b): embedded ONLY when a REAL ATI matrix was
+            # loaded. Absent = "not calibrated" (identity fallback refused) -- a WARN, not critical,
+            # so sim / uncalibrated-bench files audit cleanly while flagging the missing calibration.
+            if 'calibration_forcetorque_matrix' not in meta:
+                warnings.append(
+                    'calibration_forcetorque_matrix absent -- file is NOT calibrated '
+                    '(no real ATI matrix embedded; derived/forcetorque_calibrated will be absent)'
+                )
+
             # calibration_link subgroup was removed in M1 (D3/D12); provenance is now a flat attr.
             if 'calibration_inertia_file' not in meta.attrs and 'calibration_inertia_file' not in meta:
                 warnings.append('calibration_inertia_file absent from metadata (optional -- only expected when a cal file is set)')
-
-            if 'trial_index' in meta and 'trial_names' not in meta['trial_index']:
-                critical.append('trial_index missing trial_names dataset')
 
             # --- filename convention ---
             basename = os.path.basename(path)
@@ -207,19 +224,30 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
                         if ds not in tg:
                             warnings.append(f'{tn}: step protocol missing {ds}')
 
-                if 'forcetorque_raw' in tg:
-                    ft = np.asarray(tg['forcetorque_raw'][()])
-                    if ft.shape != (6, n):
-                        critical.append(f'{tn}: forcetorque_raw shape {ft.shape} != (6, {n})')
-                    elif not np.any(np.isfinite(ft[5])):
-                        critical.append(f'{tn}: zTorque row is all non-finite')
-
                 if 'aidata' in tg:
                     ad = np.asarray(tg['aidata'][()])
                     ch = _read_input_channel_names(f)
                     n_ch = len(ch) if ch else ad.shape[0]
                     if ad.shape[0] != n_ch or ad.shape[1] != n:
                         critical.append(f'{tn}: aidata shape {ad.shape} != ({n_ch}, {n})')
+
+            # --- calibrated F/T lives in derived/ (D11, M2b), not timeseries ---
+            # Whole-timeline [6, N_total]; validate shape + primary-torque finiteness at file level.
+            _ft_der = _read_derived_ft(f)
+            if _ft_der is not None:
+                _n_total = sum(_trial_time(f['timeseries'][tn]).size for tn in trials)
+                if _n_total and _ft_der.shape[1] != _n_total:
+                    warnings.append(
+                        f'derived/forcetorque_calibrated width {_ft_der.shape[1]} != '
+                        f'total step samples {_n_total}'
+                    )
+                if not np.any(np.isfinite(_ft_der[5])):
+                    critical.append('derived/forcetorque_calibrated zTorque row is all non-finite')
+            elif 'calibration_forcetorque_matrix' in meta:
+                warnings.append(
+                    'calibration_forcetorque_matrix present but derived/forcetorque_calibrated '
+                    'absent (expected the inspection-only calibrated F/T)'
+                )
 
             # --- documented schema gaps (informational, not export bugs) ---
             for gap in MISSING_REQUIRED:
@@ -299,9 +327,12 @@ def plot_torque_vs_time(
     t = data['t']
     if t.size == 0:
         raise ValueError(f'{path}: no time samples to plot')
-    ft = data['forcetorque_raw']
+    ft = data['forcetorque_calibrated']
     if ft.size == 0 or ft.shape[0] < 6:
-        raise ValueError(f'{path}: missing forcetorque_raw')
+        raise ValueError(
+            f'{path}: no calibrated F/T (derived/forcetorque_calibrated absent -- '
+            'file has raw aidata only; no real calibration matrix embedded)'
+        )
 
     if out_path is None:
         out_path = os.path.splitext(path)[0] + '_torque_vs_time.png'
@@ -314,7 +345,7 @@ def plot_torque_vs_time(
     fig, axes = plt.subplots(4, 1, figsize=(12, 9), sharex=True, layout='constrained')
     for ax, (name, y, color) in zip(axes[:3], series):
         lw = 1.2 if name == primary else 0.9
-        ax.plot(t, y, color=color, lw=lw, label=f'{name} raw')
+        ax.plot(t, y, color=color, lw=lw, label=f'{name} calibrated')
         ax.set_ylabel(f'{name} (N·m)')
         ax.grid(True, alpha=0.3)
         ax.legend(loc='upper right', fontsize=8)
@@ -343,9 +374,13 @@ def _pick_dataset(group: h5py.Group, *names: str) -> Optional[str]:
 def _load_sono_cal(f: h5py.File, sono_name: str) -> np.ndarray:
     side = 'right' if 'right' in sono_name.lower() else 'left'
     meta = f['metadata']
-    canon = f'calibration_sono_{side}_millimeter_per_volt'
+    canon = f'calibration_sono_{side}_volt_millimeter_breakpoints'
     if canon in meta:
         return np.asarray(meta[canon][()], dtype=float)
+    # Legacy fallbacks: the pre-M2b suffixed key, then the raw bender_settings dump.
+    legacy_canon = f'calibration_sono_{side}_millimeter_per_volt'
+    if legacy_canon in meta:
+        return np.asarray(meta[legacy_canon][()], dtype=float)
     if 'bender_settings' in meta:
         legacy = f'sono_cal_{side}'
         if legacy in meta['bender_settings']:
@@ -466,8 +501,9 @@ def validate_h5(path: str) -> Dict:
                     continue
                 trial_durs.append(float(t[-1] - t[0]))
 
+                # aidata is the sole raw F/T archive in timeseries (D11, M2b); calibrated F/T is
+                # validated at file level from derived/ below, not per step.
                 for ds, expected_ndim in (
-                    ('forcetorque_raw', 2),
                     ('aidata', 2),
                 ):
                     if ds not in tg:
@@ -487,15 +523,16 @@ def validate_h5(path: str) -> Dict:
                 else:
                     warnings.append(f'{tn}: no measured angle dataset')
 
-                if 'forcetorque_raw' in tg:
-                    ft = np.asarray(tg['forcetorque_raw'][()], dtype=float)
-                    if ft.ndim == 2 and ft.shape[0] >= 6:
-                        z_finite.append(float(np.mean(np.isfinite(ft[axis_idx]))))
-
                 if sono_idx is not None and v_lo is not None and 'aidata' in tg:
                     v = np.asarray(tg['aidata'][()][sono_idx], dtype=float)
                     m = np.isfinite(v) & (v >= v_lo) & (v <= v_hi)
                     sono_in_cal.append(float(np.mean(m)))
+
+            # Primary-torque finiteness is computed at file level from the calibrated F/T in
+            # derived/ (D11, M2b) -- timeseries no longer carries a per-step forcetorque copy.
+            _ft_der = _read_derived_ft(f)
+            if _ft_der is not None and _ft_der.shape[0] > axis_idx:
+                z_finite.append(float(np.mean(np.isfinite(_ft_der[axis_idx]))))
 
             stats['trial_duration_s'] = trial_durs
             stats['total_trial_duration_s'] = round(float(sum(trial_durs)), 3)
@@ -530,7 +567,6 @@ def _stitch_trials(f: h5py.File) -> Dict[str, np.ndarray]:
     ang_cmd: List[np.ndarray] = []
     ang_meas: List[np.ndarray] = []
     ang_vel: List[np.ndarray] = []
-    ft_parts: List[np.ndarray] = []
     s1_parts: List[np.ndarray] = []
     s2_parts: List[np.ndarray] = []
     stim_mon_parts: List[np.ndarray] = []
@@ -562,8 +598,6 @@ def _stitch_trials(f: h5py.File) -> Dict[str, np.ndarray]:
         ang_cmd.append(_read_1d(('angle_commanded_degree', 'angle_cmd')))
         ang_meas.append(_read_1d(('angle_measured_degree', 'angle_measured')))
         ang_vel.append(_read_1d(('angular_velocity_commanded_degree_per_second', 'anglevel_cmd')))
-        ft = np.asarray(tg['forcetorque_raw'][()], dtype=float) if 'forcetorque_raw' in tg else None
-        ft_parts.append(ft if (ft is not None and ft.shape == (6, n)) else np.full((6, n), np.nan))
         s1k = _pick_dataset(tg, 'stim_channel1_command_volt', 'S1stimcmd')
         s2k = _pick_dataset(tg, 'stim_channel2_command_volt', 'S2stimcmd')
         s1_parts.append(np.asarray(tg[s1k][()], float).reshape(-1) if s1k else np.full(n, np.nan))
@@ -583,12 +617,22 @@ def _stitch_trials(f: h5py.File) -> Dict[str, np.ndarray]:
         dt = (t[-1] - t[0]) / max(1, n - 1) if n > 1 else 0.0
         t_off = float(t_parts[-1][-1] + dt + gap)
 
+    t_all = np.concatenate(t_parts) if t_parts else np.array([])
+    # Calibrated F/T is sourced from the file-level derived/forcetorque_calibrated (D11, M2b) --
+    # a contiguous whole-timeline [6, N] array in the same step order this stitch walks. Align by
+    # sample count; if absent (not calibrated) or mismatched, expose an all-NaN [6, N] placeholder.
+    n_total = int(t_all.size)
+    ft_der = _read_derived_ft(f)
+    if ft_der is not None and n_total and ft_der.shape[1] == n_total:
+        ft_cal = ft_der
+    else:
+        ft_cal = np.full((6, n_total), np.nan) if n_total else np.array([])
     out = {
-        't': np.concatenate(t_parts) if t_parts else np.array([]),
+        't': t_all,
         'angle_cmd': np.concatenate(ang_cmd) if ang_cmd else np.array([]),
         'angle_meas': np.concatenate(ang_meas) if ang_meas else np.array([]),
         'ang_vel': np.concatenate(ang_vel) if ang_vel else np.array([]),
-        'forcetorque_raw': np.concatenate(ft_parts, axis=1) if ft_parts else np.array([]),
+        'forcetorque_calibrated': ft_cal,
         'S1': np.concatenate(s1_parts) if s1_parts else np.array([]),
         'S2': np.concatenate(s2_parts) if s2_parts else np.array([]),
         'stim_monitor': np.concatenate(stim_mon_parts) if stim_mon_parts else np.array([]),
@@ -622,15 +666,15 @@ def plot_qc_from_h5(path: str, out_path: Optional[str] = None) -> str:
     axes[0].legend(loc='upper right', fontsize=8)
     axes[0].grid(True, alpha=0.3)
 
-    ft = data['forcetorque_raw']
-    if ft.size:
-        axes[1].plot(t, ft[axis_idx], color='firebrick', lw=0.8, label=f'{primary} raw')
+    ft = data['forcetorque_calibrated']
+    if ft.size and np.any(np.isfinite(ft)):
+        axes[1].plot(t, ft[axis_idx], color='firebrick', lw=0.8, label=f'{primary} calibrated')
         axes[1].set_ylabel(f'{primary} (N·m)')
         axes[1].legend(loc='upper right', fontsize=8)
         axes[1].grid(True, alpha=0.3)
         off_idx = {'xTorque': 3, 'yTorque': 4, 'zTorque': 5}
         for i, ax_name in enumerate(off[:2]):
-            axes[2 + i].plot(t, ft[off_idx[ax_name]], lw=0.8, label=f'{ax_name} raw')
+            axes[2 + i].plot(t, ft[off_idx[ax_name]], lw=0.8, label=f'{ax_name} calibrated')
             axes[2 + i].set_ylabel(f'{ax_name} (N·m)')
             axes[2 + i].legend(loc='upper right', fontsize=8)
             axes[2 + i].grid(True, alpha=0.3)

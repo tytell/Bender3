@@ -271,20 +271,46 @@ def build_series_catalog_v2(path: str, trial: str) -> Tuple[Dict[str, np.ndarray
             if key in tg:
                 out[label] = _as_float_1d(tg[key])
 
-        ft_key = _pick(tg, 'forcetorque_raw', 'forcetorque')
-        if ft_key:
-            ft = np.asarray(tg[ft_key][...], dtype=np.float64)
-            if ft.ndim == 2:
-                if ft.shape[0] == 6:
+        # F/T (D11, M2b): timeseries no longer stores a calibrated forcetorque copy -- aidata rows
+        # 0-5 are the raw archive. Read the calibrated F/T from the exporter's inspection-only
+        # derived/forcetorque_calibrated (present only when a REAL matrix was embedded). It is a
+        # whole-timeline [6, N_total] concatenation, so expose it per-group only when its width
+        # matches this group's sample count (single_finite flat, or a single-step segmented file).
+        # Legacy files predating M2b still carry timeseries forcetorque_raw/forcetorque -> fall
+        # back to that so old exports remain browsable (hard cut applies to NEW writes only).
+        _der = f.get('derived')
+        if _der is not None and 'forcetorque_calibrated' in _der:
+            ftc = np.asarray(_der['forcetorque_calibrated'][...], dtype=np.float64)
+            if ftc.ndim == 2 and ftc.shape[0] == 6:
+                if n_ref and ftc.shape[1] == n_ref:
                     for i, name in enumerate(FT_ROW_LABELS):
-                        out[name] = ft[i, :].ravel()
-                elif ft.shape[1] == 6:
-                    for i, name in enumerate(FT_ROW_LABELS):
-                        out[name] = ft[:, i].ravel()
+                        out['FT calibrated — ' + name] = ftc[i, :].ravel()
                 else:
-                    notes.append(f'`{ft_key}` shape {ft.shape} not 6×N or N×6 — skipped.')
+                    notes.append(
+                        f'derived/forcetorque_calibrated is a whole-timeline array (width '
+                        f'{ftc.shape[1]} != this step\'s {n_ref} samples) — view it at file level.'
+                    )
             else:
-                notes.append(f'`{ft_key}` is not 2D — skipped.')
+                notes.append(f'derived/forcetorque_calibrated shape {ftc.shape} not 6×N — skipped.')
+        else:
+            ft_key = _pick(tg, 'forcetorque_raw', 'forcetorque')
+            if ft_key:
+                ft = np.asarray(tg[ft_key][...], dtype=np.float64)
+                if ft.ndim == 2 and ft.shape[0] == 6:
+                    for i, name in enumerate(FT_ROW_LABELS):
+                        out['FT (legacy) — ' + name] = ft[i, :].ravel()
+                elif ft.ndim == 2 and ft.shape[1] == 6:
+                    for i, name in enumerate(FT_ROW_LABELS):
+                        out['FT (legacy) — ' + name] = ft[:, i].ravel()
+                elif ft.ndim == 2:
+                    notes.append(f'`{ft_key}` shape {ft.shape} not 6×N or N×6 — skipped.')
+                else:
+                    notes.append(f'`{ft_key}` is not 2D — skipped.')
+            else:
+                notes.append(
+                    'No calibrated F/T: derived/forcetorque_calibrated absent (raw aidata only; '
+                    'no real calibration matrix embedded) and no legacy forcetorque dataset.'
+                )
 
         if 'forcetorque_corrected' in tg:
             ftc = np.asarray(tg['forcetorque_corrected'][...], dtype=np.float64)
