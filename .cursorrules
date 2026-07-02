@@ -347,6 +347,14 @@ migration commits land the writer still emits `01_Metadata`/`02_TimeSeries`/
 
 ---
 
+## GUI fields must be exported
+- Every user-facing GUI input field must have a corresponding exported HDF5 key.
+- No GUI input may be silently dropped from export — silence means a reader cannot
+  distinguish "value not recorded" from "field was zero or missing".
+- Applies to all new fields going forward (effective 2026-07-01).
+- A retroactive audit of all existing GUI fields is a separate follow-up; do not
+  bundle it with unrelated changes.
+
 ## When editing
 - Read neighboring code and reuse existing helpers.
 - After UI changes, sanity-check landing, workflow, and stepwise.

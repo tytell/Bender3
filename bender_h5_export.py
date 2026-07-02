@@ -559,11 +559,54 @@ def export_primary_h5(
         _step_manifest_json = json.dumps(step_manifest_rows, default=str)
         g_meta.attrs.create('step_manifest', _step_manifest_json, dtype=h5py.special_dtype(vlen=str))
 
-        prof = getattr(bender, 'inertial_calibration_profile', None)
-        if isinstance(prof, dict):
-            g_ic = g_meta.create_group('inertial_calibration_profile')
-            for k, v in prof.items():
-                g_ic.attrs[str(k)] = v
+        # inertial_calibration_profile -> three flat calibration_inertia_* attrs (D12, Point 2).
+        # I_est is a MOI in N*m/(deg/s^2); multiply by (180/pi)*1e9 to convert to g*mm^2
+        # so it sits in the same units as the geometry-derived specimen MOI.
+        # bias_est is already N*m (no conversion). axis_sensor is categorical.
+        _prof = getattr(bender, 'inertial_calibration_profile', None)
+        if isinstance(_prof, dict):
+            _i_est = _prof.get('I_est', None)
+            if _i_est is not None:
+                g_meta.attrs['calibration_inertia_apparatus_moi_gram_millimeter_squared'] = (
+                    float(_i_est) * (180.0 / np.pi) * 1e9
+                )
+            _bias = _prof.get('bias_est', None)
+            if _bias is not None:
+                g_meta.attrs['calibration_inertia_bias_newton_meter'] = float(_bias)
+            _axis = _prof.get('axis_sensor', None)
+            if _axis is not None:
+                g_meta.attrs['calibration_inertia_axis_sensor'] = str(_axis)
+
+        # frustum_inputs dict -> four flat measurement_specimen_inertia_frustum_* attrs (v2.7 amended).
+        # set_frustum_inertial_model stores values in the dict and does NOT set the four attrs
+        # individually, so the ledger pass misses them. This block reads from the dict directly.
+        # The ledger still fires for any attr set independently via update_metadata.
+        _finp = getattr(bender, 'frustum_inputs', None)
+        if isinstance(_finp, dict):
+            for _fsrc, _fdst in (
+                ('height_mm',         'measurement_specimen_inertia_frustum_height_millimeter'),
+                ('width_mm',          'measurement_specimen_inertia_frustum_width_millimeter'),
+                ('length_mm',         'measurement_specimen_inertia_frustum_length_millimeter'),
+                ('density_g_per_mm3', 'measurement_specimen_inertia_frustum_density_gram_per_cubic_millimeter'),
+            ):
+                _fv = _finp.get(_fsrc, None)
+                if _fv is not None:
+                    g_meta.attrs[_fdst] = float(_fv)
+
+        # calibration_inertia_apparatus_aor_to_clamp_millimeter -- many-to-one from two sources.
+        # Primary: specimen_profile_clamp_offset_mm (set by live GUI path).
+        # Fallback: frustum_inputs['clamp_offset_mm'] (set by frustum path).
+        # OMIT entirely if neither source resolves to a positive value; never default-write 0.
+        _aor_val = None
+        _aor_primary = getattr(bender, 'specimen_profile_clamp_offset_mm', None)
+        if _aor_primary is not None and float(_aor_primary) > 0:
+            _aor_val = float(_aor_primary)
+        if _aor_val is None and isinstance(_finp, dict):
+            _aor_fb = _finp.get('clamp_offset_mm', None)
+            if _aor_fb is not None and float(_aor_fb) > 0:
+                _aor_val = float(_aor_fb)
+        if _aor_val is not None:
+            g_meta.attrs['calibration_inertia_apparatus_aor_to_clamp_millimeter'] = _aor_val
 
         # protocol_metadata subgroup REMOVED (PI decision, post-Phase-0 audit). Its attr-mirror keys
         # are written canonically by the ledger pass below; block_sequence is routed as
@@ -588,7 +631,7 @@ def export_primary_h5(
         # @property-backed routed attributes (e.g. daq_ai_sample_rate_hz) are captured; instance
         # __dict__ never contains properties. Many-to-one routes write the FIRST present source
         # (ledger insertion order) to avoid dataset collisions.
-        special_metadata = {'inertial_calibration_profile'}  # written as a subgroup above
+        special_metadata: set = set()  # no special-cased ledger bypasses remain
         written_keys: set = set()
         for name, route in BENDER_ROUTING.items():
             if route.get('tier') != 'metadata' or name in special_metadata:
@@ -635,6 +678,85 @@ def export_primary_h5(
                 '(add each to BENDER_ROUTING or EXCLUDED in bender_routing_spec.py): %s',
                 len(unrouted), sorted(unrouted),
             )
+
+        # === RA-inspection derived/ group (D11 amendment, Point 4) ==============
+        # Written into the raw file for live signal checking during/after a run.
+        # R ignores this group entirely and re-derives from raw + embedded cal VALUES.
+        # Unit discipline: I_est is N*m/(deg/s^2); specimen MOI is g*mm^2 and must be
+        # converted to N*m/(deg/s^2) before adding. Do NOT reuse get_corrected_torque
+        # (dead code, unit-inconsistent: multiplies g*mm^2 by deg/s^2).
+        _has_cal_matrix = getattr(bender, 'calibration', None) is not None
+        _ft_cal = None  # shared between the two derived/ blocks below
+        if _has_cal_matrix:
+            # Block A: forcetorque_calibrated -- independent of the inertia correction.
+            try:
+                _combined = _concat_trial_records(trial_records)
+                _ft_raw = _combined.get('forcetorque_raw', None)
+                if _ft_raw is not None and np.asarray(_ft_raw).size > 0:
+                    _ft_raw = np.asarray(_ft_raw, dtype=float)
+                    if _ft_raw.ndim == 2 and _ft_raw.shape[0] == 6:
+                        g_der = f.create_group('derived')
+                        g_der.attrs['note'] = (
+                            'RA inspection only -- not ground truth. '
+                            'R re-derives from raw aidata + embedded calibration VALUES.'
+                        )
+                        g_der.create_dataset('forcetorque_calibrated', data=_ft_raw)
+                        _ft_cal = _ft_raw   # signal Block B that the group and data are ready
+            except Exception as _der_exc:
+                logging.warning(
+                    'export_primary_h5: derived/forcetorque_calibrated skipped: %s', _der_exc
+                )
+
+            # Block B: torque_inertia_corrected -- only runs when Block A succeeded.
+            # Failure here does not affect forcetorque_calibrated.
+            # _i_sum = specimen MOI (converted to N*m/(deg/s^2)) + empirical I_est if present.
+            # I_est is the apparatus MOI from the empty-run calibration fit (inertial_calibration_profile);
+            # it is NOT the old theoretical CLAMP_DIM baseline (superseded, see Deferred flag 4).
+            # The apparatus term is I_est-only until the calibration-matrix workflow (Deferred flag 4)
+            # delivers a per-configuration apparatus MOI.
+            if _ft_cal is not None and 'derived' in f:
+                try:
+                    # Gather empirical apparatus MOI: I_est in native N*m/(deg/s^2).
+                    _der_prof = getattr(bender, 'inertial_calibration_profile', None)
+                    _i_app_native = None
+                    if isinstance(_der_prof, dict):
+                        _ie = _der_prof.get('I_est', None)
+                        if _ie is not None:
+                            _i_app_native = float(_ie)
+                    # Gather specimen inertia: g*mm^2 -> N*m/(deg/s^2).
+                    # Conversion: I[g*mm^2] * 1e-9 [kg*m^2] * (pi/180) [N*m/(deg/s^2)]
+                    _i_spec_native = None
+                    for _mattr in ('specimen_moi_specimen', 'specimen_moi_profile', 'specimen_moi_frustum'):
+                        _sv = getattr(bender, _mattr, None)
+                        if _sv is not None and np.isfinite(float(_sv)) and float(_sv) > 0.0:
+                            _i_spec_native = float(_sv) * 1e-9 * (np.pi / 180.0)
+                            break
+                    if _i_app_native is not None or _i_spec_native is not None:
+                        _i_sum = (_i_app_native or 0.0) + (_i_spec_native or 0.0)
+                        _av_cmd = _combined.get('anglevel_cmd', None)
+                        _ai_rate = float(
+                            getattr(bender, 'daq_ai_sample_rate_hz', 1000.0) or 1000.0
+                        )
+                        if _av_cmd is not None and np.asarray(_av_cmd).size == _ft_cal.shape[1]:
+                            _alpha = np.gradient(
+                                np.asarray(_av_cmd, dtype=float).reshape(-1)
+                            ) * _ai_rate  # deg/s^2
+                            # Select primary torque row matching configured bending axis.
+                            _ax = str(getattr(
+                                bender, 'primary_bending_axis',
+                                getattr(bender, 'bending_axis_sensor', 'z')
+                            )).strip().lower()
+                            _ax_row = {
+                                'x': 3, 'xtorque': 3,
+                                'y': 4, 'ytorque': 4,
+                                'z': 5, 'ztorque': 5,
+                            }.get(_ax, 5)
+                            _tau_corrected = _ft_cal[_ax_row, :] - _i_sum * _alpha
+                            f['derived'].create_dataset('torque_inertia_corrected', data=_tau_corrected)
+                except Exception as _der_exc:
+                    logging.warning(
+                        'export_primary_h5: derived/torque_inertia_corrected skipped: %s', _der_exc
+                    )
 
     msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})'
     return {

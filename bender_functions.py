@@ -1970,18 +1970,6 @@ class Bender:
         
         return total_moi, total_mass
 
-    def _hardware_inertia_baseline(self, clamp_offset_mm):
-        """Return baseline rotating hardware inertia/mass terms in (g*mm^2, g)."""
-        RHO_PLA, RHO_STEEL, RHO_NEO = 0.001116, 0.008, 0.0075
-        CLAMP_DIM = np.array([50.0, 100.0, 20.0])  # W, H, D (mm)
-        M_BOLT = 12.0  # g total hardware per clamp
-        m_shaft = (np.pi * (9.525 / 2) ** 2 * 304.8) * RHO_STEEL
-        i_shaft = 0.5 * m_shaft * (9.525 / 2) ** 2
-        r_cm = float(clamp_offset_mm) + (CLAMP_DIM[2] / 2)
-        m_unit = (np.prod(CLAMP_DIM) * RHO_PLA) + (np.pi * 5 ** 2 * 3 * RHO_NEO) + M_BOLT
-        i_rotating_clamps = 2 * (m_unit * r_cm ** 2)
-        return i_shaft, m_shaft, i_rotating_clamps, (m_unit * 2), r_cm
-
     def set_frustum_inertial_model(
         self,
         height_mm,
@@ -2025,9 +2013,10 @@ class Bender:
             axis_offset_x=0.0,
             axis_offset_z=0.0,
         )
-        i_shaft, m_shaft, i_clamps, m_clamps, r_cm = self._hardware_inertia_baseline(clamp_offset_mm)
-        self.i_total_system = float(i_shaft + i_clamps + i_spec)
-        self.total_mass = float(m_shaft + m_clamps + m_spec)
+        # i_total_system = specimen MOI only. Apparatus baseline (hardcoded CLAMP_DIM) is
+        # superseded; per-configuration apparatus term provided by Deferred flag 4 calibration matrix.
+        self.i_total_system = float(i_spec)
+        self.total_mass = float(m_spec)
         self.specimen_moi_frustum = float(i_spec)
         self.specimen_mass_frustum = float(m_spec)
         self.specimen_inertial_model = "elliptical_frustum"
@@ -2040,8 +2029,8 @@ class Bender:
             'clamp_offset_mm': float(clamp_offset_mm),
         }
         print(
-            f"Frustum model set: specimen mass={m_spec:.3f} g, "
-            f"specimen MOI={i_spec:.3f} g*mm^2, total MOI={self.i_total_system:.3f} g*mm^2"
+            "[inertia] Frustum model set: specimen mass=" + str(round(m_spec, 3)) + " g, "
+            "specimen MOI=" + str(round(i_spec, 3)) + " g*mm^2"
         )
         return self.i_total_system
 
@@ -2178,9 +2167,9 @@ class Bender:
         m_spec = float(np.sum(mass_matrix))
         i_spec = float(np.sum(mass_matrix * r_sq))
 
-        i_shaft, m_shaft, i_clamps, m_clamps, _ = self._hardware_inertia_baseline(clamp_offset_mm)
-        self.i_total_system = float(i_shaft + i_clamps + i_spec)
-        self.total_mass = float(m_shaft + m_clamps + m_spec)
+        # i_total_system = specimen MOI only. Apparatus baseline superseded; see Deferred flag 4.
+        self.i_total_system = float(i_spec)
+        self.total_mass = float(m_spec)
         self.specimen_moi_profile = i_spec
         self.specimen_mass_profile = m_spec
         self.specimen_inertial_model = "profiled_stations"
@@ -2302,10 +2291,10 @@ class Bender:
 
         mass = rho * volume
 
-        i_shaft, m_shaft, i_clamps, m_clamps, _ = self._hardware_inertia_baseline(clamp_offset_mm)
-        self.i_total_system = float(i_shaft + i_clamps + i_spec)
-        self.total_mass = float(m_shaft + m_clamps + mass)
-        # Specimen-only term consumed by _specimen_moi_for_inertial_torque (when enabled).
+        # i_total_system = specimen MOI only. Apparatus baseline (hardcoded CLAMP_DIM) is
+        # superseded; per-configuration apparatus term provided by Deferred flag 4 calibration matrix.
+        self.i_total_system = float(i_spec)
+        self.total_mass = float(mass)
         self.specimen_moi_specimen = float(i_spec)
         self.specimen_mass_specimen = float(mass)
         self.specimen_volume_mm3 = float(volume)
@@ -2316,8 +2305,9 @@ class Bender:
         self.specimen_geometry_density_g_per_mm3 = rho
         self.specimen_profile_clamp_offset_mm = float(clamp_offset_mm)
         print(
-            f"User-geometry model set: specimen volume={volume:.3f} mm^3, mass={mass:.3f} g, "
-            f"specimen MOI (center axis)={i_spec:.3f} g*mm^2 [NOT scale-validated]"
+            "[inertia] User-geometry model set: volume=" + str(round(volume, 3)) + " mm^3, "
+            "mass=" + str(round(mass, 3)) + " g, "
+            "specimen MOI (center axis)=" + str(round(i_spec, 3)) + " g*mm^2"
         )
         return self.i_total_system
 
@@ -5678,65 +5668,6 @@ class Bender:
         self.S2stimcmd = S2stimcmd
         
         return S1stimcmd, S2stimcmd
-
-    def set_physics(self, clamp_offset, front_h, front_w, back_h, back_w, spec_length, mode="lateral"):
-        """
-        Calculates the Moment of Inertia (MOI) for the system and specimen.
-        """
-        # --- THE TRANSLATOR (Fish -> Machine) ---
-        # Fixed: Using the correct argument names (front_w, front_h, spec_length)
-        if mode == "lateral":
-            w_math, h_math, d_math = front_w, front_h, spec_length
-        elif mode == "dorsoventral":
-            w_math, h_math, d_math = front_h, front_w, spec_length
-        elif mode == "torsional":
-            w_math, h_math, d_math = front_w, spec_length, front_h 
-        else:
-            raise ValueError("Invalid mode. Choose 'lateral', 'dorsoventral', or 'torsional'.")
-
-        # --- CONSTANTS ---
-        RHO_PLA, RHO_STEEL, RHO_NEO, RHO_SPECIMEN = 0.001116, 0.008, 0.0075, 0.001 
-        CLAMP_DIM = np.array([50.0, 100.0, 20.0]) # W, H, D
-        M_BOLT = 12.0 # Total hardware per clamp
-
-        # --- 1. SHAFT BASELINE (12" Steel) ---
-        m_shaft = (np.pi * (9.525/2)**2 * 304.8) * RHO_STEEL
-        i_shaft = 0.5 * m_shaft * (9.525/2)**2
-
-        # --- 2. ROTATING CLAMP PAIR ---
-        r_cm = clamp_offset + (CLAMP_DIM[2] / 2)
-        m_unit = (np.prod(CLAMP_DIM) * RHO_PLA) + (np.pi*5**2*3*RHO_NEO) + M_BOLT
-        i_rotating_clamps = 2 * (m_unit * r_cm**2)
-
-        # --- 3. SPECIMEN MOI (The Fish) ---
-        # Note: Using d_math, h_math, w_math from the translator above
-        i_spec, m_spec = self.calculate_moi_specimen(
-            rho_eff=RHO_SPECIMEN, 
-            obj_depth_length=d_math,
-            front_h_semi=h_math/2, 
-            back_h_semi=h_math/2,
-            front_w_semi=w_math/2, 
-            back_w_semi=w_math/2,
-            num_samples=50,      
-            axis_offset_x=0.0,   
-            axis_offset_z=0.0    
-        )
-
-        # --- 4. FINALIZE ---
-        self.i_total_system = i_shaft + i_rotating_clamps + i_spec
-        self.total_mass = m_shaft + (m_unit * 2) + m_spec
-        
-        # --- 5. REPORT ---
-        print("\n" + "="*50)
-        print(f"{'PHYSICS CONFIGURATION REPORT':^50}")
-        print("="*50)
-        print(f"{'Mode':<25} | {mode:<21}")
-        print(f"{'Total Rotating MOI':<25} | {self.i_total_system:<12.2f} | g*mm^2")
-        print(f"{'Lever Arm (r)':<25} | {r_cm:<12.2f} | mm")
-        print(f"{'Specimen Mass':<25} | {m_spec:<12.2f} | g")
-        print("-" * 50)
-        print(f"{'TOTAL SYSTEM MASS':<25} | {self.total_mass:<12.2f} | g")
-        print("="*50 + "\n")
 
     def get_corrected_torque(self, raw_data_dict):
         """

@@ -90,15 +90,37 @@ BENDER_ROUTING: Dict[str, Route] = {
     "dclamp":                {"tier": "metadata", "key": "measurement_clamp_separation_millimeter",           "required": True,  "source": "GUI"},
     "dvert":                 {"tier": "metadata", "key": "measurement_clamp_offset_vertical_millimeter",      "required": False, "source": "GUI"},
     "dhoriz":                {"tier": "metadata", "key": "measurement_clamp_offset_horizontal_millimeter",    "required": False, "source": "GUI"},
-    "clamp_plate_extension_mm": {"tier": "metadata", "key": "measurement_clamp_plate_extension_millimeter",   "required": False, "source": "GUI"},
+    "clamp_plate_extension_mm": {"tier": "metadata", "key": "calibration_inertia_apparatus_plate_to_plate_millimeter", "required": False, "source": "GUI",
+                                   "note": "plate-to-plate span between body plates within the moving clamp (mm); GUI field 'Inter-clamp span'; "
+                                           "feeds apparatus-calibration-matrix lookup (Deferred flag 4); "
+                                           "replaces measurement_clamp_plate_extension_millimeter (v2.7)"},
     "target_muscle_depth_mm":   {"tier": "metadata", "key": "measurement_target_muscle_depth_millimeter",     "required": False, "source": "GUI"},
     "specimen_geometry_heights_mm":   {"tier": "metadata", "key": "measurement_specimen_frustum_heights_millimeter",   "required": False, "source": "GUI"},
     "specimen_geometry_depths_mm":    {"tier": "metadata", "key": "measurement_specimen_frustum_depths_millimeter",    "required": False, "source": "GUI"},
     "specimen_geometry_positions_mm": {"tier": "metadata", "key": "measurement_specimen_frustum_positions_millimeter", "required": False, "source": "GUI"},
     "specimen_profile_length_mm":     {"tier": "metadata", "key": "measurement_profile_length_millimeter",     "required": False, "source": "GUI",
                                        "note": "inertial profile model input (spatial -> measurement_ per Rule 4)"},
-    "specimen_profile_clamp_offset_mm": {"tier": "metadata", "key": "measurement_profile_clamp_offset_millimeter", "required": False, "source": "GUI",
-                                       "note": "spatial -> measurement_ per Rule 4"},
+    "specimen_profile_clamp_offset_mm": {"tier": "metadata", "key": "calibration_inertia_apparatus_aor_to_clamp_millimeter", "required": False, "source": "GUI",
+                                       "note": "axial dist from sensor face (AOR in standard inline config) to near edge of rotating clamp (mm); "
+                                               "GUI field 'Distance from rotation axis to clamps'. Many-to-one: frustum_clamp_offset_mm maps to same key "
+                                               "(first positive value wins). Omit if <= 0; feeds apparatus-cal-matrix lookup (Deferred flag 4). "
+                                               "Replaces measurement_profile_clamp_offset_millimeter (v2.7)."},
+    # --- frustum model raw inputs (v2.7 amended — previously dropped inside frustum_inputs dict) ---
+    # Source: values written into bender.frustum_inputs dict by set_frustum_inertial_model; exporter
+    # reads from the dict directly via a dedicated block (ledger also fires if attrs set individually
+    # via update_metadata).
+    "frustum_height_mm":        {"tier": "metadata", "key": "measurement_specimen_inertia_frustum_height_millimeter",            "required": False, "source": "computed",
+                                  "note": "back-end (max) cross-section height for the elliptical frustum MOI model (mm); frustum path only"},
+    "frustum_width_mm":         {"tier": "metadata", "key": "measurement_specimen_inertia_frustum_width_millimeter",             "required": False, "source": "computed",
+                                  "note": "back-end (max) cross-section width for the elliptical frustum MOI model (mm); frustum path only"},
+    "frustum_length_mm":        {"tier": "metadata", "key": "measurement_specimen_inertia_frustum_length_millimeter",            "required": False, "source": "computed",
+                                  "note": "axial span of the frustum model (mm); frustum path only"},
+    "frustum_clamp_offset_mm":  {"tier": "metadata", "key": "calibration_inertia_apparatus_aor_to_clamp_millimeter",            "required": False, "source": "computed",
+                                  "note": "apparatus AOR-to-clamp distance (mm); same physical quantity as specimen_profile_clamp_offset_mm; "
+                                          "many-to-one (first positive value wins); read from frustum_inputs dict by exporter. "
+                                          "Replaces draft measurement_specimen_frustum_clamp_offset_millimeter (v2.7)."},
+    "frustum_density_g_per_mm3": {"tier": "metadata", "key": "measurement_specimen_inertia_frustum_density_gram_per_cubic_millimeter", "required": False, "source": "computed",
+                                   "note": "material density for the frustum model (g/mm^3); frustum path only"},
     "dbend":                  {"tier": "metadata", "key": "measurement_bend_position_millimeter", "required": False, "source": "GUI",
                               "note": "MC #8: bend/segment position -> measurement_"},
     "test_segment_position_mm": {"tier": "metadata", "key": "measurement_bend_position_millimeter", "required": False, "source": "GUI",
@@ -178,31 +200,42 @@ BENDER_ROUTING: Dict[str, Route] = {
     "daq_motor_positive_bend_lateral_index": {"tier": "metadata", "key": "daq_motor_positive_bend_lateral_index", "required": False, "source": "computed",
                                 "note": "signed lateral index the positive motor direction bends toward; set in isometric/isovelocity run paths"},
 
-    # === metadata / inertial_ (parameters + provenance only; series -> hub) =
-    "i_total_system":      {"tier": "metadata", "key": "inertial_total_moi",    "required": False, "source": "computed",
-                            "note": "ASSUMED i_total_system -> inertial_total_moi (MC #2 default)"},
-    "specimen_moi_specimen": {"tier": "metadata", "key": "inertial_specimen_moi", "required": False, "source": "computed",
-                              "note": "many-to-one: exporter writes first present of specimen_moi_specimen/profile/frustum"},
-    "specimen_moi_profile":  {"tier": "metadata", "key": "inertial_specimen_moi", "required": False, "source": "computed",
-                              "note": "see specimen_moi_specimen"},
-    "specimen_moi_frustum":  {"tier": "metadata", "key": "inertial_specimen_moi", "required": False, "source": "computed",
-                              "note": "see specimen_moi_specimen"},
-    "use_frustum_inertial_model":          {"tier": "metadata", "key": "inertial_use_frustum_model",          "required": False, "source": "GUI"},
-    "use_theoretical_inertial_correction": {"tier": "metadata", "key": "inertial_use_theoretical_correction", "required": False, "source": "GUI"},
-    "use_inertial_calibration":   {"tier": "metadata", "key": "inertial_use_calibration",   "required": False, "source": "GUI"},
-    "inertial_calibration_file":  {"tier": "metadata", "key": "inertial_calibration_file",  "required": False, "source": "GUI"},
-    "inertial_calibration_profile": {"tier": "metadata", "key": "inertial_calibration_profile", "required": False, "source": "computed",
-                                     "note": "dict -> subgroup (I_est/bias_est/axis_sensor)"},
-    "frustum_inputs":           {"tier": "metadata", "key": "inertial_frustum_inputs", "required": False, "source": "computed",
-                                 "note": "dict of frustum model inputs (provenance)"},
-    "specimen_profile_stations":         {"tier": "metadata", "key": "inertial_profile_stations", "required": False, "source": "GUI"},
-    "specimen_profile_density_g_per_mm3": {"tier": "metadata", "key": "inertial_profile_density_gram_per_cubic_millimeter", "required": False, "source": "GUI"},
-    "specimen_profile_num_samples":      {"tier": "metadata", "key": "inertial_profile_num_samples", "required": False, "source": "GUI"},
-    "specimen_geometry_density_g_per_mm3": {"tier": "metadata", "key": "inertial_specimen_density_gram_per_cubic_millimeter", "required": False, "source": "GUI"},
-    "inertial_specimen_from_geometry": {"tier": "metadata", "key": "inertial_specimen_from_geometry", "required": False, "source": "computed",
-                                        "note": "bool: analytic specimen MOI available (set in run_experiment FT block)"},
-    "inertial_system_from_profile":    {"tier": "metadata", "key": "inertial_system_from_profile",    "required": False, "source": "computed",
-                                        "note": "bool: system-inertia calibration profile loaded (set in run_experiment FT block)"},
+    # === metadata / calibration_inertia_ (computed MOI + calibration scalars) =
+    # inertial_calibration_profile is handled by a direct flat-key write block in the
+    # exporter (not the ledger pass); it lives in EXCLUDED to suppress fail-on-unmapped.
+    # apparatus/bias/axis keys are written by that block, not the ledger (see MISSING_REQUIRED).
+    "i_total_system": {"tier": "metadata",
+                       "key": "calibration_inertia_total_moi_gram_millimeter_squared",
+                       "required": False, "source": "computed",
+                       "note": "theoretical apparatus baseline (i_shaft+i_clamps, hardcoded) + "
+                               "specimen MOI; NOT apparatus_moi (I_est) + specimen_moi "
+                               "(see Deferred flag 5 in migration plan)"},
+    "specimen_moi_specimen": {"tier": "metadata",
+                               "key": "calibration_inertia_specimen_moi_gram_millimeter_squared",
+                               "required": False, "source": "computed",
+                               "note": "many-to-one: exporter writes first present of "
+                                       "specimen_moi_specimen / profile / frustum"},
+    "specimen_moi_profile":  {"tier": "metadata",
+                               "key": "calibration_inertia_specimen_moi_gram_millimeter_squared",
+                               "required": False, "source": "computed",
+                               "note": "see specimen_moi_specimen"},
+    "specimen_moi_frustum":  {"tier": "metadata",
+                               "key": "calibration_inertia_specimen_moi_gram_millimeter_squared",
+                               "required": False, "source": "computed",
+                               "note": "see specimen_moi_specimen"},
+    "inertial_calibration_file": {"tier": "metadata",
+                                  "key": "calibration_inertia_file",
+                                  "required": False, "source": "GUI"},
+    "specimen_geometry_density_g_per_mm3": {
+        "tier": "metadata",
+        "key": "measurement_specimen_density_gram_per_cubic_millimeter",
+        "required": False, "source": "GUI",
+        "note": "measured input for MOI computation; moved from inertial_ to measurement_ (Point 1)"},
+    "inertial_specimen_from_geometry": {
+        "tier": "metadata",
+        "key": "calibration_inertia_specimen_from_geometry",
+        "required": False, "source": "computed",
+        "note": "bool: analytic specimen MOI available (set in run_experiment FT block)"},
 
     # === metadata / note_ ==================================================
     "stim_clamp_notices": {"tier": "metadata", "key": "note_bench",    "required": False, "source": "computed",
@@ -388,13 +421,37 @@ EXCLUDED: Set[str] = {
     "test_segment_length_mm",   # alias of dclamp -> measurement_clamp_separation_millimeter (see CONFLICT note in decision log)
     "total_mass",               # MC #2: not a schema field; recomputed in R
     "specimen_mass_specimen",   # run-computed geometry-model mass; not a schema field
+    "specimen_mass_frustum",    # run-computed mass from legacy frustum builder; not a schema field
+    "specimen_mass_profile",    # run-computed mass from legacy profiled-stations builder; not a schema field
     "specimen_volume_mm3",      # run-computed geometry-model volume; not a schema field
     "specimen_inertial_model",  # internal model tag (elliptical_frustum/profiled_stations/...); provenance downstream
 
-    # --- legacy frustum scalar inputs (captured in frustum_inputs dict) ---
-    "frustum_height_mm", "frustum_width_mm", "frustum_length_mm",
-    "frustum_density_g_per_mm3", "frustum_tip_scale", "frustum_clamp_offset_mm",
-    "frustum_num_samples",
+    # --- inertial flags dropped from schema (D12 / Points 1-3) ---
+    # use_frustum_inertial_model: notebook auto-build switch only; not a schema field.
+    # use_theoretical_inertial_correction: gates nothing in current code; dropped.
+    # use_inertial_calibration: controlled calibration_link (dropped per D3/D12).
+    # inertial_calibration_profile: handled by direct flat-key block in exporter (not ledger).
+    # inertial_system_from_profile: subsumed; dropped per D12.
+    "use_frustum_inertial_model", "use_theoretical_inertial_correction",
+    "use_inertial_calibration", "inertial_calibration_profile",
+    "inertial_system_from_profile",
+
+    # --- legacy profile / frustum model attrs (unused GUI path; not schema fields) ---
+    # specimen_profile_* belong to set_profiled_specimen_inertial_model (not the live GUI path).
+    # frustum_inputs: the dict object itself is excluded — its individual scalar contents are now
+    # routed as first-class measurement_specimen_frustum_* fields (v2.7); the dict is redundant.
+    # specimen_profile_num_samples: dropped per Point 1 (no sample count in active code path).
+    "frustum_inputs",
+    "specimen_profile_stations", "specimen_profile_density_g_per_mm3",
+    "specimen_profile_num_samples",
+
+    # --- legacy frustum scalar inputs ---
+    # frustum_height/width/length/density are now ROUTED to measurement_specimen_inertia_frustum_* (v2.7 amended).
+    # frustum_clamp_offset_mm is ROUTED to calibration_inertia_apparatus_aor_to_clamp_millimeter (many-to-one with
+    #   specimen_profile_clamp_offset_mm; apparatus geometry, not specimen frustum geometry).
+    # frustum_tip_scale: DROPPED (v2.7) — redundant when N-station geometry captures each cross-section explicitly.
+    # frustum_num_samples: DROPPED — no sample count in the active code path (exact per-segment integration).
+    "frustum_tip_scale", "frustum_num_samples",
 
     # --- run-computed scheduling / per-cycle intermediates (DERIVED, recomputable) ---
     # Built during run_experiment from the routed protocol params (all_freqs/all_amps/etc.) to
@@ -440,8 +497,21 @@ MISSING_REQUIRED: List[Dict[str, str]] = [
      "source": "GUI", "note": "Test-section body width; no Bender attr. Needs a GUI widget (distinct from xsec_width)."},
     {"key": "note_posthoc", "tier": "metadata",
      "source": "analysis", "note": "Populated post-hoc in the pipeline; expected absent at acquisition unless post_trial_notes is routed here."},
-    {"key": "inertial_moi_provenance", "tier": "metadata",
-     "source": "computed", "note": "Which model/dims fed each MOI; assemble from active inertial model + frustum_inputs."},
+    # The three flat profile keys are written by the direct block in bender_h5_export.py
+    # (lines that replaced the inertial_calibration_profile subgroup writer), NOT by the
+    # ledger pass.  No Bender attribute maps 1:1 to these keys; they unpack inertial_calibration_profile.
+    {"key": "calibration_inertia_apparatus_moi_gram_millimeter_squared", "tier": "metadata",
+     "source": "computed",
+     "note": "I_est from inertial_calibration_profile, converted *(180/pi)*1e9 at write time; "
+             "written by the direct flat-key block in the exporter, not the ledger."},
+    {"key": "calibration_inertia_bias_newton_meter", "tier": "metadata",
+     "source": "computed",
+     "note": "bias_est from inertial_calibration_profile (N*m, no conversion); "
+             "written by the direct flat-key block in the exporter, not the ledger."},
+    {"key": "calibration_inertia_axis_sensor", "tier": "metadata",
+     "source": "computed",
+     "note": "axis_sensor from inertial_calibration_profile (categorical); "
+             "written by the direct flat-key block in the exporter, not the ledger."},
     {"key": "index_step_*", "tier": "metadata",
      "source": "computed", "note": "Parallel per-step arrays (sample_start/end/type/target/...); derived from trial_records step boundaries."},
 ]
