@@ -307,8 +307,11 @@ def export_primary_h5(
 
         # calibration_link subgroup removed (D3, D12): flatten to a single provenance attr.
         # use_inertial_calibration and calibration_available dropped -- no correction runs at export.
-        if cal_file:
-            g_meta.attrs['calibration_inertia_file'] = cal_file
+        # Always written: schema says "empty string if none" (D12).
+        g_meta.attrs['calibration_inertia_file'] = cal_file
+        # calibration_inertia_matrix: empty lookup table until apparatus-calibration workflow
+        # is implemented (D12, Deferred flag 4). Present-but-empty -- omission not permitted.
+        g_meta.create_dataset('calibration_inertia_matrix', data=np.empty((0,), dtype=np.float64))
 
         # calibration_forcetorque_matrix (D11, M2b): embed the ATI 6x6 VALUES ONLY when a REAL
         # calibration matrix is loaded. loadCalibration() in bender_functions falls back to
@@ -812,7 +815,7 @@ def export_primary_h5(
         # (ledger insertion order) to avoid dataset collisions.
         # 'calibration' is written ONLY by the real-matrix-gated block above (D11, M2b) -- bypass
         # the ledger so it is never emitted as the np.eye(6) identity fallback.
-        special_metadata: set = {'calibration'}
+        special_metadata: set = {'calibration', 'h5_schema_version', 'inertial_calibration_file'}
         written_keys: set = set()
         for name, route in BENDER_ROUTING.items():
             if route.get('tier') != 'metadata' or name in special_metadata:
@@ -840,6 +843,11 @@ def export_primary_h5(
                 written_keys.add(key)
             elif _store_metadata_canonical(g_meta, key, value):
                 written_keys.add(key)
+
+        # note_bench fallback: schema marks this as a required field. The ledger writes it
+        # when stim_clamp_notices is non-empty; emit an empty string when absent or empty.
+        if 'note_bench' not in written_keys:
+            g_meta.attrs['note_bench'] = ''
 
         # Pass B -- unmapped detection over the instance __dict__: any public attribute that is
         # neither routed nor excluded is preserved (lossless) under metadata/99_Unrouted (D7) with

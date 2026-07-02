@@ -6,8 +6,8 @@
 - **Authority level:** Tier 2 (binding for all H5 write/read tasks — export routine, R pipeline, GUI→backend assignment).
 - **Scope:** `bender_h5_export.py` (write), `01_calibration.R` / `02_correct.R` / `03_analyze.R` (read), GUI variable assignment in `bender_streamlit_gui.py`.
 - **Owner:** PI (schema decisions are PI-only).
-- **Version:** v2.7 (amended 2026-07-01: frustum scalars renamed to `measurement_specimen_inertia_frustum_*`; AOR-to-clamp and plate-to-plate reclassified to `calibration_inertia_apparatus_*`; CLAMP_DIM baseline superseded; Governing Rule 10 added)
-- **Last reviewed:** 2026-07-01
+- **Version:** 2026-07-02 (amended 2026-07-02: complete M1 metadata contract — `schema_version` now ISO-8601 date, `note_bench` always written, `calibration_inertia_file` always written, `calibration_inertia_matrix` present-but-empty)
+- **Last reviewed:** 2026-07-02
 
 ### Changelog
 
@@ -110,7 +110,7 @@ After Phase 1 migration (M1) only **one** attribute survives at the HDF5 file ro
 
 | Root attr        | Value        | Notes                                                                                        |
 | ---------------- | ------------ | -------------------------------------------------------------------------------------------- |
-| `schema_version` | e.g. `"2.5"` | File-level schema provenance; kept at root because it predates and outlives any group rename |
+| `schema_version` | e.g. `"2026-07-02"` | File-level schema provenance; kept at root because it predates and outlives any group rename |
 
 
 All other previous root attrs are moved to flat `metadata/` keys:

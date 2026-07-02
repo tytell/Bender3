@@ -438,7 +438,7 @@ class Bender:
         self.ramp_mode_default = getattr(cfg, 'ramp_mode_default', 'linear')
         self.master_logger = MasterLogger()
         self.h5_protocol_metadata = {}
-        self.h5_schema_version = "2.0"
+        self.h5_schema_version = "2026-07-02"
         self.post_trial_notes = ""
         # GUI-friendly aliases for geometry naming
         self.test_segment_length_mm = None  # alias for dclamp
