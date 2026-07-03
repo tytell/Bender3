@@ -1172,7 +1172,7 @@ class Bender:
         self.trial_records = [entry]
         self.daq_collection_type = 'continuous'
         self.protocol_sampling_mode = 'single_finite'
-        # test_type is routed from self.test_type; n_steps is injected into metadata/99_Unrouted by the exporter;
+        # test_type is routed from self.test_type; session_step_count is written as a canonical metadata attr by the exporter;
         # motion_test_type is dropped (redundant). No protocol-metadata mirror written here.
 
         # Return to resting length: command angle = 0° and confirm before the trial completes (1.7).
@@ -4982,7 +4982,7 @@ class Bender:
         self.trial_records = list(results)
         self.daq_collection_type = 'segmented'
         self.protocol_sampling_mode = 'segmented_finite'
-        # test_type routed from self.test_type; n_steps injected into metadata/99_Unrouted by the exporter.
+        # test_type routed from self.test_type; session_step_count written as a canonical metadata attr by the exporter.
         self.h5_protocol_metadata.update({
             'rest_between_steps_s': float(gap_s),
             'reset_between_steps': bool(reset_steps),

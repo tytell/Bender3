@@ -355,7 +355,7 @@ exporter, enumerated from `bender_h5_export.py:501-531` (D4 — no invented fiel
 #### All protocols (shared)
 
 ```
-index_step_step_number                  [n_steps] int   1-based step number (matches step_NNN subgroup; source: step_index)
+index_step_number                       [n_steps] int   1-based step number (matches step_NNN subgroup; source: step_index)
 index_step_wall_clock_start             [n_steps] str   ISO-8601 real-world start of this step (no unit suffix)
 index_step_duration_second              [n_steps] float Recorded acquisition duration of this step
 index_step_rest_before_second           [n_steps] float Unrecorded rest gap before this step; 0 for step 1

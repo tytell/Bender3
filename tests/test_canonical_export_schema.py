@@ -221,7 +221,7 @@ def test_index_step_arrays_replace_trial_index_subgroup(tmp_path):
         assert 'trial_index' not in meta, 'trial_index subgroup must be absent after M2'
         # Shared fields present as datasets (not attrs)
         for key in (
-            'index_step_step_number',
+            'index_step_number',
             'index_step_duration_second',
             'index_step_rest_before_second',
             'index_step_wall_clock_start',
@@ -234,11 +234,11 @@ def test_index_step_arrays_replace_trial_index_subgroup(tmp_path):
         assert 'index_step_target_angle_degree' in meta, 'isometric target angle missing'
         assert 'index_step_ramp_from_angle_degree' in meta, 'isometric ramp-from angle missing'
         # Array length matches n_trials
-        n = int(meta.attrs['n_trials'])
-        assert meta['index_step_step_number'].shape[0] == n, 'index_step_step_number length mismatch'
+        n = int(meta.attrs['session_step_count'])
+        assert meta['index_step_number'].shape[0] == n, 'index_step_number length mismatch'
         assert meta['index_step_duration_second'].shape[0] == n, 'index_step_duration_second length mismatch'
         # step_number is 1-based
-        assert int(meta['index_step_step_number'][0]) == 1, 'step_number must be 1-based'
+        assert int(meta['index_step_number'][0]) == 1, 'step_number must be 1-based'
         # Protocol direction attrs
         assert 'protocol_motor_positive_bend_direction' in meta.attrs
         assert 'protocol_sensor_positive_bend_direction' in meta.attrs
