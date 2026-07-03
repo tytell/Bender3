@@ -298,9 +298,6 @@ def audit_h5_schema(path: str) -> Dict[str, Any]:
             info.append(
                 'Phase-1 on-disk layout uses flat metadata / timeseries groups (no 01_/02_ prefixes).'
             )
-            if _meta_lookup(f, 'measurement_specimen_body_width_millimeter') is None:
-                info.append('measurement_specimen_body_width_millimeter absent (no GUI source yet; expected).')
-
             # --- run-specific flags ---
             if _meta_bool(f, 'protocol_guard_triggered') is True:
                 guard_deg = _meta_lookup(f, 'protocol_guard_angle_degree')

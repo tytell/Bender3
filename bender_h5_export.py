@@ -548,8 +548,6 @@ def export_primary_h5(
                     manifest[str(k)] = str(v)
             manifest_rows.append(manifest)
 
-        g_meta.attrs['n_trials'] = int(len(trial_records))
-
         # protocol_motor_positive_bend_direction / protocol_sensor_positive_bend_direction --
         # flat trial-level metadata attrs (constant within a trial; apparatus + mount choice).
         # Source: positive_motor_direction config constant ('left' or 'right').
@@ -914,14 +912,18 @@ def export_primary_h5(
                 continue
             unrouted[name] = value
         if unrouted:
-            g_un = g_meta.create_group('99_Unrouted')
-            for name, value in unrouted.items():
-                _store_metadata_canonical(g_un, name, value)
             logging.warning(
                 'export_primary_h5: %d unrouted Bender attribute(s) preserved under metadata/99_Unrouted '
                 '(add each to BENDER_ROUTING or EXCLUDED in bender_routing_spec.py): %s',
                 len(unrouted), sorted(unrouted),
             )
+        # n_steps: count of condition-block step-records; no Bender attr source.
+        # single_finite = 1 by design, segmented = N. Coincides with index_step_* count;
+        # flagged for promotion to a canonical key.
+        unrouted['n_steps'] = int(len(trial_records))
+        g_un = g_meta.create_group('99_Unrouted')
+        for name, value in unrouted.items():
+            _store_metadata_canonical(g_un, name, value)
 
         # Print surviving root-attr set for PI eyeball (D6). After M1 only schema_version
         # should remain at root; all other formerly root attrs live in metadata.
@@ -1019,7 +1021,7 @@ def export_primary_h5(
                         'export_primary_h5: derived/torque_inertia_corrected skipped: %s', _der_exc
                     )
 
-    msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_trials={len(trial_records)})'
+    msg = f'EXPORT FINISHED (schema={h5_schema_version}, test_type={test_type}, n_steps={len(trial_records)})'
     return {
         'outputfile': final_path,
         'n_trials': len(trial_records),

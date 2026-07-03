@@ -151,7 +151,6 @@ and the three per-sample stim categoricals (decision #6).
 
 | Key | Intended source | Action needed |
 |---|---|---|
-| `measurement_specimen_body_width_millimeter` | GUI | Add a widget; distinct from `xsec_width` (test-section cut width). |
 | `note_posthoc` | analysis pipeline | Populated downstream; or fed by `post_trial_notes` (decision #1). |
 | `inertial_moi_provenance` | computed | Assemble from active inertial model + `frustum_inputs`. |
 | `index_step_*` (parallel arrays) | computed | Derive `sample_start/end/type/target/...` from `trial_records` step boundaries. |
@@ -163,7 +162,7 @@ and the three per-sample stim categoricals (decision #6).
 All 8 MC decisions + the protocol value/unit naming are **confirmed**. Remaining work is
 exporter/GUI implementation, out of scope for this spec:
 
-1. `MISSING_REQUIRED` wire-ups: `measurement_specimen_body_width_millimeter` (GUI widget), `index_step_*` derivation, `inertial_moi_provenance` assembly.
+1. `MISSING_REQUIRED` wire-ups: `index_step_*` derivation, `inertial_moi_provenance` assembly.
 2. Exporter: resolve each `*_mode` attr to a spelled-out `_unit` and emit the `_input_mode` provenance sibling at write time.
 3. Exporter: apply the same value+`_unit` pattern to `index_step_*` realized values for consistency.
 4. Confirm the hardware-config provenance set should stay `EXCLUDED` (relying on the config writer) rather than being explicitly routed under `daq_`/`session_`.

@@ -505,7 +505,6 @@ measurement_specimen_inertia_frustum_density_gram_per_cubic_millimeter  float  M
                                                                 model). (Current: frustum_density_g_per_mm3; v2.7, renamed 2026-07-01)
 measurement_specimen_bodylength_millimeter                 (Current: fishlen_TL — total length)
 measurement_specimen_standardlength_millimeter            (Current: fishlen_SL — standard length)
-measurement_specimen_body_width_millimeter                ← TEST-SECTION BODY WIDTH (was missing — now written)
 measurement_specimen_body_mass_gram                       (Current: fishmass)
 measurement_clamp_separation_millimeter                   (Current: dclamp)
 measurement_clamp_offset_vertical_millimeter              (Current: dvert)
@@ -757,7 +756,7 @@ All schema-level decisions are locked. All code-side renames are complete as of 
 | E — species key         | `specimen_genusspecies`                                                                                   | **DONE** — Python attr `bender.specimen_genusspecies` renamed; `BENDER_ROUTING` source key `specimen_genusspecies`; GUI session key `gui_genus_species` intentionally kept for JSON template compat |
 
 
-- **Decision 2 — body-width timing.** Is the rig collecting fish *before* the schema rewrite ships? If yes, fix `measurement_specimen_body_width_millimeter` as a standalone commit on the current structure first.
+- **Decision 2 — body-width timing.** RESOLVED 2026-07-02: `measurement_specimen_body_width_millimeter` retired; superseded by `measurement_specimen_local_body_width_millimeter` (routed from `xsec_width`, renamed same date).
 
 ---
 

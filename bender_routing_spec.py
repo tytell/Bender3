@@ -487,6 +487,14 @@ EXCLUDED: Set[str] = {
     # trip fail-on-unmapped; listed here only to document the intentional drop.
     "units", "unit_rules",
 
+    # --- canonical-key-name aliases (if set on a Bender instance directly, the value is already
+    #     written via the mapped source attr; EXCLUDED to prevent a duplicate 99_Unrouted entry) ---
+    "session_acquisition_start",            # duplicate of: acquisition_start -> session_acquisition_start
+    "session_simulation_material",          # duplicate of: simulation_material -> session_simulation_material
+    "session_temperature_room_celsius",     # duplicate of: temp_C_room -> session_temperature_room_celsius
+    "session_temperature_tank_celsius",     # duplicate of: temp_C_tank -> session_temperature_tank_celsius
+    "measurement_bend_position_millimeter", # duplicate of: dbend -> measurement_bend_position_millimeter
+
     # NOTE: the former hardware-config provenance block (device_name, motor_port,
     # motor_gear_ratio, daq/encoder/stim wiring, sono channels, timing buffers, etc.)
     # is no longer excluded -- every config-sourced field is now routed canonically
