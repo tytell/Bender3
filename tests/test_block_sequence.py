@@ -45,6 +45,16 @@ def test_normalize_stim_sides(b):
         b._normalize_stim_sides('sequential')
 
 
+def test_normalize_stim_sides_off_quick_is_distinct(b):
+    """off_quick is its OWN canonical value; it is NEVER aliased to or merged with off."""
+    assert b._normalize_stim_sides('off_quick') == 'off_quick'
+    # Tolerant input spellings all map to the canonical off_quick, never to off.
+    assert b._normalize_stim_sides('off-quick') == 'off_quick'
+    assert b._normalize_stim_sides('off - quick') == 'off_quick'
+    assert b._normalize_stim_sides('OFF_QUICK') == 'off_quick'
+    assert b._normalize_stim_sides('off_quick') != 'off'
+
+
 def test_normalize_block_sequence_empty_is_legacy(b):
     assert b._normalize_block_sequence(None) is None
     assert b._normalize_block_sequence([]) is None
@@ -134,6 +144,47 @@ def test_route_stim_sides_volts_off_is_zero(b):
     assert np.count_nonzero(s1) == 0
     assert np.count_nonzero(s2) == 0
     assert s1.shape == t.shape and s2.shape == t.shape
+
+
+def test_route_stim_sides_volts_off_quick_is_zero(b):
+    """off_quick delivers no stimulation (all-zero S1/S2), same routing behavior as OFF."""
+    t = np.linspace(0, 0.1, 200)
+    active = (t >= 0.02) & (t < 0.08)
+    s1, s2 = b._route_stim_sides_volts(t, active, 75.0, 'off_quick', 5.0, 5.0)
+    assert np.count_nonzero(s1) == 0
+    assert np.count_nonzero(s2) == 0
+
+
+def test_validate_block_sequence_voltages_off_quick_needs_no_voltage(b):
+    """An off_quick block requires no stim voltage (like OFF)."""
+    seq_oq = [{'direction': 'left', 'stim_sides': 'off_quick'}]
+    b._validate_block_sequence_voltages(seq_oq, 0.0, 0.0)
+
+
+def test_normalize_block_sequence_with_off_quick(b):
+    """off_quick survives block-sequence normalization as a distinct value."""
+    seq = b._normalize_block_sequence([
+        {'direction': 'left', 'stim_sides': 'off_quick'},
+        {'direction': 'right', 'stim_sides': 'both'},
+    ])
+    assert seq == [
+        {'direction': 'left', 'stim_sides': 'off_quick'},
+        {'direction': 'right', 'stim_sides': 'both'},
+    ]
+
+
+def test_off_quick_uses_fixed_rest_regardless_of_general_rest(b):
+    """off_quick blocks rest a FIXED OFF_QUICK_REST_S, decoupled from the trial-wide rest."""
+    from bender_functions import OFF_QUICK_REST_S
+
+    assert OFF_QUICK_REST_S == 2.0
+    # off_quick ignores the general rest, even when it is much larger (active-step recovery).
+    assert b._effective_inter_step_rest_s('off_quick', 10.0) == OFF_QUICK_REST_S
+    assert b._effective_inter_step_rest_s('off_quick', 0.0) == OFF_QUICK_REST_S
+    # Every other stim value passes the trial-wide rest through unchanged.
+    assert b._effective_inter_step_rest_s('off', 10.0) == 10.0
+    assert b._effective_inter_step_rest_s('left', 3.5) == 3.5
+    assert b._effective_inter_step_rest_s(None, 4.0) == 4.0
 
 
 def test_preview_append_neutral_reset_skips_noop():

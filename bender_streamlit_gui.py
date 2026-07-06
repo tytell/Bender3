@@ -1722,14 +1722,22 @@ RECRUITMENT_OPTIONS = (
 BILATERAL_MIRROR_LABEL = 'Perform test on both sides (bilateral)'
 LATERAL_MODE_LABEL = 'Stim routing override (optional; experts only)'
 
+# Here "block" means a group of steps that share one configuration (bend direction + stim
+# routing), NOT a blocking/prevention operation.
 BLOCK_DIRECTION_OPTIONS = ('left', 'right')
+# Base stim-sides options shown for every stepped protocol.
 BLOCK_STIM_SIDES_OPTIONS = ('left', 'right', 'both', 'off')
+# Isovelocity (FV) only: adds 'off_quick' (no stim, recorded distinctly from 'off', fixed 2 s
+# inter-step rest). Kept FV-only so it never appears for isometric or any other test type.
+BLOCK_STIM_SIDES_OPTIONS_FV = ('left', 'right', 'both', 'off', 'off_quick')
 BLOCK_DIRECTION_LABELS = {'left': 'Bend LEFT', 'right': 'Bend RIGHT'}
+# Display-only labels; each maps to the stored canonical value on the left.
 BLOCK_STIM_SIDES_LABELS = {
     'left': 'Stim LEFT',
     'right': 'Stim RIGHT',
     'both': 'Stim BOTH',
     'off': 'Stim OFF',
+    'off_quick': 'Stim OFF - quick',
 }
 
 _BLOCK_SEQUENCE_PROCEDURE_KEYS = frozenset({
@@ -1757,8 +1765,14 @@ RESET_MAX_SPEED_HELP = (
 )
 
 
-def _seed_block_sequence_widget_state(b: Bender) -> None:
-    """Initialize block-sequence widget keys before first render."""
+def _seed_block_sequence_widget_state(b: Bender, stim_sides_options=BLOCK_STIM_SIDES_OPTIONS) -> None:
+    """Initialize block-sequence widget keys before first render.
+
+    ``stim_sides_options`` is the set of valid stored stim values for the current protocol; a
+    seeded value outside it (e.g. an off_quick value loaded while on a non-FV protocol) is
+    clamped to 'left'. Here "block" means a group of steps sharing one configuration, NOT a
+    blocking/prevention operation.
+    """
     seq = getattr(b, 'block_sequence', None)
     if not isinstance(seq, list) or not seq:
         seq = [{'direction': 'left', 'stim_sides': 'left'}]
@@ -1776,7 +1790,7 @@ def _seed_block_sequence_widget_state(b: Bender) -> None:
             st.session_state[d_sk] = d if d in BLOCK_DIRECTION_OPTIONS else 'left'
         if s_sk not in st.session_state:
             s = str(block.get('stim_sides', 'left')).lower()
-            st.session_state[s_sk] = s if s in BLOCK_STIM_SIDES_OPTIONS else 'left'
+            st.session_state[s_sk] = s if s in stim_sides_options else 'left'
     if _widget_key('left_stim_voltage') not in st.session_state:
         st.session_state[_widget_key('left_stim_voltage')] = float(
             getattr(b, 'left_stim_voltage', 5.0) or 5.0
@@ -1787,12 +1801,17 @@ def _seed_block_sequence_widget_state(b: Bender) -> None:
         )
 
 
-def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
+def _render_block_sequence_fields(b: Bender, stim_sides_options=BLOCK_STIM_SIDES_OPTIONS) -> Optional[dict]:
     """
     Render block-sequence UI; return updates dict for Apply, or None if validation fails.
     Block sequence is always active (default: one block, bend LEFT / stim LEFT).
+
+    ``stim_sides_options`` selects which stim values the per-block selector offers; the
+    isovelocity (FV) caller passes BLOCK_STIM_SIDES_OPTIONS_FV to expose 'off_quick', which
+    stays hidden for every other protocol. Here "block" means a group of steps sharing one
+    configuration, NOT a blocking/prevention operation.
     """
-    _seed_block_sequence_widget_state(b)
+    _seed_block_sequence_widget_state(b, stim_sides_options=stim_sides_options)
 
     count = int(
         st.number_input(
@@ -1815,11 +1834,20 @@ def _render_block_sequence_fields(b: Bender) -> Optional[dict]:
                 format_func=lambda x, _l=BLOCK_DIRECTION_LABELS: _l.get(x, x),
             )
         with c2:
+            _sides_help = (
+                'Which stim channels fire for this block. OFF runs the motion with no stim.'
+            )
+            if 'off_quick' in stim_sides_options:
+                _sides_help += (
+                    ' OFF - quick also delivers no stim but is recorded distinctly from OFF and '
+                    'uses a fixed 2 s rest between steps (independent of Rest between steps).'
+                )
             stim_sides = st.selectbox(
                 f'Block {i + 1} — stim sides',
-                list(BLOCK_STIM_SIDES_OPTIONS),
+                list(stim_sides_options),
                 key=_widget_key(f'block_{i}_stim_sides'),
                 format_func=lambda x, _l=BLOCK_STIM_SIDES_LABELS: _l.get(x, x),
+                help=_sides_help,
             )
         blocks.append({'direction': direction, 'stim_sides': stim_sides})
 
@@ -8347,7 +8375,10 @@ def main():
                         updates['isovelocity_stim_params'] = _render_isovelocity_stim_fields(b)
                     with st.container(border=True):
                         st.markdown('**Block sequence**')
-                        _block_up = _render_block_sequence_fields(b)
+                        # FV-only: expose 'off_quick' (no stim, fixed 2 s inter-step rest).
+                        _block_up = _render_block_sequence_fields(
+                            b, stim_sides_options=BLOCK_STIM_SIDES_OPTIONS_FV
+                        )
                         if _block_up is not None:
                             updates.update(_block_up)
 

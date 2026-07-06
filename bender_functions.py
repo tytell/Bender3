@@ -56,6 +56,14 @@ ISOVELOCITY_ANGLE_LIMIT_DEG = 45.0
 # always in sync. Import this constant; never hardcode 1.0 in either caller.
 SEGMENTED_STEP_BUFFER_S = 1.0
 
+# --- off_quick fixed inter-step rest ------------------------------------------
+# Fixed inter-step rest (seconds) used ONLY by isovelocity (FV) blocks whose stim routing is
+# 'off_quick'. It is decoupled from the trial-wide rest_between_steps_s: an off_quick block always
+# rests exactly this long between its steps, regardless of the general rest setting (which may be
+# raised for active-step recovery). Every other stim value keeps using rest_between_steps_s.
+# Named constant so the run path never hardcodes the literal.
+OFF_QUICK_REST_S = 2.0
+
 # --- DIR hold-after-step (motor reversal timing) ------------------------------
 # Number of idle AO samples after each STEP pulse during which the DIR line must keep that step's
 # direction before it may flip to the next step's direction. Flipping DIR on the very next sample
@@ -2790,10 +2798,19 @@ class Bender:
         raise ValueError(f"block direction must be 'left' or 'right', not {direction!r}.")
 
     def _normalize_stim_sides(self, stim_sides):
-        """Canonical per-block stim routing: ``left``, ``right``, ``both``, or ``off``.
+        """Canonical per-block stim routing: ``left``, ``right``, ``both``, ``off``, or ``off_quick``.
+
+        Here ``block`` means a group of steps that share one configuration (direction + stim
+        routing), NOT a blocking/prevention operation.
 
         ``off`` means the block runs the motion with no stimulation: ``_route_stim_sides_volts``
         returns all-zero S1/S2 for it regardless of the global stim-enable flag.
+
+        ``off_quick`` is a DISTINCT value (never merged with or aliased to ``off``): it also
+        delivers no stimulation, but it is recorded separately and, for the isovelocity (FV)
+        protocol only, carries a fixed inter-step rest of ``OFF_QUICK_REST_S`` (2.0 s) decoupled
+        from the trial-wide ``rest_between_steps_s``. It is FV-only and is rejected by the
+        isometric dispatch.
         """
         if stim_sides is None:
             return 'left'
@@ -2807,10 +2824,16 @@ class Bender:
             'off': 'off',
             'none': 'off',
             'no_stim': 'off',
+            # off_quick is its OWN canonical value; these aliases map to off_quick, NEVER to off.
+            'off_quick': 'off_quick',
+            'off-quick': 'off_quick',
+            'off - quick': 'off_quick',
         }
         if s in aliases:
             return aliases[s]
-        raise ValueError(f"stim_sides must be 'left', 'right', 'both', or 'off', not {stim_sides!r}.")
+        raise ValueError(
+            f"stim_sides must be 'left', 'right', 'both', 'off', or 'off_quick', not {stim_sides!r}."
+        )
 
     def _normalize_block_sequence(self, block_sequence):
         """
@@ -2848,6 +2871,17 @@ class Bender:
         if s == 'right':
             return 'right_unilateral'
         return 'bilateral_simultaneous'
+
+    def _effective_inter_step_rest_s(self, stim_sides_norm, inter_step_rest_s):
+        """Inter-step rest (seconds) for one isovelocity (FV) block, keyed on its stim value.
+
+        ``off_quick`` blocks always rest a fixed ``OFF_QUICK_REST_S`` between steps, decoupled from
+        the trial-wide ``inter_step_rest_s`` (which may be raised for active-step recovery). Every
+        other stim value keeps ``inter_step_rest_s`` unchanged, so no other timing behavior moves.
+        """
+        if stim_sides_norm == 'off_quick':
+            return float(OFF_QUICK_REST_S)
+        return float(inter_step_rest_s)
 
     def _validate_block_sequence_voltages(self, block_sequence, left_voltage, right_voltage):
         """Require finite voltages > 0 for each stim side used in any block."""
@@ -3199,9 +3233,11 @@ class Bender:
         s1 = np.zeros(n, dtype=float)
         s2 = np.zeros(n, dtype=float)
         sides = self._normalize_stim_sides(stim_sides)
-        # OFF: this block runs the motion with no stimulation on either channel,
-        # regardless of the global stim-enable flag.
-        if sides == 'off':
+        # OFF / OFF_QUICK: this block runs the motion with no stimulation on either channel,
+        # regardless of the global stim-enable flag. off_quick is kept as a DISTINCT recorded
+        # value (see _normalize_stim_sides); only its inter-step rest differs, handled in
+        # _run_isovelocity_steps, not here.
+        if sides in ('off', 'off_quick'):
             return s1, s2
         active = np.asarray(active_mask, dtype=bool).reshape(-1)
         if not np.any(active):
@@ -3528,6 +3564,9 @@ class Bender:
 
     def _tag_block_trial_metadata(self, entry, *, block_index, block_direction, block_stim_sides,
                                   left_stim_voltage, right_stim_voltage):
+        # "block" here = a group of steps that share one configuration (direction + stim routing),
+        # NOT a blocking/prevention operation. block_stim_sides is stored verbatim as its canonical
+        # value (left/right/both/off/off_quick); off_quick is recorded distinctly, never as off.
         entry['block_index'] = int(block_index)
         entry['block_direction'] = str(block_direction)
         entry['block_stim_sides'] = str(block_stim_sides)
@@ -4289,6 +4328,12 @@ class Bender:
         block_seq = self._normalize_block_sequence(
             sp.get('block_sequence', getattr(self, 'block_sequence', None))
         )
+        # off_quick is an isovelocity (FV) only stim value; reject it here so API/template use
+        # cannot smuggle it into the isometric (FL) protocol (the GUI already hides it for FL).
+        if block_seq and any(b.get('stim_sides') == 'off_quick' for b in block_seq):
+            raise ValueError(
+                "stim_sides 'off_quick' is only valid for the isovelocity (FV) protocol, not isometric."
+            )
         rec = self._normalize_recruitment(
             sp.get('recruitment', sp.get('lateral_mode', getattr(self, 'recruitment', 'bilateral_simultaneous')))
         )
@@ -4754,6 +4799,12 @@ class Bender:
         gap_s = float(inter_step_interval_s)
         if not np.isfinite(gap_s) or gap_s < 0:
             raise ValueError(f"inter_step_interval_s must be finite and >= 0; got {inter_step_interval_s!r}.")
+        # off_quick carries its OWN fixed inter-step rest, decoupled from the trial-wide value: an
+        # off_quick block always rests OFF_QUICK_REST_S between its steps regardless of the general
+        # rest_between_steps_s. Every other stim value keeps using gap_s unchanged. This only
+        # changes the duration of the existing unrecorded inter-step pause; acquisition timing is
+        # untouched. sides_norm is None on the non-block path, so this never triggers there.
+        effective_gap_s = self._effective_inter_step_rest_s(sides_norm, gap_s)
         # Segmented protocols always reset to home and stay energized between steps, regardless of
         # the (now-vestigial) reset_between_steps / hold_motor_between_steps inputs: the neutral
         # reset re-anchors the open-loop motor to 0 deg before each step and the hold keeps it
@@ -4764,9 +4815,9 @@ class Bender:
         prev_wall_clock_end = None
 
         for i in range(n):
-            if i > 0 and gap_s > 0:
+            if i > 0 and effective_gap_s > 0:
                 # Hold the motor at its current position and rest before the next velocity step.
-                time.sleep(gap_s)
+                time.sleep(effective_gap_s)
             if i > 0 and reset_steps:
                 # Reset to resting length: drive the motor back to 0° from the previous step's
                 # end angle and wait for the move to complete before the next step. The reset ramp
@@ -4983,8 +5034,10 @@ class Bender:
         self.daq_collection_type = 'segmented'
         self.protocol_sampling_mode = 'segmented_finite'
         # test_type routed from self.test_type; session_step_count written as a canonical metadata attr by the exporter.
+        # Record the EFFECTIVE inter-step rest actually used (off_quick blocks use the fixed
+        # OFF_QUICK_REST_S; all other stim values use the trial-wide gap_s).
         self.h5_protocol_metadata.update({
-            'rest_between_steps_s': float(gap_s),
+            'rest_between_steps_s': float(effective_gap_s),
             'reset_between_steps': bool(reset_steps),
             'hold_motor_between_steps': bool(getattr(self, 'hold_motor_between_steps', True)),
             'pulse_width_ms': float(getattr(self, 'pulse_width_ms', 2.0)) if bool(is_stim) else None,

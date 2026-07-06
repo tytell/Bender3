@@ -612,7 +612,11 @@ def export_primary_h5(
             ('velocity_seg1_deg_s',              'index_step_velocity_seg1_degree_per_second',     'float'),
             ('velocity_seg2_deg_s',              'index_step_velocity_seg2_degree_per_second',     'float'),
             # Block metadata: absent when use_block_stim=False; block_index is 0-based in entry
-            # dict -> written 1-based here per schema convention.
+            # dict -> written 1-based here per schema convention. "block" = a group of steps sharing
+            # one configuration (direction + stim routing), NOT a blocking/prevention operation.
+            # block_stim_sides is a canonical string (left/right/both/off/off_quick); off_quick is
+            # stored distinctly from off. Written with auto-width 'S' dtype, so long values are not
+            # truncated.
             ('block_index',                      'index_step_block_number',                        'int_1based'),
             ('block_direction',                  'index_step_block_direction',                     'str'),
             ('block_stim_sides',                 'index_step_block_stim_sides',                    'str'),
