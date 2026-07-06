@@ -22,6 +22,7 @@ import ntpath
 import os
 import posixpath
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -92,6 +93,43 @@ def _img_data_uri(path: str) -> str:
     b64 = base64.b64encode(raw).decode('ascii')
     mime = 'image/svg+xml' if ext == '.svg' else 'image/png'
     return f'data:{mime};base64,{b64}'
+
+
+def _format_version_date(dt: datetime) -> str:
+    # Cross-platform day-of-month without leading zero ('%-d' is not supported by
+    # Windows' strftime, and this label is displayed on the Windows rig GUI).
+    return f'{dt.strftime("%b")} {dt.day}, {dt.year}'
+
+
+@st.cache_resource
+def _get_app_version_label() -> str:
+    """Last commit date/hash for the running checkout, for display only.
+
+    Reflects whatever commit is currently checked out on disk (i.e. the last
+    successful `git pull`), not the remote HEAD. Cached for the lifetime of the
+    server process since it can only change on restart (a running server keeps
+    running old code even after a pull). Never raises -- any failure (git
+    missing, not a repo, shallow clone, timeout) degrades to a file-mtime
+    fallback, then to an empty string, so the badge simply omits itself.
+    """
+    try:
+        result = subprocess.run(
+            ['git', '-C', _ROOT, 'log', '-1', '--format=%cI|%h'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            iso_date, short_hash = result.stdout.strip().split('|', 1)
+            dt = datetime.fromisoformat(iso_date)
+            return f'Last updated {_format_version_date(dt)} ({short_hash})'
+    except Exception:
+        pass
+    try:
+        dt = datetime.fromtimestamp(os.path.getmtime(__file__))
+        return f'Last updated {_format_version_date(dt)} (file date)'
+    except Exception:
+        return ''
 
 
 from bender_json_persistent import JsonPersistTypeError, to_json_persistent  # noqa: E402
@@ -5147,6 +5185,13 @@ def _render_landing_page() -> None:
         st.caption('The sidebar is hidden on this page. Adjust theme and text size here; they apply after you open a workflow.')
         _render_display_preferences_sidebar()
 
+    version_label = _get_app_version_label()
+    if version_label:
+        st.markdown(
+            f'<p class="bnd-landing-version-tag">{version_label}</p>',
+            unsafe_allow_html=True,
+        )
+
     # Landing-only overrides (this function runs only on the home route). Selectors use
     # :is(#root, body:has(.bnd-landing-page)) because some Streamlit builds have no #root id.
     # st.html keeps <style> in the live document (markdown path can drop or scope styles).
@@ -5211,6 +5256,12 @@ def _render_landing_page() -> None:
     color: #334155;
 }
 :is(#root, body:has(.bnd-landing-page)) .bnd-eom-note { margin: 0; font-size: 0.92rem; line-height: 1.5; color: #64748b; }
+:is(#root, body:has(.bnd-landing-page)) .bnd-landing-version-tag {
+    text-align: center;
+    font-size: 0.85rem;
+    color: #64748b;
+    margin: 1rem 0 0 0;
+}
 :is(#root, body:has(.bnd-landing-page)) .bnd-landing-section-sub.bnd-landing-what-section-sub { margin-bottom: 1.15rem !important; }
 :is(#root, body:has(.bnd-landing-page)) .bnd-landing-section-title {
     text-align: center !important;
