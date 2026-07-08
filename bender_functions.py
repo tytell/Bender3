@@ -6152,3 +6152,382 @@ class Bender:
                 
         # Store it for the H5 saver
         self.cycle_index_history = cycle_tag
+
+
+# ============================================================================
+# Apparatus inertia calibration: fit I_apparatus(aor, width) from empty runs
+# ============================================================================
+# Offline utility (module-level, no Bender instance needed). Reads a set of
+# empty-apparatus calibration H5 files, extracts a per-trial empirical moment of
+# inertia from the torque-vs-angular-acceleration slope, fits I(aor, width) with
+# leave-one-out cross-validation over several candidate forms, and serializes a
+# versioned JSON artifact. Consumed at run time by the correction path (which
+# reads the artifact and evaluates I for the session's aor/width).
+#
+# Units (science-critical, kept explicit here, never folded into coefficients):
+#   - zTorque is N*m (ATI FT56491.cal TorqueUnits=N-m).
+#   - alpha is converted deg/s^2 -> rad/s^2 with (pi/180).
+#   - per-trial slope M[N*m] vs alpha[rad/s^2] is I in kg*m^2; *1e9 -> g*mm^2.
+#   - the JSON coefficients are in g*mm^2 (and g*mm^2 per mm / per mm^2).
+
+APPARATUS_INERTIA_FIT_SCHEMA = 'bender_apparatus_inertia_fit_v1'
+
+# Candidate fit forms. All treat aor as the parallel-axis (squared) term; width
+# is at most a secondary correction (physics: widening the clamp separates mass
+# at the SAME distance from the axis of rotation, so it should barely change I).
+_APPARATUS_FIT_FORMS = {
+    'F1': 'I_gram_millimeter_squared = a + b*aor_millimeter**2',
+    'F2': 'I_gram_millimeter_squared = a + b*aor_millimeter + c*aor_millimeter**2',
+    'F3': 'I_gram_millimeter_squared = a + b*aor_millimeter**2 + c*width_millimeter',
+    'F4': 'I_gram_millimeter_squared = a + b*aor_millimeter**2 + c*width_millimeter**2',
+}
+_APPARATUS_FIT_TERMS = {'F1': ('a', 'b'), 'F2': ('a', 'b', 'c'),
+                        'F3': ('a', 'b', 'c'), 'F4': ('a', 'b', 'c')}
+
+
+def _apparatus_fit_design_row(form_id, aor_mm, width_mm):
+    """Design-matrix row for one (aor, width) point under ``form_id``. ASCII-only."""
+    a = float(aor_mm)
+    w = float(width_mm)
+    if form_id == 'F1':
+        return [1.0, a * a]
+    if form_id == 'F2':
+        return [1.0, a, a * a]
+    if form_id == 'F3':
+        return [1.0, a * a, w]
+    if form_id == 'F4':
+        return [1.0, a * a, w * w]
+    raise ValueError('Unknown apparatus fit form: ' + str(form_id))
+
+
+def _apparatus_zTorque_row_index(f):
+    """Row index of zTorque in derived/forcetorque_calibrated, by NAME.
+
+    Name lookup in metadata/daq_forcetorque_channel_names is the robust, future-
+    proof path (survives channel reordering). Falls back to the fixed ATI order
+    (Fx,Fy,Fz,Tx,Ty,Tz -> zTorque=5) only if the name list is absent.
+    """
+    try:
+        names = [x.decode() if isinstance(x, bytes) else str(x)
+                 for x in f['metadata']['daq_forcetorque_channel_names'][:]]
+        if 'zTorque' in names:
+            return names.index('zTorque')
+    except Exception:
+        pass
+    return 5  # ATI fixed order fallback
+
+
+def extract_apparatus_inertia_trial(h5_path, *, aor_override=None):
+    """Extract per-trial empirical MOI from one empty-apparatus calibration H5.
+
+    alpha default: timeseries/angle_measured_degree differentiated TWICE w.r.t.
+    time -> deg/s^2 -> rad/s^2. Fallback: angular_velocity_commanded_degree_per_second
+    differentiated ONCE, used only when measured angle is missing / all-zero / all-NaN.
+
+    M_raw: derived/forcetorque_calibrated row for zTorque (name lookup).
+
+    Returns a dict; raises ValueError with an actionable message if the file
+    lacks the required datasets or aor cannot be resolved.
+    """
+    base = os.path.basename(str(h5_path))
+    with h5py.File(h5_path, 'r') as f:
+        if 'derived' not in f or 'forcetorque_calibrated' not in f['derived']:
+            raise ValueError(
+                base + ': no derived/forcetorque_calibrated (uncalibrated file; '
+                'no real ATI matrix was embedded). Cannot extract torque.'
+            )
+        meta = f['metadata'].attrs
+        width_mm = float(meta.get('calibration_inertia_apparatus_plate_to_plate_millimeter', float('nan')))
+        aor_meta = float(meta.get('calibration_inertia_apparatus_aor_to_clamp_millimeter', float('nan')))
+        aor_mm = aor_meta
+        aor_source = 'metadata'
+        if not np.isfinite(aor_mm):
+            if aor_override is not None and np.isfinite(float(aor_override)):
+                aor_mm = float(aor_override)
+                aor_source = 'override'
+            else:
+                raise ValueError(
+                    base + ': calibration_inertia_apparatus_aor_to_clamp_millimeter is '
+                    'NaN and no aor_override supplied. aor is required to fit I(aor,width).'
+                )
+        if not np.isfinite(width_mm):
+            raise ValueError(base + ': calibration_inertia_apparatus_plate_to_plate_millimeter is NaN.')
+
+        rate = float(meta.get('daq_ai_sample_rate_hertz', 1000.0) or 1000.0)
+        ts = f['timeseries']
+        t = np.asarray(ts['time_second'][:], dtype=float) if 'time_second' in ts else np.array([])
+        dt = float(np.median(np.diff(t))) if t.size > 1 else 1.0 / rate
+
+        ang = np.asarray(ts['angle_measured_degree'][:], dtype=float) if 'angle_measured_degree' in ts else np.array([])
+        measured_ok = ang.size > 0 and np.any(np.isfinite(ang)) and (np.nanmax(ang) - np.nanmin(ang) > 0)
+        if measured_ok:
+            vel = np.gradient(ang, dt)
+            alpha = np.gradient(vel, dt) * (np.pi / 180.0)  # deg/s^2 -> rad/s^2
+            alpha_source = 'measured_angle_double_diff'
+        else:
+            avc = (np.asarray(ts['angular_velocity_commanded_degree_per_second'][:], dtype=float)
+                   if 'angular_velocity_commanded_degree_per_second' in ts else np.array([]))
+            if avc.size == 0:
+                raise ValueError(base + ': neither usable measured angle nor commanded velocity present.')
+            alpha = np.gradient(avc, dt) * (np.pi / 180.0)  # deg/s^2 -> rad/s^2
+            alpha_source = 'commanded_velocity_single_diff'
+
+        z_row = _apparatus_zTorque_row_index(f)
+        Mz = np.asarray(f['derived']['forcetorque_calibrated'][z_row, :], dtype=float)  # N*m
+
+    n = min(alpha.size, Mz.size)
+    alpha = alpha[:n]
+    Mz = Mz[:n]
+    mask = np.isfinite(alpha) & np.isfinite(Mz)
+    if np.count_nonzero(mask) < 3:
+        raise ValueError(base + ': fewer than 3 finite (alpha, torque) samples.')
+    a = alpha[mask]
+    y = Mz[mask]
+    design = np.column_stack([a, np.ones_like(a)])
+    coef, _, _, _ = np.linalg.lstsq(design, y, rcond=None)
+    slope_kg_m2 = float(coef[0])  # N*m / (rad/s^2) = kg*m^2
+    pred = design @ coef
+    denom = float(np.sum((y - y.mean()) ** 2))
+    r2 = float(1.0 - np.sum((y - pred) ** 2) / denom) if denom > 0 else 0.0
+    i_gmm2 = abs(slope_kg_m2) * 1e9  # physical MOI magnitude; sign handled separately
+    alpha_rms = float(np.sqrt(np.mean(a ** 2)))
+    return {
+        'file': base,
+        'aor_millimeter': float(aor_mm),
+        'aor_source': aor_source,
+        'width_millimeter': float(width_mm),
+        'i_gram_millimeter_squared': float(i_gmm2),
+        'slope_kg_m2_signed': slope_kg_m2,
+        'sign_negative': bool(slope_kg_m2 < 0),
+        'r2': r2,
+        'alpha_source': alpha_source,
+        'alpha_rms_rad_s2': alpha_rms,
+        'n_samples': int(np.count_nonzero(mask)),
+    }
+
+
+def _loo_residuals(X, y):
+    """Leave-one-out residuals for an ordinary least-squares linear model."""
+    n = len(y)
+    resid = np.zeros(n, dtype=float)
+    for i in range(n):
+        idx = [j for j in range(n) if j != i]
+        c, _, _, _ = np.linalg.lstsq(X[idx], y[idx], rcond=None)
+        resid[i] = y[i] - X[i] @ c
+    return resid
+
+
+def fit_apparatus_inertia_calibration(
+    trial_h5_paths,
+    *,
+    aor_overrides=None,
+    exclude_files=None,
+    r2_min=0.05,
+    mad_k=2.0,
+    output_json_path=None,
+):
+    """Fit I_apparatus(aor, width) from empty-apparatus calibration H5 files.
+
+    Parameters
+    ----------
+    trial_h5_paths : list[str]
+        Paths to empty-apparatus calibration H5 files (one run each).
+    aor_overrides : dict[str, float] | None
+        Optional {basename: aor_millimeter} used only when a file's
+        calibration_inertia_apparatus_aor_to_clamp_millimeter is NaN. Once the
+        aor-routing fix lands and calibration runs record aor, this is unneeded.
+    exclude_files : set[str] | None
+        Basenames to drop from the FIT (still reported). Use for confirmed bad
+        trials (e.g. a run whose torque-vs-alpha fit failed).
+    r2_min : float
+        Per-trial slope R^2 floor; below this the trial is flagged as a bad-fit
+        outlier (reported, not silently dropped).
+    mad_k : float
+        A trial with |LOO residual| > mad_k * MAD is flagged as an outlier.
+    output_json_path : str | None
+        If given, the artifact is written there as JSON.
+
+    Returns
+    -------
+    dict
+        The versioned artifact (see APPARATUS_INERTIA_FIT_SCHEMA). Contains a
+        'blocked' key set to a reason string when a form cannot be selected;
+        callers must check it rather than assume a fit exists.
+    """
+    exclude_files = set(exclude_files or [])
+    overrides = dict(aor_overrides or {})
+
+    trials = []
+    extraction_errors = []
+    for p in trial_h5_paths:
+        base = os.path.basename(str(p))
+        try:
+            trials.append(extract_apparatus_inertia_trial(p, aor_override=overrides.get(base)))
+        except Exception as exc:  # noqa: BLE001 -- report, do not abort the batch
+            extraction_errors.append({'file': base, 'error': str(exc)})
+
+    fit_trials = [t for t in trials if t['file'] not in exclude_files]
+    bad_fit = [t['file'] for t in fit_trials if t['r2'] < r2_min]
+
+    build_date = datetime.now().isoformat()
+    source_files = [os.path.basename(str(p)) for p in trial_h5_paths]
+
+    if len(fit_trials) < 4:
+        return {
+            'schema': APPARATUS_INERTIA_FIT_SCHEMA,
+            'build_date': build_date,
+            'blocked': (
+                'Not enough usable trials to fit (need >= 4, have '
+                + str(len(fit_trials)) + '). Extraction errors: '
+                + str(extraction_errors)
+            ),
+            'source_files': source_files,
+            'extraction_errors': extraction_errors,
+            'trials': trials,
+        }
+
+    aor = np.array([t['aor_millimeter'] for t in fit_trials], dtype=float)
+    width = np.array([t['width_millimeter'] for t in fit_trials], dtype=float)
+    I = np.array([t['i_gram_millimeter_squared'] for t in fit_trials], dtype=float)
+
+    # Reference alpha to express the LOO-RMSE (a g*mm^2 quantity) as a torque
+    # (N*m): representative RMS |alpha| across the calibration set.
+    alpha_ref = float(np.median([t['alpha_rms_rad_s2'] for t in fit_trials]))
+    domain = {
+        'aor_millimeter': [float(aor.min()), float(aor.max())],
+        'width_millimeter': [float(width.min()), float(width.max())],
+    }
+    # Grid used to check physical positivity of a candidate over the valid domain.
+    grid = [(a, w) for a in np.linspace(aor.min(), aor.max(), 4)
+            for w in np.linspace(width.min(), width.max(), 4)]
+
+    candidates = {}
+    for form_id in ('F1', 'F2', 'F3', 'F4'):
+        X = np.array([_apparatus_fit_design_row(form_id, a, w) for a, w in zip(aor, width)], dtype=float)
+        if X.shape[0] <= X.shape[1]:
+            continue  # not enough points to fit + cross-validate this form
+        coef, _, _, _ = np.linalg.lstsq(X, I, rcond=None)
+        pred = X @ coef
+        denom = float(np.sum((I - I.mean()) ** 2))
+        r2 = float(1.0 - np.sum((I - pred) ** 2) / denom) if denom > 0 else 0.0
+        loo = _loo_residuals(X, I)
+        loo_rmse_gmm2 = float(np.sqrt(np.mean(loo ** 2)))
+        min_pred = min(float(np.array(_apparatus_fit_design_row(form_id, a, w)) @ coef) for a, w in grid)
+        candidates[form_id] = {
+            'coefficients': {name: float(v) for name, v in zip(_APPARATUS_FIT_TERMS[form_id], coef)},
+            'r2': r2,
+            'loo_cv_rmse_gram_millimeter_squared': loo_rmse_gmm2,
+            'loo_cv_rmse_newton_meter': loo_rmse_gmm2 * 1e-9 * alpha_ref,
+            'min_predicted_i_over_domain': min_pred,
+            'physically_valid': bool(min_pred > 0.0),
+        }
+
+    # Selection: among physically-valid forms, lowest LOO-RMSE; prefer the
+    # simpler form when two are within 5% of each other (parsimony).
+    valid = {k: v for k, v in candidates.items() if v['physically_valid']}
+    selected = None
+    if valid:
+        order = sorted(valid.items(), key=lambda kv: kv[1]['loo_cv_rmse_gram_millimeter_squared'])
+        best_id, best = order[0]
+        # Parsimony: F1 (2 params) preferred over any 3-param form within 5%.
+        if 'F1' in valid and best_id != 'F1':
+            if valid['F1']['loo_cv_rmse_gram_millimeter_squared'] <= 1.05 * best['loo_cv_rmse_gram_millimeter_squared']:
+                best_id, best = 'F1', valid['F1']
+        selected = best_id
+
+    # Outlier flags relative to the SELECTED form's LOO residuals.
+    outliers = [{'file': t['file'], 'reason': 'r2_below_' + str(r2_min)} for t in fit_trials if t['r2'] < r2_min]
+    if selected is not None:
+        Xsel = np.array([_apparatus_fit_design_row(selected, a, w) for a, w in zip(aor, width)], dtype=float)
+        loo = _loo_residuals(Xsel, I)
+        med = float(np.median(loo))
+        mad = float(np.median(np.abs(loo - med)))
+        if mad > 0:
+            for t, r in zip(fit_trials, loo):
+                if abs(r) > mad_k * mad:
+                    outliers.append({
+                        'file': t['file'],
+                        'reason': 'loo_residual_' + str(round(abs(r) / mad, 1)) + 'x_mad',
+                        'loo_residual_gram_millimeter_squared': float(r),
+                    })
+
+    n_neg = sum(1 for t in fit_trials if t['sign_negative'])
+    if n_neg == len(fit_trials):
+        sign_note = ('ALL trials had negative torque-vs-alpha slope: the encoder-angle '
+                     'acceleration is anti-correlated with +zTorque. The stored I is the '
+                     'magnitude; the correction sign MUST be verified on the rig (a correct '
+                     'correction reduces acceleration-correlated ripple).')
+    elif n_neg == 0:
+        sign_note = 'All trials had positive slope; sign convention consistent with +zTorque.'
+    else:
+        sign_note = ('MIXED slope signs across trials (' + str(n_neg) + '/' + str(len(fit_trials))
+                     + ' negative): sign convention is not consistent. Investigate before trusting.')
+
+    artifact = {
+        'schema': APPARATUS_INERTIA_FIT_SCHEMA,
+        'build_date': build_date,
+        'source_files': source_files,
+        'excluded_files': sorted(exclude_files),
+        'n_trials_fit': len(fit_trials),
+        'alpha_source_default': 'measured_angle_double_diff',
+        'alpha_reference_rms_rad_s2': alpha_ref,
+        'fit_form': (_APPARATUS_FIT_FORMS[selected] if selected else ''),
+        'fit_form_id': selected or '',
+        'fit_coefficients': (candidates[selected]['coefficients'] if selected else {}),
+        'loo_cv_rmse_newton_meter': (candidates[selected]['loo_cv_rmse_newton_meter'] if selected else float('nan')),
+        'loo_cv_rmse_gram_millimeter_squared': (
+            candidates[selected]['loo_cv_rmse_gram_millimeter_squared'] if selected else float('nan')),
+        'valid_domain': domain,
+        'sign_convention_note': sign_note,
+        'candidate_forms': candidates,
+        'outliers': outliers,
+        'bad_fit_files': bad_fit,
+        'extraction_errors': extraction_errors,
+        'trials': trials,
+    }
+    if selected is None:
+        artifact['blocked'] = (
+            'No physically-valid fit form (every candidate predicts a non-positive I '
+            'somewhere in the valid domain). Refusing to select a form; check aor values, '
+            'sign convention, and outliers.'
+        )
+
+    if output_json_path is not None:
+        with open(output_json_path, 'w') as fh:
+            json.dump(artifact, fh, indent=2)
+
+    return artifact
+
+
+def load_apparatus_inertia_fit(json_path):
+    """Load + validate an apparatus-inertia fit artifact from JSON.
+
+    Raises ValueError if the file is not a recognized, usable artifact.
+    """
+    with open(json_path, 'r') as fh:
+        art = json.load(fh)
+    if not isinstance(art, dict) or art.get('schema') != APPARATUS_INERTIA_FIT_SCHEMA:
+        raise ValueError('Not a ' + APPARATUS_INERTIA_FIT_SCHEMA + ' artifact: ' + str(json_path))
+    if art.get('blocked'):
+        raise ValueError('Artifact is blocked (no usable fit): ' + str(art['blocked']))
+    if not art.get('fit_form_id') or not art.get('fit_coefficients'):
+        raise ValueError('Artifact has no selected fit form/coefficients.')
+    return art
+
+
+def apparatus_inertia_from_fit(artifact, aor_mm, width_mm):
+    """Evaluate apparatus MOI (g*mm^2) for one (aor, width) from a fit artifact.
+
+    Returns ``(i_gram_millimeter_squared, in_domain)``. ``in_domain`` is False when
+    (aor, width) falls outside the artifact's valid_domain; callers must warn and
+    must NOT silently trust an extrapolated value.
+    """
+    form_id = artifact['fit_form_id']
+    coef = [artifact['fit_coefficients'][name] for name in _APPARATUS_FIT_TERMS[form_id]]
+    row = _apparatus_fit_design_row(form_id, aor_mm, width_mm)
+    i_gmm2 = float(np.dot(row, coef))
+    dom = artifact.get('valid_domain', {})
+    a_lo, a_hi = dom.get('aor_millimeter', [float('-inf'), float('inf')])
+    w_lo, w_hi = dom.get('width_millimeter', [float('-inf'), float('inf')])
+    in_domain = bool(a_lo <= float(aor_mm) <= a_hi and w_lo <= float(width_mm) <= w_hi)
+    return i_gmm2, in_domain
