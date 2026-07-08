@@ -1228,14 +1228,56 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
             row=1, col=1, secondary_y=True,
         )
 
-    # RAW primary torque only. The inertial correction is applied post-hoc in R (empirical
-    # apparatus inertia from an empty calibration run; analytic specimen inertia from geometry),
-    # so the QC figure does not draw a "corrected" trace or an inertial-torque overlay.
+    # RAW primary torque is the source of truth and is always drawn. The authoritative inertial
+    # correction still runs post-hoc in R (empirical apparatus inertia from an empty calibration
+    # run; analytic specimen inertia from geometry); raw torque is stored raw. When an
+    # apparatus-inertia fit is loaded on the bender we ALSO draw a dotted "inertia-corrected"
+    # overlay below -- a QC PREVIEW only, so the operator can eyeball whether the correction
+    # flattens acceleration-correlated ripple. It never replaces the raw trace or the stored data.
     if t.size > 0 and primary_raw.size == t.size:
         fig.add_trace(
             go.Scatter(x=t, y=primary_raw, mode='lines', name=f'{axis_norm} raw', line=dict(color='firebrick')),
             row=2, col=1,
         )
+        _art = getattr(bender, 'apparatus_inertia_calibration', None)
+        if isinstance(_art, dict) and _art.get('fit_form_id') and angle_meas.size == t.size:
+            try:
+                from bender_functions import compute_apparatus_inertia_correction
+                # Mirror the exporter's aor/width sourcing so the QC overlay uses the SAME clamp
+                # geometry the file records (aor: specimen_profile_clamp_offset_mm, else frustum
+                # clamp_offset_mm; width: clamp_plate_extension_mm).
+                _aor = float(getattr(bender, 'specimen_profile_clamp_offset_mm', 0.0) or 0.0)
+                if not (_aor > 0):
+                    _fin = getattr(bender, 'frustum_inputs', None)
+                    if isinstance(_fin, dict):
+                        _aor = float(_fin.get('clamp_offset_mm', 0.0) or 0.0)
+                _width = float(getattr(bender, 'clamp_plate_extension_mm', 0.0) or 0.0)
+                _spec_moi = (bender._specimen_moi_for_inertial_torque()
+                             if hasattr(bender, '_specimen_moi_for_inertial_torque') else 0.0)
+                _corr = compute_apparatus_inertia_correction(
+                    t, primary_raw, angle_meas, _art,
+                    aor_millimeter=_aor, width_millimeter=_width,
+                    specimen_moi_gram_millimeter_squared=_spec_moi,
+                )
+                _yc = np.asarray(_corr.get('corrected_newton_meter', []))
+                if _corr.get('applied') and _yc.size == t.size:
+                    fig.add_trace(
+                        go.Scatter(x=t, y=_yc, mode='lines',
+                                   name=f'{axis_norm} inertia-corrected (QC preview)',
+                                   line=dict(color='seagreen', dash='dot')),
+                        row=2, col=1,
+                    )
+                    # Surface an annotation only when something is off (out-of-domain or the
+                    # correction failed to reduce variance) so the operator does not over-trust it.
+                    if (not _corr.get('in_domain')) or (not _corr.get('variance_reduced')):
+                        fig.add_annotation(
+                            text='inertia-corrected: ' + str(_corr.get('note', '')),
+                            xref='x domain', yref='y domain', x=0.0, y=1.0,
+                            row=2, col=1, showarrow=False, xanchor='left', yanchor='bottom',
+                            font=dict(size=10, color='seagreen'), align='left',
+                        )
+            except Exception:  # noqa: BLE001 -- QC overlay is best-effort; never break the figure
+                pass
 
     if t.size > 0 and off1.size == t.size:
         fig.add_trace(

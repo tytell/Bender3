@@ -6522,6 +6522,15 @@ def fit_apparatus_inertia_calibration(
     else:
         aor_provenance = 'mixed'
 
+    # Correction sign carried forward from calibration. I is stored as a positive magnitude
+    # (abs slope), so the sign of the apparatus reaction torque in the sensor frame is lost.
+    # The empty-apparatus relationship is M_raw ~= slope*alpha; removing that contribution is
+    # M_corrected = M_raw - slope_sign*I*alpha. With the rig's observed negative slope,
+    # slope_sign = -1 and the correction becomes M_raw + I*alpha -- which is what REDUCES the
+    # acceleration-correlated ripple. Use the median signed slope (robust to one flipped trial).
+    _median_signed_slope = float(np.median([t['slope_kg_m2_signed'] for t in fit_trials]))
+    correction_slope_sign = -1 if _median_signed_slope < 0 else 1
+
     artifact = {
         'schema': APPARATUS_INERTIA_FIT_SCHEMA,
         'build_date': build_date,
@@ -6531,6 +6540,7 @@ def fit_apparatus_inertia_calibration(
         'alpha_source_default': 'measured_angle_double_diff',
         'alpha_reference_rms_rad_s2': alpha_ref,
         'aor_provenance': aor_provenance,
+        'correction_slope_sign': correction_slope_sign,
         'fit_form': (_APPARATUS_FIT_FORMS[selected] if selected else ''),
         'fit_form_id': selected or '',
         'fit_coefficients': (candidates[selected]['coefficients'] if selected else {}),
@@ -6592,3 +6602,141 @@ def apparatus_inertia_from_fit(artifact, aor_mm, width_mm):
     w_lo, w_hi = dom.get('width_millimeter', [float('-inf'), float('inf')])
     in_domain = bool(a_lo <= float(aor_mm) <= a_hi and w_lo <= float(width_mm) <= w_hi)
     return i_gmm2, in_domain
+
+
+def compute_apparatus_inertia_correction(
+    time_second,
+    torque_raw_newton_meter,
+    angle_measured_degree,
+    artifact,
+    *,
+    aor_millimeter,
+    width_millimeter,
+    specimen_moi_gram_millimeter_squared=0.0,
+):
+    """Inertia-corrected torque trace for the QC overlay (VISUALIZATION ONLY).
+
+    The authoritative inertial correction is done post-hoc in R; the raw torque is always
+    stored raw. This reproduces that correction on-the-fly so the operator can see, in the QC
+    figure, whether removing ``(I_apparatus + I_specimen)*alpha`` flattens the
+    acceleration-correlated ripple.
+
+    Model
+    -----
+    ``alpha(t)`` is the angular acceleration in rad/s^2 from a double ``np.gradient`` of the
+    MEASURED angle (same channel and method as ``extract_apparatus_inertia_trial``, which the
+    calibration was fit on). ``M_corrected = M_raw - sign*(I_app + I_spec)*alpha`` with the MOIs
+    in kg*m^2 (g*mm^2 x 1e-9). ``sign`` is the empty-apparatus calibration slope sign carried in
+    the artifact as ``correction_slope_sign``: with the rig's observed negative slope it is -1,
+    so the correction is effectively ``M_raw + I*alpha`` -- the orientation that REMOVES (does
+    not double) the ripple even though ``I`` is stored as a positive magnitude. If the artifact
+    predates that field, the orientation that MINIMIZES the corrected-signal variance is chosen
+    and flagged via ``sign_source``.
+
+    Parameters
+    ----------
+    time_second : array-like
+        Time base (s) for the trace. Non-uniform spacing is handled via the median dt.
+    torque_raw_newton_meter : array-like
+        Raw primary-axis torque (N*m).
+    angle_measured_degree : array-like
+        Measured angle (deg); differentiated twice for alpha.
+    artifact : dict
+        A loaded apparatus-inertia fit artifact (see ``fit_apparatus_inertia_calibration``).
+    aor_millimeter, width_millimeter : float
+        This run's clamp geometry, used to evaluate I_apparatus from the fit.
+    specimen_moi_gram_millimeter_squared : float
+        Specimen-only MOI (g*mm^2); 0 when no specimen-geometry model is active.
+
+    Returns
+    -------
+    dict
+        ``corrected_newton_meter`` (np.ndarray), ``alpha_radian_second_squared`` (np.ndarray),
+        ``i_apparatus_gram_millimeter_squared`` (float), ``i_specimen_gram_millimeter_squared``
+        (float), ``i_total_kg_meter_squared`` (float), ``slope_sign`` (int applied),
+        ``sign_source`` ('artifact' | 'variance_min'), ``in_domain`` (bool),
+        ``variance_reduced`` (bool), ``applied`` (bool), and ``note`` (str for the overlay).
+        When inputs are too short/absent the raw trace is returned unchanged with ``applied`` False.
+    """
+    t = np.asarray(time_second, dtype=float).reshape(-1)
+    M = np.asarray(torque_raw_newton_meter, dtype=float).reshape(-1)
+    ang = np.asarray(angle_measured_degree, dtype=float).reshape(-1)
+
+    i_app_gmm2, in_domain = apparatus_inertia_from_fit(artifact, aor_millimeter, width_millimeter)
+    i_spec_gmm2 = float(specimen_moi_gram_millimeter_squared or 0.0)
+    i_total_kg_m2 = (float(i_app_gmm2) + i_spec_gmm2) * 1e-9
+
+    n = min(t.size, M.size, ang.size)
+    empty = {
+        'corrected_newton_meter': M.copy(),
+        'alpha_radian_second_squared': np.zeros_like(M),
+        'i_apparatus_gram_millimeter_squared': float(i_app_gmm2),
+        'i_specimen_gram_millimeter_squared': i_spec_gmm2,
+        'i_total_kg_meter_squared': i_total_kg_m2,
+        'slope_sign': int(artifact.get('correction_slope_sign', 1) or 1),
+        'sign_source': 'artifact',
+        'in_domain': bool(in_domain),
+        'variance_reduced': False,
+        'applied': False,
+        'note': 'No correction shown: not enough time/torque/measured-angle samples.',
+    }
+    if n < 3:
+        return empty
+    t, M, ang = t[:n], M[:n], ang[:n]
+    if not (np.any(np.isfinite(ang)) and (np.nanmax(ang) - np.nanmin(ang) > 0)):
+        empty['corrected_newton_meter'] = M.copy()
+        empty['alpha_radian_second_squared'] = np.zeros_like(M)
+        empty['note'] = 'No correction shown: measured angle is absent/flat (no alpha).'
+        return empty
+
+    dt = float(np.median(np.diff(t))) if t.size > 1 else 1.0
+    if not (np.isfinite(dt) and dt > 0):
+        dt = 1.0
+    vel = np.gradient(ang, dt)
+    alpha = np.gradient(vel, dt) * (np.pi / 180.0)  # deg/s^2 -> rad/s^2
+
+    inertial_torque = i_total_kg_m2 * alpha  # N*m, per unit sign
+
+    sign_from_art = artifact.get('correction_slope_sign', None)
+    if sign_from_art in (-1, 1):
+        sign = int(sign_from_art)
+        sign_source = 'artifact'
+        corrected = M - sign * inertial_torque
+    else:
+        # Legacy artifact without the carried sign: choose the orientation that reduces variance.
+        cand_pos = M - inertial_torque   # sign = +1
+        cand_neg = M + inertial_torque   # sign = -1
+        if np.nanvar(cand_neg) < np.nanvar(cand_pos):
+            sign, corrected = -1, cand_neg
+        else:
+            sign, corrected = 1, cand_pos
+        sign_source = 'variance_min'
+
+    var_raw = float(np.nanvar(M))
+    var_corr = float(np.nanvar(corrected))
+    variance_reduced = bool(var_corr < var_raw)
+
+    notes = []
+    if not in_domain:
+        notes.append('OUT OF DOMAIN: (aor, width) outside the calibration range -- '
+                     'apparatus MOI is extrapolated; do not trust the corrected trace.')
+    if i_total_kg_m2 <= 0:
+        notes.append('Total MOI is non-positive; no meaningful correction.')
+    if not variance_reduced:
+        notes.append('Correction did NOT reduce variance -- verify the sign/units convention on the rig.')
+    if not notes:
+        notes.append('Inertia-corrected (QC preview only; authoritative correction runs in R).')
+
+    return {
+        'corrected_newton_meter': corrected,
+        'alpha_radian_second_squared': alpha,
+        'i_apparatus_gram_millimeter_squared': float(i_app_gmm2),
+        'i_specimen_gram_millimeter_squared': i_spec_gmm2,
+        'i_total_kg_meter_squared': i_total_kg_m2,
+        'slope_sign': int(sign),
+        'sign_source': sign_source,
+        'in_domain': bool(in_domain),
+        'variance_reduced': variance_reduced,
+        'applied': True,
+        'note': ' '.join(notes),
+    }
