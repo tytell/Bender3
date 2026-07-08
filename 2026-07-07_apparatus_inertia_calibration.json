@@ -1,0 +1,259 @@
+{
+  "schema": "bender_apparatus_inertia_fit_v1",
+  "build_date": "2026-07-08T03:00:09.874770",
+  "source_files": [
+    "2026-07-06_apparatus_bender_01_dynamic.h5",
+    "2026-07-06_apparatus_bender_02_dynamic.h5",
+    "2026-07-06_apparatus_bender_03_dynamic.h5",
+    "2026-07-06_apparatus_bender_04_dynamic.h5",
+    "2026-07-06_apparatus_bender_05_dynamic.h5",
+    "2026-07-06_apparatus_bender_06_dynamic.h5",
+    "2026-07-06_apparatus_bender_07_dynamic.h5",
+    "2026-07-06_apparatus_bender_08_dynamic.h5",
+    "2026-07-06_apparatus_bender_09_dynamic.h5",
+    "2026-07-06_apparatus_bender_10_dynamic.h5",
+    "2026-07-06_apparatus_bender_11_dynamic.h5"
+  ],
+  "excluded_files": [
+    "2026-07-06_apparatus_bender_09_dynamic.h5"
+  ],
+  "n_trials_fit": 10,
+  "alpha_source_default": "measured_angle_double_diff",
+  "alpha_reference_rms_rad_s2": 75.63276962239897,
+  "aor_provenance": "override",
+  "correction_slope_sign": -1,
+  "fit_form": "I_gram_millimeter_squared = a + b*aor_millimeter**2 + c*width_millimeter**2",
+  "fit_form_id": "F4",
+  "fit_coefficients": {
+    "a": 638693.121052455,
+    "b": 665.3157063460848,
+    "c": 34.72461744710021
+  },
+  "loo_cv_rmse_newton_meter": 0.0037903073014332804,
+  "loo_cv_rmse_gram_millimeter_squared": 50114.61725329657,
+  "valid_domain": {
+    "aor_millimeter": [
+      7.0,
+      29.0
+    ],
+    "width_millimeter": [
+      52.0,
+      133.0
+    ]
+  },
+  "geometry_check": {
+    "f4_aor2_over_width2_ratio": 19.1597706543386,
+    "expected_ratio": 4.0,
+    "f4_beats_f5_by_10pct": true,
+    "anomaly": true
+  },
+  "sign_convention_note": "ALL trials had negative torque-vs-alpha slope: the encoder-angle acceleration is anti-correlated with +zTorque. The stored I is the magnitude; the correction sign MUST be verified on the rig (a correct correction reduces acceleration-correlated ripple).",
+  "candidate_forms": {
+    "F1": {
+      "coefficients": {
+        "a": 884119.5398617337,
+        "b": 768.5339888991961
+      },
+      "r2": 0.6417556480726484,
+      "loo_cv_rmse_gram_millimeter_squared": 224825.14126139868,
+      "loo_cv_rmse_newton_meter": 0.01700414811434667,
+      "min_predicted_i_over_domain": 921777.7053177942,
+      "physically_valid": true
+    },
+    "F2": {
+      "coefficients": {
+        "a": 507868.77828555065,
+        "b": 47242.683101774324,
+        "c": -446.37025044437127
+      },
+      "r2": 0.6978645158543149,
+      "loo_cv_rmse_gram_millimeter_squared": 229284.08458948424,
+      "loo_cv_rmse_newton_meter": 0.0173413903478391,
+      "min_predicted_i_over_domain": 816695.4177261967,
+      "physically_valid": true
+    },
+    "F3": {
+      "coefficients": {
+        "a": 380068.6819026144,
+        "b": 668.79475423803,
+        "c": 6288.560841629449
+      },
+      "r2": 0.9741843034054217,
+      "loo_cv_rmse_gram_millimeter_squared": 70681.1342777267,
+      "loo_cv_rmse_newton_meter": 0.0053458099454771505,
+      "min_predicted_i_over_domain": 739844.7886250092,
+      "physically_valid": true
+    },
+    "F4": {
+      "coefficients": {
+        "a": 638693.121052455,
+        "b": 665.3157063460848,
+        "c": 34.72461744710021
+      },
+      "r2": 0.9859975971001889,
+      "loo_cv_rmse_gram_millimeter_squared": 50114.61725329657,
+      "loo_cv_rmse_newton_meter": 0.0037903073014332804,
+      "min_predicted_i_over_domain": 765188.9562403722,
+      "physically_valid": true
+    },
+    "F5": {
+      "coefficients": {
+        "a": 766739.2083094709,
+        "b": 186.0509772353231
+      },
+      "r2": 0.731914143293906,
+      "loo_cv_rmse_gram_millimeter_squared": 192083.76285050987,
+      "loo_cv_rmse_newton_meter": 0.01452782698387613,
+      "min_predicted_i_over_domain": 901626.1668050801,
+      "physically_valid": true
+    }
+  },
+  "outliers": [],
+  "bad_fit_files": [],
+  "extraction_errors": [],
+  "trials": [
+    {
+      "file": "2026-07-06_apparatus_bender_01_dynamic.h5",
+      "aor_millimeter": 29.0,
+      "aor_source": "override",
+      "width_millimeter": 133.0,
+      "i_gram_millimeter_squared": 1795260.820738917,
+      "slope_kg_m2_signed": -0.001795260820738917,
+      "sign_negative": true,
+      "r2": 0.7410787113472025,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 76.79894452529423,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_02_dynamic.h5",
+      "aor_millimeter": 29.0,
+      "aor_source": "override",
+      "width_millimeter": 90.0,
+      "i_gram_millimeter_squared": 1465357.8591215215,
+      "slope_kg_m2_signed": -0.0014653578591215216,
+      "sign_negative": true,
+      "r2": 0.7274166948447569,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 75.9785493491204,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_03_dynamic.h5",
+      "aor_millimeter": 29.0,
+      "aor_source": "override",
+      "width_millimeter": 90.0,
+      "i_gram_millimeter_squared": 1459872.7164220954,
+      "slope_kg_m2_signed": -0.0014598727164220953,
+      "sign_negative": true,
+      "r2": 0.7300287112924393,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 76.11174275111013,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_04_dynamic.h5",
+      "aor_millimeter": 29.0,
+      "aor_source": "override",
+      "width_millimeter": 52.0,
+      "i_gram_millimeter_squared": 1289545.4341706731,
+      "slope_kg_m2_signed": -0.0012895454341706732,
+      "sign_negative": true,
+      "r2": 0.7236487544216093,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 75.83351978516419,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_05_dynamic.h5",
+      "aor_millimeter": 18.0,
+      "aor_source": "override",
+      "width_millimeter": 52.0,
+      "i_gram_millimeter_squared": 1007812.0206643143,
+      "slope_kg_m2_signed": -0.0010078120206643143,
+      "sign_negative": true,
+      "r2": 0.7164487413057155,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 75.35602968721913,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_06_dynamic.h5",
+      "aor_millimeter": 18.0,
+      "aor_source": "override",
+      "width_millimeter": 91.0,
+      "i_gram_millimeter_squared": 1168146.8594440615,
+      "slope_kg_m2_signed": -0.0011681468594440616,
+      "sign_negative": true,
+      "r2": 0.7260883280491535,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 75.43201945963376,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_07_dynamic.h5",
+      "aor_millimeter": 18.0,
+      "aor_source": "override",
+      "width_millimeter": 91.0,
+      "i_gram_millimeter_squared": 1183205.58334254,
+      "slope_kg_m2_signed": -0.00118320558334254,
+      "sign_negative": true,
+      "r2": 0.7344061073206182,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 75.15128008327126,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_08_dynamic.h5",
+      "aor_millimeter": 18.0,
+      "aor_source": "override",
+      "width_millimeter": 133.0,
+      "i_gram_millimeter_squared": 1495287.988443176,
+      "slope_kg_m2_signed": -0.0014952879884431761,
+      "sign_negative": true,
+      "r2": 0.7417059379539055,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 75.90928915185162,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_09_dynamic.h5",
+      "aor_millimeter": 7.0,
+      "aor_source": "override",
+      "width_millimeter": 133.0,
+      "i_gram_millimeter_squared": 585048.117839261,
+      "slope_kg_m2_signed": -0.0005850481178392609,
+      "sign_negative": true,
+      "r2": 0.015587443602374629,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 91.85070513175855,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_10_dynamic.h5",
+      "aor_millimeter": 7.0,
+      "aor_source": "override",
+      "width_millimeter": 92.0,
+      "i_gram_millimeter_squared": 907091.0418665579,
+      "slope_kg_m2_signed": -0.0009070910418665579,
+      "sign_negative": true,
+      "r2": 0.7350007829091736,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 74.82507632738208,
+      "n_samples": 78867
+    },
+    {
+      "file": "2026-07-06_apparatus_bender_11_dynamic.h5",
+      "aor_millimeter": 7.0,
+      "aor_source": "override",
+      "width_millimeter": 53.0,
+      "i_gram_millimeter_squared": 726299.793585857,
+      "slope_kg_m2_signed": -0.000726299793585857,
+      "sign_negative": true,
+      "r2": 0.7237101792545955,
+      "alpha_source": "measured_angle_double_diff",
+      "alpha_rms_rad_s2": 74.63563882631634,
+      "n_samples": 78867
+    }
+  ]
+}

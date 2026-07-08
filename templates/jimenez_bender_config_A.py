@@ -6,8 +6,9 @@ forcetorque_calibration_file = 'FT56491.cal'
 # Apparatus-inertia calibration artifact (JSON from fit_apparatus_inertia.py). Machine-specific,
 # same convention as forcetorque_calibration_file: put the file on this machine, then give an
 # absolute path OR a bare filename resolved against the launch dir / repo root. A missing file is
-# skipped silently (no auto-load); the GUI loader can still set one per session. This fixture points
-# at a file that does not exist in the repo, so the test suite exercises the silent-skip path.
+# skipped silently (no auto-load); the GUI loader can still set one per session. This bare filename
+# resolves against the repo root, where the committed calibration artifact lives, so Bender
+# auto-loads it on init (mirrors how forcetorque_calibration_file loads FT56491.cal).
 apparatus_inertia_calibration_file = '2026-07-07_apparatus_inertia_calibration.json'
 
 positive_motor_direction = "right"
