@@ -4312,8 +4312,8 @@ class Bender:
             ``stim_duration_s``, ``inter_step_interval_s`` (seconds of idle time after each step
             before the next begins; 0 = no pause), ``is_stim``, ``stim_pulse_rate``,
             ``stim_voltage``, ``device_name``, ``recruitment``.
-            If ``inter_step_interval_s`` is omitted, :attr:`isometric_inter_step_interval_s` on
-            the instance is used (default 0).
+            If ``inter_step_interval_s`` is omitted, :attr:`rest_between_steps_s` on
+            the instance is used (default 2.0 s).
             Per-block bend direction and stim side come from ``block_sequence``.
         **kwargs
             Merged into ``stim_params`` (stim_params takes precedence).
