@@ -7056,6 +7056,63 @@ def _store_selected_data_folder(picked_dir: str) -> None:
             st.session_state['gui_data_filename'] = base
 
 
+def _render_apparatus_inertia_cal_loader() -> None:
+    """Simple load-file field for an apparatus-inertia fit artifact (JSON).
+
+    Mirrors the hardware-config load field: paste a path, click Load. Work happens ONLY on
+    click (Apply-button pattern). On success the artifact dict is stored on the Bender instance
+    so the QC plot can overlay the inertia-corrected torque. The out-of-domain check is NOT done
+    here -- it is surfaced later as an annotation on the QC plot, where the run's actual aor/width
+    are known.
+    """
+    st.session_state.setdefault('gui_apparatus_inertia_cal_path', '')
+    st.markdown('**Apparatus inertia calibration** (optional)')
+    cal_path = str(
+        st.text_input(
+            'Apparatus inertia fit file (.json)',
+            key='gui_apparatus_inertia_cal_path',
+            placeholder='Paste full path to an apparatus_inertia_fit.json artifact',
+            help='Built by fit_apparatus_inertia.py from the empty-apparatus calibration runs. '
+                 'Loaded onto the experiment so the QC plot can overlay the inertia-corrected torque.',
+        )
+        or ''
+    ).strip()
+    load_clicked = st.button(
+        'Load apparatus inertia fit',
+        key='gui_btn_load_apparatus_inertia_cal',
+        use_container_width=True,
+        help='Load the apparatus-inertia fit artifact onto the experiment.',
+    )
+    if not load_clicked:
+        return
+    b = st.session_state.get('bender')
+    if b is None:
+        st.error('Load a hardware configuration first, then load the inertia fit.')
+        return
+    if not cal_path:
+        st.warning('Paste a path to an apparatus-inertia fit .json first.')
+        return
+    if not os.path.isfile(cal_path):
+        st.error(f'File not found: {cal_path}')
+        return
+    try:
+        from bender_functions import load_apparatus_inertia_fit
+        artifact = load_apparatus_inertia_fit(cal_path)
+    except Exception as exc:  # noqa: BLE001 -- surface as a friendly error, do not crash the app
+        b.apparatus_inertia_calibration = None
+        b.apparatus_inertia_calibration_file = ''
+        _show_friendly_error(exc, action='load apparatus inertia calibration')
+        return
+    b.apparatus_inertia_calibration = artifact
+    b.apparatus_inertia_calibration_file = cal_path
+    _loo = artifact.get('loo_cv_rmse_newton_meter', float('nan'))
+    st.success(
+        f'Loaded apparatus-inertia fit: form={artifact.get("fit_form_id", "?")}, '
+        f'LOO-RMSE={_loo:.3e} N*m (built from {len(artifact.get("source_files", []))} files, '
+        f'aor provenance: {artifact.get("aor_provenance", "unknown")}).'
+    )
+
+
 def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware configuration module') -> None:
     """Hardware config picker: paste a `.py` path, confirm, then click Load."""
     _sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
@@ -7371,6 +7428,9 @@ def main():
             # Unified config section: load an existing config into the editable fields, edit any
             # field, then save it as a NEW file. There is no separate Load/Build mode.
             _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
+            st.divider()
+            _render_apparatus_inertia_cal_loader()
+            st.divider()
             st.caption('Edit any fields below, then enter a new name and click Write to save a new config.')
             st.divider()
             if st.button(

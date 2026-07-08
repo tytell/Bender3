@@ -456,6 +456,10 @@ class Bender:
         self.inertial_calibration_file = None
         self.use_inertial_calibration = False
         self.inertial_calibration_profile = None
+        # Optional apparatus-inertia fit artifact (from fit_apparatus_inertia.py), loaded via the
+        # GUI. Dict when loaded, None otherwise; the QC plot uses it to overlay corrected torque.
+        self.apparatus_inertia_calibration = None
+        self.apparatus_inertia_calibration_file = ''
         # Raw primary-axis torque (saved). The inertial correction itself is applied post-hoc in R
         # (empirical apparatus inertia from an empty calibration run; analytic specimen inertia from
         # geometry), so the acquisition path stores raw torque + correction parameters only and does
