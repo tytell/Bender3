@@ -288,7 +288,10 @@ calibration_inertia_apparatus_plate_to_plate_millimeter  float  Plate-to-plate s
                                                                    measurement_clamp_plate_extension_millimeter. (v2.7)
 calibration_inertia_apparatus_fit_file  str  Provenance path/name of the loaded apparatus-inertia fit artifact
                                                                    (apparatus_inertia_fit.json, built by fit_apparatus_inertia.py from
-                                                                   the empty-apparatus calibration runs). 'NA' when no fit is loaded.
+                                                                   the empty-apparatus calibration runs). Loaded either from the
+                                                                   hardware-config key apparatus_inertia_calibration_file (auto-loaded
+                                                                   at config load, machine-specific like forcetorque_calibration_file)
+                                                                   or via the GUI loader (session override). 'NA' when no fit is loaded.
                                                                    Direct flat-key write in the exporter. (v2.8)
 calibration_inertia_apparatus_fit_form  str  Selected fit-form equation for I_apparatus(aor, width) -- e.g. F4,
                                                                    the separable quadratic a + b*aor^2 + c*width^2. Human-readable

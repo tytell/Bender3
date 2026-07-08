@@ -456,10 +456,16 @@ class Bender:
         self.inertial_calibration_file = None
         self.use_inertial_calibration = False
         self.inertial_calibration_profile = None
-        # Optional apparatus-inertia fit artifact (from fit_apparatus_inertia.py), loaded via the
-        # GUI. Dict when loaded, None otherwise; the QC plot uses it to overlay corrected torque.
+        # Optional apparatus-inertia calibration artifact (from fit_apparatus_inertia.py). Dict when
+        # loaded, None otherwise; the QC plot uses it to overlay corrected torque. It can be set two
+        # ways: (a) declared in the hardware config as apparatus_inertia_calibration_file and
+        # auto-loaded here (same machine-specific convention as forcetorque_calibration_file), or
+        # (b) loaded per-session via the GUI Hardware-config loader (which overrides the config one).
         self.apparatus_inertia_calibration = None
         self.apparatus_inertia_calibration_file = ''
+        _apparatus_cal_cfg = str(getattr(cfg, 'apparatus_inertia_calibration_file', '') or '').strip()
+        if _apparatus_cal_cfg:
+            self._load_apparatus_inertia_calibration_from_config(_apparatus_cal_cfg)
         # Raw primary-axis torque (saved). The inertial correction itself is applied post-hoc in R
         # (empirical apparatus inertia from an empty calibration run; analytic specimen inertia from
         # geometry), so the acquisition path stores raw torque + correction parameters only and does
@@ -745,6 +751,45 @@ class Bender:
         self.inertial_calibration_profile = prof
         self.inertial_calibration_file = str(calibration_h5_path)
         return prof
+
+    def _resolve_apparatus_inertia_calibration_path(self, path):
+        """Resolve an apparatus-inertia calibration path the same way forcetorque_calibration_file
+        is used: an absolute path is taken as-is; otherwise the name is tried against the current
+        working directory (launch dir) first, then the repo root (where bender_functions.py lives).
+        Returns the first existing match, else the input unchanged so the caller can report it.
+        """
+        p = str(path or '').strip()
+        if not p:
+            return ''
+        if os.path.isabs(p):
+            return p
+        if os.path.isfile(p):  # CWD/launch-dir relative (matches the .cal convention)
+            return os.path.abspath(p)
+        repo_rel = os.path.join(os.path.dirname(os.path.abspath(__file__)), p)
+        if os.path.isfile(repo_rel):
+            return repo_rel
+        return p
+
+    def _load_apparatus_inertia_calibration_from_config(self, path):
+        """Auto-load the apparatus-inertia calibration named in the hardware config (best-effort).
+
+        The file is machine-specific (like the ATI .cal): the operator must place it on this
+        machine. A file that is simply ABSENT here is a legitimate state (dev machines, not-yet-
+        placed), so it is skipped SILENTLY -- the missing QC overlay and the 'NA' export
+        provenance make the absence visible downstream. A file that is PRESENT but unreadable /
+        not a valid artifact logs an ASCII warning and leaves the calibration unset.
+        """
+        resolved = self._resolve_apparatus_inertia_calibration_path(path)
+        if not resolved or not os.path.isfile(resolved):
+            return
+        try:
+            self.apparatus_inertia_calibration = load_apparatus_inertia_fit(resolved)
+            self.apparatus_inertia_calibration_file = resolved
+        except Exception as e:  # noqa: BLE001 -- a bad file must not break config load
+            self.apparatus_inertia_calibration = None
+            self.apparatus_inertia_calibration_file = ''
+            print("[warn] apparatus inertia calibration file found but not usable ('"
+                  + str(resolved) + "'): " + str(e))
 
     def _normalize_dispatch_aliases(self):
         """

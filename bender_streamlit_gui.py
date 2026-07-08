@@ -4083,6 +4083,9 @@ def _seed_cfg_build_from_source_config(source_config: str) -> None:
         return
     st.session_state['gui_cfg_bld_apparatus_id'] = str(d['apparatus_id'])
     st.session_state['gui_cfg_bld_forcetorque_calibration_file'] = str(d['forcetorque_calibration_file'])
+    st.session_state['gui_cfg_bld_apparatus_inertia_calibration_file'] = str(
+        d.get('apparatus_inertia_calibration_file', '') or ''
+    )
     st.session_state['gui_cfg_bld_positive_motor_direction'] = str(d['positive_motor_direction'])
     st.session_state['gui_cfg_bld_specimen_lateral_index'] = int(d['specimen_lateral_index_on_positive_motor_side'])
     st.session_state['gui_cfg_bld_primary_bending_axis'] = str(d['primary_bending_axis'])
@@ -7461,6 +7464,14 @@ def main():
                             help='Rig identity label written to `metadata/session_apparatus_id`. Empty value accepted.',
                         )
                         st.text_input('Force/torque calibration file', key='gui_cfg_bld_forcetorque_calibration_file')
+                        st.text_input(
+                            'Apparatus inertia calibration file',
+                            key='gui_cfg_bld_apparatus_inertia_calibration_file',
+                            placeholder='e.g. 2026-07-07_apparatus_inertia_calibration.json (or an absolute path)',
+                            help='JSON from fit_apparatus_inertia.py. Machine-specific: put the file on '
+                                 'this machine, then give an absolute path or a name resolved against the '
+                                 'launch dir / repo root. Leave blank for none.',
+                        )
                         st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
                         st.number_input(
                             'Specimen lateral index on positive motor side',
@@ -7620,6 +7631,9 @@ def main():
                                         ),
                                         'forcetorque_calibration_file': str(
                                             st.session_state.get('gui_cfg_bld_forcetorque_calibration_file') or 'FT56491.cal'
+                                        ),
+                                        'apparatus_inertia_calibration_file': str(
+                                            st.session_state.get('gui_cfg_bld_apparatus_inertia_calibration_file') or ''
                                         ),
                                         'positive_motor_direction': str(
                                             st.session_state.get('gui_cfg_bld_positive_motor_direction') or 'left'

@@ -83,6 +83,9 @@ def read_base_defaults(base_module: str) -> Dict[str, Any]:
     return {
         'apparatus_id': str(getattr(m, 'apparatus_id', '') or ''),
         'forcetorque_calibration_file': getattr(m, 'forcetorque_calibration_file', 'FT56491.cal'),
+        'apparatus_inertia_calibration_file': str(
+            getattr(m, 'apparatus_inertia_calibration_file', '') or ''
+        ),
         'positive_motor_direction': getattr(m, 'positive_motor_direction', 'left'),
         'specimen_lateral_index_on_positive_motor_side': int(
             getattr(m, 'specimen_lateral_index_on_positive_motor_side', -1)
