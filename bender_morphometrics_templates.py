@@ -44,7 +44,6 @@ MORPHOMETRICS_SESSION_KEYS = (
     'morpho_prof_rho_preset',
     'morpho_prof_rho',
     'morpho_prof_clamp',
-    'morpho_use_theoretical_inertial',
     'gui_genus_species',
     'gui_specimen_id',
 )

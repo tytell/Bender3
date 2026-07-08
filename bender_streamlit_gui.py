@@ -3360,7 +3360,6 @@ _MORPHO_APPLY_SESSION_KEYS = (
     'morpho_temp_room',
     'morpho_temp_tank',
     'morpho_prep_condition',
-    'morpho_use_theoretical_inertial',
     'morpho_prof_rho_preset',
     'morpho_prof_rho',
     'morpho_geom_x',
@@ -4513,9 +4512,16 @@ def _apply_all_morphometrics_to_bender(b: Bender) -> None:
 
 
 def _sync_morphometric_flags_from_session(b: Bender):
-    """Copy morphometrics panel session state onto ``b`` (flags + specimen geometry aliases)."""
-    if 'morpho_use_theoretical_inertial' in st.session_state:
-        b.use_theoretical_inertial_correction = bool(st.session_state['morpho_use_theoretical_inertial'])
+    """Copy morphometrics panel session state onto ``b`` (flags + specimen geometry aliases).
+
+    use_theoretical_inertial_correction is set automatically: True when either a calibration
+    profile is loaded (inertial_calibration_profile is not None) or specimen geometry lists
+    are non-blank. The operator checkbox has been removed -- correction fires when data is
+    present, silently skips when it is not.
+    """
+    has_calibration = getattr(b, 'inertial_calibration_profile', None) is not None
+    has_geometry = bool(str(st.session_state.get('morpho_geom_x') or '').strip())
+    b.use_theoretical_inertial_correction = has_calibration or has_geometry
     if 'morpho_dclamp' in st.session_state:
         v = float(st.session_state['morpho_dclamp'])
         b.dclamp = v
@@ -4604,7 +4610,6 @@ def _morpho_widget_defaults_from_bender(b: Bender) -> dict[str, Any]:
         'morpho_temp_room': float(getattr(b, 'temp_C_room', 22.0) or 22.0),
         'morpho_temp_tank': float(getattr(b, 'temp_C_tank', 22.0) or 22.0),
         'morpho_prep_condition': str(meta.get('specimen_prep_condition', '') or ''),
-        'morpho_use_theoretical_inertial': bool(getattr(b, 'use_theoretical_inertial_correction', False)),
         'morpho_prof_rho': float(
             getattr(b, 'specimen_geometry_density_g_per_mm3', None)
             or getattr(b, 'specimen_profile_density_g_per_mm3', 1.03e-3)
@@ -8120,22 +8125,11 @@ def main():
                     help=MORPHO_PROF_CLAMP_FIELD_HELP,
                 )
 
-                st.divider()
-                if 'morpho_use_theoretical_inertial' not in st.session_state:
-                    st.session_state['morpho_use_theoretical_inertial'] = False
-                st.checkbox(
-                    'Check here to perform inertial correction',
-                    key='morpho_use_theoretical_inertial',
-                    help=(
-                        'Subtracts model **system** inertia (from calibration, if loaded) and **specimen** inertia from the '
-                        'profile above when correcting measured torque.'
-                    ),
-                )
                 sub_clamp_inertial = st.form_submit_button(
                     'Apply clamp geometry & inertial correction',
                     type='primary',
                     use_container_width=True,
-                    help='Commits clamp spacing/offsets, cross-section, mounted profile, density, and the inertial-correction flag.',
+                    help='Commits clamp spacing/offsets, cross-section, mounted profile, and density. Inertial correction is applied automatically when a calibration profile is loaded or specimen geometry is provided.',
                 )
         if sub_specimen:
             _apply_specimen_identity_to_bender(b)
