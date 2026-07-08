@@ -46,7 +46,7 @@ import h5py
 # --- Isovelocity safety limit ------------------------------------------------
 # Hard limit on commanded/encoder motor angle during an isovelocity ramp. If the ramp would carry
 # the angle to or past this magnitude, the ramp is stopped and the motor is returned to 0° (2.1).
-ISOVELOCITY_ANGLE_LIMIT_DEG = 45.0
+ISOVELOCITY_ANGLE_LIMIT_DEG = 70.0
 
 # --- Segmented recording bookend (plan D2, locked) ----------------------------
 # Fixed neutral hold duration at home (0 deg, motor energized) prepended AND appended to every
