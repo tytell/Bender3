@@ -159,22 +159,11 @@ load_bender_flat <- function(
         filt     <- signal::butter(9L, fc / nyq, type = "low")
         raw_cols <- grep("torque0\\.Nm$|force0\\.N$", names(td), value = TRUE)
         if (length(raw_cols) > 0L) {
-          # Segmented trials concatenate steps with discontinuities; filter each
-          # step locally so filtfilt does not ring across step boundaries.
-          if ("step_number" %in% names(td)) {
-            td <- td |>
-              dplyr::group_by(.data$step_number) |>
-              dplyr::group_modify(\(.x, .y) {
-                .bfl_lowpass_filter_cols(.x, raw_cols, filt)
-              }) |>
-              dplyr::ungroup()
-          } else {
-            td <- td |>
-              mutate(across(
-                all_of(raw_cols),
-                list(s = \(x) if (sum(is.finite(x)) > 20L) signal::filtfilt(filt, x) else x)
-              ))
-          }
+          td <- td |>
+            mutate(across(
+              all_of(raw_cols),
+              list(s = \(x) if (sum(is.finite(x)) > 20L) signal::filtfilt(filt, x) else x)
+            ))
           td <- td |>
             rename_with(
               \(nm) sub("(\\w+)0\\.(Nm?)_s$", "\\1.\\2", nm),
@@ -386,19 +375,6 @@ load_bender_flat <- function(
 # =============================================================================
 # Internal: bias subtraction
 # =============================================================================
-
-.bfl_lowpass_filter_cols <- function(df, raw_cols, filt) {
-  if (nrow(df) <= 20L) return(df)
-  for (col in raw_cols) {
-    x <- df[[col]]
-    if (sum(is.finite(x)) > 20L) {
-      out_col <- sub("0\\.(Nm|N)$", ".\\1", col)
-      df[[out_col]] <- signal::filtfilt(filt, x)
-    }
-  }
-  df
-}
-
 
 .bfl_subtract_bias <- function(td, loadtorques, loadforces) {
   raw_cols <- intersect(

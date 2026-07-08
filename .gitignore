@@ -24,3 +24,7 @@ TestData/
 debug-*.log
 .DS_Store
 .DS_Store
+# Test-run figure output (not a deliverable)
+figures/tests/
+# R auto-generated default plot device output
+Rplots.pdf
