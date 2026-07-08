@@ -6658,6 +6658,7 @@ def compute_apparatus_inertia_correction(
     aor_millimeter,
     width_millimeter,
     specimen_moi_gram_millimeter_squared=0.0,
+    alpha_smooth_second=0.009,
 ):
     """Inertia-corrected torque trace for the QC overlay (VISUALIZATION ONLY).
 
@@ -6669,14 +6670,27 @@ def compute_apparatus_inertia_correction(
     Model
     -----
     ``alpha(t)`` is the angular acceleration in rad/s^2 from a double ``np.gradient`` of the
-    MEASURED angle (same channel and method as ``extract_apparatus_inertia_trial``, which the
-    calibration was fit on). ``M_corrected = M_raw - sign*(I_app + I_spec)*alpha`` with the MOIs
+    MEASURED angle. The measured angle is LOW-PASSED first (centered moving average of width
+    ``alpha_smooth_second``) because double-differentiating the raw 1 kHz angle amplifies
+    sample-to-sample noise and injects it into the pointwise correction. (The calibration FIT is
+    immune -- its least-squares slope averages that noise out -- but a per-sample correction is
+    not, so it must smooth.) ``M_corrected = M_raw - sign*(I_app + I_spec)*alpha`` with the MOIs
     in kg*m^2 (g*mm^2 x 1e-9). ``sign`` is the empty-apparatus calibration slope sign carried in
     the artifact as ``correction_slope_sign``: with the rig's observed negative slope it is -1,
     so the correction is effectively ``M_raw + I*alpha`` -- the orientation that REMOVES (does
-    not double) the ripple even though ``I`` is stored as a positive magnitude. If the artifact
-    predates that field, the orientation that MINIMIZES the corrected-signal variance is chosen
-    and flagged via ``sign_source``.
+    not double) the apparatus ripple even though ``I`` is stored as a positive magnitude. If the
+    artifact predates that field, the orientation that MINIMIZES the corrected-signal variance is
+    chosen and flagged via ``sign_source``.
+
+    Validity check (elastic-aware)
+    ------------------------------
+    Variance-reduction is only a valid success check for INERTIA-DOMINATED (near-empty) runs.
+    For an ELASTIC specimen the raw torque is dominated by a spring term ~ angle, which (for a
+    sinusoid) is collinear with alpha; removing the apparatus inertia that was partially masking
+    that elastic response legitimately RAISES the corrected amplitude. So ``sign_warning`` (and
+    the "verify sign" note) fire ONLY when the run is inertia-dominated (|corr(torque, angle)| is
+    low) AND the correction still increased variance. On elastic-dominated runs the note says so
+    instead of alarming.
 
     Parameters
     ----------
@@ -6685,13 +6699,16 @@ def compute_apparatus_inertia_correction(
     torque_raw_newton_meter : array-like
         Raw primary-axis torque (N*m).
     angle_measured_degree : array-like
-        Measured angle (deg); differentiated twice for alpha.
+        Measured angle (deg); low-passed then differentiated twice for alpha.
     artifact : dict
         A loaded apparatus-inertia fit artifact (see ``fit_apparatus_inertia_calibration``).
     aor_millimeter, width_millimeter : float
         This run's clamp geometry, used to evaluate I_apparatus from the fit.
     specimen_moi_gram_millimeter_squared : float
         Specimen-only MOI (g*mm^2); 0 when no specimen-geometry model is active.
+    alpha_smooth_second : float
+        Centered moving-average width (s) applied to the measured angle before differentiating.
+        <= 0 disables smoothing (raw double-diff). Default 0.009 s (~9 samples at 1 kHz).
 
     Returns
     -------
@@ -6700,7 +6717,8 @@ def compute_apparatus_inertia_correction(
         ``i_apparatus_gram_millimeter_squared`` (float), ``i_specimen_gram_millimeter_squared``
         (float), ``i_total_kg_meter_squared`` (float), ``slope_sign`` (int applied),
         ``sign_source`` ('artifact' | 'variance_min'), ``in_domain`` (bool),
-        ``variance_reduced`` (bool), ``applied`` (bool), and ``note`` (str for the overlay).
+        ``variance_reduced`` (bool), ``elastic_dominated`` (bool), ``sign_warning`` (bool),
+        ``alpha_smooth_samples`` (int), ``applied`` (bool), and ``note`` (str for the overlay).
         When inputs are too short/absent the raw trace is returned unchanged with ``applied`` False.
     """
     t = np.asarray(time_second, dtype=float).reshape(-1)
@@ -6722,6 +6740,9 @@ def compute_apparatus_inertia_correction(
         'sign_source': 'artifact',
         'in_domain': bool(in_domain),
         'variance_reduced': False,
+        'elastic_dominated': False,
+        'sign_warning': False,
+        'alpha_smooth_samples': 0,
         'applied': False,
         'note': 'No correction shown: not enough time/torque/measured-angle samples.',
     }
@@ -6737,7 +6758,23 @@ def compute_apparatus_inertia_correction(
     dt = float(np.median(np.diff(t))) if t.size > 1 else 1.0
     if not (np.isfinite(dt) and dt > 0):
         dt = 1.0
-    vel = np.gradient(ang, dt)
+
+    # Low-pass the measured angle before differentiating (centered moving average). Raw
+    # double-diff of the 1 kHz angle is noise-dominated (see docstring); smoothing keeps the
+    # coherent motion and drops the differentiation noise.
+    win = int(round(float(alpha_smooth_second) / dt)) if alpha_smooth_second and alpha_smooth_second > 0 else 0
+    if win >= 3:
+        if win % 2 == 0:
+            win += 1
+        win = min(win, (n // 2) * 2 - 1) if n >= 5 else 0  # keep window < series length, odd
+    if win >= 3:
+        kernel = np.ones(win, dtype=float) / float(win)
+        ang_used = np.convolve(ang, kernel, mode='same')
+    else:
+        win = 0
+        ang_used = ang
+
+    vel = np.gradient(ang_used, dt)
     alpha = np.gradient(vel, dt) * (np.pi / 180.0)  # deg/s^2 -> rad/s^2
 
     inertial_torque = i_total_kg_m2 * alpha  # N*m, per unit sign
@@ -6761,14 +6798,29 @@ def compute_apparatus_inertia_correction(
     var_corr = float(np.nanvar(corrected))
     variance_reduced = bool(var_corr < var_raw)
 
+    # Elastic vs inertia dominated: a spring-like specimen has torque ~ angle (|corr| high).
+    finite = np.isfinite(M) & np.isfinite(ang)
+    if np.count_nonzero(finite) >= 3 and np.std(M[finite]) > 0 and np.std(ang[finite]) > 0:
+        corr_torque_angle = float(np.corrcoef(M[finite], ang[finite])[0, 1])
+    else:
+        corr_torque_angle = 0.0
+    elastic_dominated = bool(abs(corr_torque_angle) >= 0.5)
+    # A sign concern is credible only on an inertia-dominated run that still got worse.
+    sign_warning = bool((not elastic_dominated) and (not variance_reduced) and i_total_kg_m2 > 0)
+
     notes = []
     if not in_domain:
         notes.append('OUT OF DOMAIN: (aor, width) outside the calibration range -- '
                      'apparatus MOI is extrapolated; do not trust the corrected trace.')
     if i_total_kg_m2 <= 0:
         notes.append('Total MOI is non-positive; no meaningful correction.')
-    if not variance_reduced:
-        notes.append('Correction did NOT reduce variance -- verify the sign/units convention on the rig.')
+    if sign_warning:
+        notes.append('Correction increased variance on an inertia-dominated run -- '
+                     'verify the sign/units convention on the rig.')
+    elif elastic_dominated:
+        notes.append('Elastic-dominated run (torque ~ angle): the corrected amplitude may exceed '
+                     'raw as the apparatus inertia that masked the elastic response is removed; '
+                     'variance is not a validity check here.')
     if not notes:
         notes.append('Inertia-corrected (QC preview only; authoritative correction runs in R).')
 
@@ -6782,6 +6834,9 @@ def compute_apparatus_inertia_correction(
         'sign_source': sign_source,
         'in_domain': bool(in_domain),
         'variance_reduced': variance_reduced,
+        'elastic_dominated': elastic_dominated,
+        'sign_warning': sign_warning,
+        'alpha_smooth_samples': int(win),
         'applied': True,
         'note': ' '.join(notes),
     }

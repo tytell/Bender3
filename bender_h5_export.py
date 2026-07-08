@@ -1267,9 +1267,10 @@ def build_universal_qc_figure(bender: Any, qc_trial_index=None):
                                    line=dict(color='seagreen', dash='dot')),
                         row=2, col=1,
                     )
-                    # Surface an annotation only when something is off (out-of-domain or the
-                    # correction failed to reduce variance) so the operator does not over-trust it.
-                    if (not _corr.get('in_domain')) or (not _corr.get('variance_reduced')):
+                    # Surface an annotation only when something is genuinely off: out-of-domain,
+                    # or a credible sign concern (inertia-dominated run whose variance still rose).
+                    # An elastic specimen legitimately gains amplitude, so that alone is not flagged.
+                    if (not _corr.get('in_domain')) or _corr.get('sign_warning'):
                         fig.add_annotation(
                             text='inertia-corrected: ' + str(_corr.get('note', '')),
                             xref='x domain', yref='y domain', x=0.0, y=1.0,
