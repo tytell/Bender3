@@ -10,14 +10,20 @@ Examples
 Fit every ``*.h5`` in a folder, supplying real aor values from a JSON map, excluding a bad file::
 
     python fit_apparatus_inertia.py /path/to/inertial_calibration_apparatus \\
-        --aor-overrides aor.json --exclude _09_ --out apparatus_inertia_fit.json
+        --aor-overrides aor.json --exclude _09_ \\
+        --out 2026-07-07_apparatus_inertia_calibration.json
 
 Fit an explicit file list::
 
-    python fit_apparatus_inertia.py --files a.h5 b.h5 c.h5 --out fit.json
+    python fit_apparatus_inertia.py --files a.h5 b.h5 c.h5 \\
+        --out 2026-07-07_apparatus_inertia_calibration.json
 
 Notes
 -----
+- ``--out`` is REQUIRED and has no generic default: each calibration must be named deliberately
+  (there is no auto-generated ``apparatus_inertia_fit.json``). Give it the SAME name the hardware
+  config's ``apparatus_inertia_calibration_file`` expects so the run auto-loads it. A date prefix
+  (``2026-07-07_...``) records when the empty-apparatus runs were taken.
 - ``--aor-overrides`` is a JSON object ``{basename: aor_millimeter}`` used when a file's
   ``calibration_inertia_apparatus_aor_to_clamp_millimeter`` is NaN (the routing bug case).
 - ``--exclude`` values are matched as SUBSTRINGS of each file's basename (so ``_09_`` drops
@@ -190,8 +196,11 @@ def main(argv=None):
                     help='Basename substrings to drop from the FIT (still reported). Default: _09_.')
     ap.add_argument('--r2-min', type=float, default=0.05,
                     help='Per-trial torque-vs-alpha R2 floor for bad-fit flagging (default 0.05).')
-    ap.add_argument('--out', default=None,
-                    help='Artifact JSON output path. Default: <folder>/apparatus_inertia_fit.json.')
+    ap.add_argument('--out', required=True,
+                    help='Artifact JSON output path (REQUIRED). Name it deliberately per calibration, '
+                         'e.g. 2026-07-07_apparatus_inertia_calibration.json -- there is no generic '
+                         'default, and the name must match the config apparatus_inertia_calibration_file '
+                         'for auto-load.')
     args = ap.parse_args(argv)
 
     paths = _resolve_files(args)
@@ -211,9 +220,6 @@ def main(argv=None):
         print('[info] excluding from fit (still reported):', ', '.join(sorted(excluded)))
 
     out_path = args.out
-    if out_path is None:
-        base_dir = os.path.dirname(paths[0]) if len(paths) else '.'
-        out_path = os.path.join(base_dir or '.', 'apparatus_inertia_fit.json')
 
     print('[info] fitting', len(paths), 'file(s); writing artifact to', out_path)
     art = fit_apparatus_inertia_calibration(
