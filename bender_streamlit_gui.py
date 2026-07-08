@@ -1562,9 +1562,11 @@ MORPHO_DBEND_FIELD_HELP = (
 )
 
 MORPHO_PROF_CLAMP_FIELD_HELP = (
-    'Used only for **rotating hardware** mass/MOI in the profiled inertial model: offset from the **bend / rotation axis** '
-    'to the clamps (mm). The code adds half of its built-in clamp depth to this value when estimating clamp contribution. '
-    'Saved as `specimen_profile_clamp_offset_mm`.'
+    'Axial distance from the rotation axis (sensor face) to the near edge of the rotating clamp (mm). '
+    'Saved unconditionally on every Apply as `specimen_profile_clamp_offset_mm`, exported as '
+    '`calibration_inertia_apparatus_aor_to_clamp_millimeter`. '
+    'This is the dominant driver of apparatus MOI via the parallel-axis d^2 term -- '
+    'must be recorded on every trial, including empty-apparatus calibration runs where no specimen geometry is entered.'
 )
 
 MORPHO_CLAMP_PLATE_EXTENSION_FIELD_HELP = (
@@ -4412,7 +4414,7 @@ def _apply_experimental_conditions_to_bender(b: Bender) -> None:
 
 
 def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
-    """Clamp spacing, bend position, cross-section, and vertical/horizontal offsets → ``b``."""
+    """Clamp spacing, bend position, cross-section, vertical/horizontal offsets, plate extension, and aor-to-clamp distance → ``b``."""
     xw = float(st.session_state['morpho_xsec'])
     md = float(st.session_state.get('morpho_muscle_depth', 0.0) or 0.0)
     try:
@@ -4430,11 +4432,13 @@ def _apply_clamp_geometry_to_bender(b: Bender) -> bool:
     b.dvert = float(st.session_state['morpho_dvert'])
     b.dhoriz = float(st.session_state['morpho_dhoriz'])
     b.clamp_plate_extension_mm = float(st.session_state.get('morpho_clamp_plate_extension', 0.0) or 0.0)
+    b.specimen_profile_clamp_offset_mm = float(st.session_state.get('morpho_prof_clamp', 0.0) or 0.0)
     meta = dict(getattr(b, 'h5_protocol_metadata', {}) or {})
     meta['dvert'] = float(st.session_state['morpho_dvert'])
     meta['dhoriz'] = float(st.session_state['morpho_dhoriz'])
     meta['target_muscle_depth_mm'] = md
     meta['clamp_plate_extension_mm'] = b.clamp_plate_extension_mm
+    meta['specimen_profile_clamp_offset_mm'] = b.specimen_profile_clamp_offset_mm
     meta['xsec_width'] = xw
     meta['xsec_height'] = float(st.session_state['morpho_xsec_height'])
     b.h5_protocol_metadata = meta
