@@ -7467,7 +7467,7 @@ def main():
                         st.text_input(
                             'Apparatus inertia calibration file',
                             key='gui_cfg_bld_apparatus_inertia_calibration_file',
-                            placeholder='e.g. 2026-07-07_apparatus_inertia_calibration.json (or an absolute path)',
+                            placeholder='e.g. 2026-07-06_apparatus_inertia_calibration.json (or an absolute path)',
                             help='JSON from fit_apparatus_inertia.py. Machine-specific: put the file on '
                                  'this machine, then give an absolute path or a name resolved against the '
                                  'launch dir / repo root. Leave blank for none.',

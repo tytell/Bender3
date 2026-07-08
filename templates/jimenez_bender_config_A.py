@@ -9,7 +9,7 @@ forcetorque_calibration_file = 'FT56491.cal'
 # skipped silently (no auto-load); the GUI loader can still set one per session. This bare filename
 # resolves against the repo root, where the committed calibration artifact lives, so Bender
 # auto-loads it on init (mirrors how forcetorque_calibration_file loads FT56491.cal).
-apparatus_inertia_calibration_file = '2026-07-07_apparatus_inertia_calibration.json'
+apparatus_inertia_calibration_file = '2026-07-06_apparatus_inertia_calibration.json'
 
 positive_motor_direction = "right"
 

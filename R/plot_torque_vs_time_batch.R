@@ -131,24 +131,85 @@ thin_for_plot <- function(df, time_col = "t.s", target_hz = 100) {
 }
 
 # Command angle is slow-varying; collapse to one sample per AI tick before display.
-prepare_angle_plot_data <- function(df, time_col = "t.s", target_hz = 50) {
-  if (!"angle.deg" %in% names(df) || nrow(df) == 0L) {
-    return(df[0, , drop = FALSE])
+# Add bracketed phase annotations (segment + tick + label) to an angle panel.
+# Bracket lines are drawn at y_bkt; labels at y_lbl. Both must be below the
+# data area. Caller is responsible for expanding coord ylim to include them.
+add_phase_brackets <- function(p, meta, protocol, y_bkt, y_lbl, tick_h) {
+  is_iso <- grepl("isometric", protocol, ignore.case = TRUE)
+
+  fin <- function(x) !is.null(x) && length(x) >= 1L && is.finite(x[[1L]])
+  g   <- function(x) if (fin(x)) x[[1L]] else NA_real_
+
+  t_pre_bs <- g(meta$t_pre_baseline_start_s)
+  t_act_s  <- g(meta$t_active_start_s)
+  t_act_e  <- g(meta$t_active_end_s)
+  stim0    <- g(meta$stim_t0_s)
+  stim1    <- g(meta$stim_t1_s)
+  x_hi     <- g(meta$t_post_baseline_end_s)
+
+  phases <- list()
+
+  # bookend / approach ramp: start to t_pre_baseline_start
+  if (is.finite(t_pre_bs) && t_pre_bs > 0.05) {
+    phases <- c(phases, list(list(
+      t0 = 0, t1 = t_pre_bs,
+      lbl = if (is_iso) "bookend + ramp" else "bookend",
+      col = "gray40"
+    )))
   }
-  out <- df |>
-    dplyr::arrange(.data[[time_col]]) |>
-    dplyr::filter(is.finite(.data[[time_col]]), is.finite(.data$angle.deg))
-  if (nrow(out) == 0L) return(out)
-  dt <- stats::median(diff(out[[time_col]]), na.rm = TRUE)
-  if (is.finite(dt) && dt > 0) {
-    out <- out |>
-      dplyr::mutate(.tb = round(.data[[time_col]] / dt)) |>
-      dplyr::group_by(.tb) |>
-      dplyr::slice_tail(n = 1) |>
-      dplyr::ungroup() |>
-      dplyr::select(-.tb)
+
+  # pre-stim baseline / approach ramp: t_pre_baseline_start to t_active_start
+  if (is.finite(t_pre_bs) && is.finite(t_act_s) && t_act_s - t_pre_bs > 0.05) {
+    phases <- c(phases, list(list(
+      t0 = t_pre_bs, t1 = t_act_s,
+      lbl = if (is_iso) "pre-stim hold" else "approach",
+      col = "#1d4ed8"
+    )))
   }
-  thin_for_plot(out, time_col = time_col, target_hz = target_hz)
+
+  # hold before stim (isometric only): t_active_start to stim_t0 if gap > 0.05 s
+  if (is_iso && is.finite(t_act_s) && is.finite(stim0) && stim0 - t_act_s > 0.05) {
+    phases <- c(phases, list(list(t0 = t_act_s, t1 = stim0, lbl = "hold", col = "#166534")))
+  }
+
+  # stim burst
+  if (is.finite(stim0) && is.finite(stim1) && stim1 > stim0) {
+    phases <- c(phases, list(list(t0 = stim0, t1 = stim1, lbl = "stim", col = "#b45309")))
+  }
+
+  # post-stim hold (isometric: stim_t1 to t_active_end)
+  if (is_iso && is.finite(stim1) && is.finite(t_act_e) && t_act_e - stim1 > 0.05) {
+    phases <- c(phases, list(list(
+      t0 = stim1, t1 = t_act_e, lbl = "post-stim hold", col = "#166534"
+    )))
+  }
+
+  # return ramp: t_active_end (or stim_t1) to x_hi
+  ret_s <- if (is.finite(t_act_e)) t_act_e else (if (is.finite(stim1)) stim1 else NA_real_)
+  if (is.finite(ret_s) && is.finite(x_hi) && x_hi - ret_s > 0.05) {
+    phases <- c(phases, list(list(t0 = ret_s, t1 = x_hi, lbl = "return", col = "gray40")))
+  }
+
+  for (ph in phases) {
+    t_mid <- (ph$t0 + ph$t1) / 2
+    p <- p +
+      annotate("segment",
+               x = ph$t0, xend = ph$t1, y = y_bkt, yend = y_bkt,
+               color = ph$col, linewidth = 0.85) +
+      annotate("segment",
+               x = ph$t0, xend = ph$t0,
+               y = y_bkt - tick_h, yend = y_bkt + tick_h,
+               color = ph$col, linewidth = 0.85) +
+      annotate("segment",
+               x = ph$t1, xend = ph$t1,
+               y = y_bkt - tick_h, yend = y_bkt + tick_h,
+               color = ph$col, linewidth = 0.85) +
+      annotate("text",
+               x = t_mid, y = y_lbl,
+               label = ph$lbl, size = 2.4, color = ph$col,
+               fontface = "bold", hjust = 0.5)
+  }
+  p
 }
 
 # Per-step LP for zoom display: removes stim electrical pickup spikes while
@@ -231,67 +292,90 @@ build_ztorque_stim_overlay_plot <- function(
     stim_t0 = NULL,
     stim_t1 = NULL,
     stim_side = NULL,
-    zoom_style = FALSE
+    zoom_style = FALSE,
+    phase_meta = NULL,
+    protocol = "unknown"
 ) {
   if (zoom_style) {
+    message("[dbg2] td param nrow=", nrow(td), " names=", paste(head(names(td),5), collapse=","))
     if (!"ztorque_plot" %in% names(td)) {
       td$ztorque_plot <- td[[torque_plot_column(td)]]
     }
     td <- td |> dplyr::arrange(.data[[time_col]])
-    tq <- td$ztorque_plot
+    tq     <- td$ztorque_plot
     tq_min <- min(tq, na.rm = TRUE)
     tq_max <- max(tq, na.rm = TRUE)
     tq_span <- tq_max - tq_min
     if (!is.finite(tq_span) || tq_span < 1e-9) {
-      pad <- 0.05
-      tq_min <- tq_min - pad
-      tq_max <- tq_max + pad
-      tq_span <- tq_max - tq_min
+      pad <- 0.05; tq_min <- tq_min - pad; tq_max <- tq_max + pad; tq_span <- tq_max - tq_min
     }
 
-    has_angle <- "angle.deg" %in% names(td) && any(is.finite(td$angle.deg))
+    has_angle  <- "angle.deg" %in% names(td) && any(is.finite(td$angle.deg))
+    use_patchwork <- has_angle && requireNamespace("patchwork", quietly = TRUE)
 
-    if (has_angle) {
-      td_angle <- prepare_angle_plot_data(td, time_col = time_col)
+    if (use_patchwork) {
+      # --- angle data: direct subsample to ~50 Hz from the already-thinned td ---
+      ang_raw  <- td |>
+        dplyr::filter(is.finite(.data[[time_col]]), is.finite(.data$angle.deg)) |>
+        dplyr::arrange(.data[[time_col]])
+      n_ang    <- nrow(ang_raw)
+      message("[dbg] build zoom: td nrow=", nrow(td),
+              " ang_raw n_fin=", n_ang,
+              " angle.deg range=", paste(range(ang_raw$angle.deg, na.rm=TRUE), collapse=","))
+      step_ang <- max(1L, as.integer(floor(n_ang / 175L)))
+      ang_df   <- ang_raw[seq(1L, n_ang, by = step_ang), c(time_col, "angle.deg"), drop = FALSE]
 
-      p_angle <- ggplot(td_angle, aes(x = .data[[time_col]], y = angle.deg)) +
-        geom_line(color = "#2563eb", linewidth = 0.55) +
+      ang_min  <- min(ang_df$angle.deg, na.rm = TRUE)
+      ang_max  <- max(ang_df$angle.deg, na.rm = TRUE)
+      ang_span <- max(ang_max - ang_min, 1)
+      # pad the data range; extra room below for bracket annotations
+      ang_data_pad <- max(1.0, 0.04 * ang_span)
+      has_brackets  <- !is.null(phase_meta) && is.list(phase_meta)
+      bkt_space     <- if (has_brackets) (ang_span + ang_data_pad) * 0.45 else 0
+      y_lo <- ang_min - ang_data_pad - bkt_space
+      y_hi <- ang_max + ang_data_pad
+      # bracket geometry relative to data range
+      y_bkt  <- ang_min - ang_data_pad - bkt_space * 0.30
+      y_lbl  <- ang_min - ang_data_pad - bkt_space * 0.72
+      tick_h <- ang_span * 0.045
+      # axis breaks only over data range (no brackets shown on y axis)
+      bk <- pretty(c(ang_min, ang_max), n = 4L)
+      bk <- bk[bk >= ang_min - ang_data_pad & bk <= ang_max + ang_data_pad]
+
+      use_xlim <- !is.null(xlim) && length(xlim) == 2L && all(is.finite(xlim))
+
+      p_angle <- ggplot(ang_df,
+                        aes(x = .data[[time_col]], y = .data$angle.deg)) +
+        geom_line(color = "#2563eb", linewidth = 0.7) +
+        scale_y_continuous(name = "Command\nangle (deg)", breaks = bk) +
         labs(x = NULL) +
+        coord_cartesian(
+          xlim = if (use_xlim) xlim else NULL,
+          ylim = c(y_lo, y_hi),
+          clip = "off"
+        ) +
         theme_bw(base_size = 11) +
-        theme(axis.title.x = element_blank())
+        theme(axis.title.x = element_blank(),
+              plot.margin = ggplot2::margin(t = 2, r = 4, b = 14, l = 4, unit = "mm"))
 
-      ang_min <- NA_real_
-      ang_max <- NA_real_
-      ang_pad <- 0.5
-      if (nrow(td_angle) > 0L) {
-        ang_min <- min(td_angle$angle.deg, na.rm = TRUE)
-        ang_max <- max(td_angle$angle.deg, na.rm = TRUE)
-        ang_pad <- max(0.5, 0.02 * (ang_max - ang_min))
-        p_angle <- p_angle +
-          scale_y_continuous(
-            name = "Command angle (deg)",
-            limits = c(ang_min - ang_pad, ang_max + ang_pad)
-          )
-      } else {
-        p_angle <- p_angle + scale_y_continuous(name = "Command angle (deg)")
+      p_angle <- add_stim_shade_zoom(p_angle, stim_t0, stim_t1, stim_side,
+                                      ang_min - ang_data_pad, y_hi)
+
+      if (has_brackets) {
+        p_angle <- add_phase_brackets(p_angle, phase_meta, protocol,
+                                       y_bkt, y_lbl, tick_h)
       }
 
-      p_torque <- ggplot(td, aes(x = .data[[time_col]], y = ztorque_plot)) +
+      # --- torque panel ---
+      p_torque <- ggplot(td, aes(x = .data[[time_col]], y = .data$ztorque_plot)) +
         geom_line(color = "#b91c1c", linewidth = 0.6) +
-        scale_y_continuous(name = "zTorque (N*m)", limits = c(tq_min, tq_max)) +
+        scale_y_continuous(name = "zTorque (N*m)") +
         labs(x = "Time (s)") +
+        coord_cartesian(
+          xlim = if (use_xlim) xlim else NULL,
+          ylim = c(tq_min, tq_max)
+        ) +
         theme_bw(base_size = 11)
-
-      if (!is.null(xlim) && length(xlim) == 2L && all(is.finite(xlim))) {
-        p_angle <- p_angle + coord_cartesian(xlim = xlim)
-        p_torque <- p_torque + coord_cartesian(xlim = xlim)
-      }
-      if (nrow(td_angle) > 0L) {
-        p_angle <- add_stim_shade_zoom(
-          p_angle, stim_t0, stim_t1, stim_side,
-          ang_min - ang_pad, ang_max + ang_pad
-        )
-      }
       p_torque <- add_stim_shade_zoom(p_torque, stim_t0, stim_t1, stim_side, tq_min, tq_max)
 
       return(combine_zoom_panels(p_angle, p_torque, title, subtitle))
@@ -356,19 +440,22 @@ read_step_metadata <- function(filename, step_number) {
       path <- paste0("/metadata/", key)
       if (H5Lexists(h5, path)) tryCatch(h5read(h5, path), error = function(e) NULL) else NULL
     }
+    scalar_at <- function(v) if (!is.null(v)) as.numeric(v)[[idx + 1L]] else NULL
 
-    op <- m_ds("index_step_operating_point")
+    op    <- m_ds("index_step_operating_point")
     if (!is.null(op)) out$operating_point <- as.numeric(op)[[idx + 1L]]
     units <- m_ds("index_step_operating_point_units")
     if (!is.null(units)) out$operating_point_units <- as.character(units[[idx + 1L]])
     sides <- m_ds("index_step_block_stim_sides")
     if (!is.null(sides)) out$stim_side <- as.character(sides[[idx + 1L]])
-    stim_t0 <- m_ds("index_step_stim_t0_second")
-    if (!is.null(stim_t0)) out$stim_t0_s <- as.numeric(stim_t0)[[idx + 1L]]
-    stim_t1 <- m_ds("index_step_stim_t1_second")
-    if (!is.null(stim_t1)) out$stim_t1_s <- as.numeric(stim_t1)[[idx + 1L]]
-    post_end <- m_ds("index_step_t_post_baseline_end_second")
-    if (!is.null(post_end)) out$t_post_baseline_end_s <- as.numeric(post_end)[[idx + 1L]]
+
+    out$stim_t0_s              <- scalar_at(m_ds("index_step_stim_t0_second"))
+    out$stim_t1_s              <- scalar_at(m_ds("index_step_stim_t1_second"))
+    out$t_post_baseline_end_s  <- scalar_at(m_ds("index_step_t_post_baseline_end_second"))
+    out$t_pre_baseline_start_s <- scalar_at(m_ds("index_step_t_pre_baseline_start_second"))
+    out$t_pre_baseline_end_s   <- scalar_at(m_ds("index_step_t_pre_baseline_end_second"))
+    out$t_active_start_s       <- scalar_at(m_ds("index_step_t_active_start_second"))
+    out$t_active_end_s         <- scalar_at(m_ds("index_step_t_active_end_second"))
   }, error = function(e) NULL)
   out
 }
@@ -490,6 +577,9 @@ plot_ztorque_stim_one_step <- function(filename, outdir, step_number = 2L) {
     filter_note
   )
 
+  # store x_hi into meta so add_phase_brackets can use it for the return bracket
+  meta$t_post_baseline_end_s <- x_hi
+
   p <- build_ztorque_stim_overlay_plot(
     sd_plot,
     time_col = "t.s",
@@ -499,7 +589,9 @@ plot_ztorque_stim_one_step <- function(filename, outdir, step_number = 2L) {
     stim_t0 = meta$stim_t0_s,
     stim_t1 = meta$stim_t1_s,
     stim_side = meta$stim_side,
-    zoom_style = TRUE
+    zoom_style = TRUE,
+    phase_meta = meta,
+    protocol = protocol
   )
 
   out_base <- sub(

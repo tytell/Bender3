@@ -11,12 +11,12 @@ Fit every ``*.h5`` in a folder, supplying real aor values from a JSON map, exclu
 
     python fit_apparatus_inertia.py /path/to/inertial_calibration_apparatus \\
         --aor-overrides aor.json --exclude _09_ \\
-        --out 2026-07-07_apparatus_inertia_calibration.json
+        --out 2026-07-06_apparatus_inertia_calibration.json
 
 Fit an explicit file list::
 
     python fit_apparatus_inertia.py --files a.h5 b.h5 c.h5 \\
-        --out 2026-07-07_apparatus_inertia_calibration.json
+        --out 2026-07-06_apparatus_inertia_calibration.json
 
 Notes
 -----
@@ -198,7 +198,7 @@ def main(argv=None):
                     help='Per-trial torque-vs-alpha R2 floor for bad-fit flagging (default 0.05).')
     ap.add_argument('--out', required=True,
                     help='Artifact JSON output path (REQUIRED). Name it deliberately per calibration, '
-                         'e.g. 2026-07-07_apparatus_inertia_calibration.json -- there is no generic '
+                         'e.g. 2026-07-06_apparatus_inertia_calibration.json -- there is no generic '
                          'default, and the name must match the config apparatus_inertia_calibration_file '
                          'for auto-load.')
     args = ap.parse_args(argv)
