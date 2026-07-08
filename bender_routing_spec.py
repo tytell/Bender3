@@ -441,6 +441,12 @@ EXCLUDED: Set[str] = {
     "use_inertial_calibration", "inertial_calibration_profile",
     "inertial_system_from_profile",
 
+    # --- apparatus-inertia fit artifact (dict) + its source path ---
+    # Consumed by the direct flat-key block in the exporter, which writes
+    # calibration_inertia_apparatus_fit_file / _fit_form / _fit_json (see MISSING_REQUIRED).
+    # Excluded here so the dict/path do not fall into 99_Unrouted.
+    "apparatus_inertia_calibration", "apparatus_inertia_calibration_file",
+
     # --- legacy profile / frustum model attrs (unused GUI path; not schema fields) ---
     # specimen_profile_* belong to set_profiled_specimen_inertial_model (not the live GUI path).
     # frustum_inputs: the dict object itself is excluded — its individual scalar contents are now
@@ -523,6 +529,23 @@ MISSING_REQUIRED: List[Dict[str, str]] = [
      "source": "computed",
      "note": "axis_sensor from inertial_calibration_profile (categorical); "
              "written by the direct flat-key block in the exporter, not the ledger."},
+    # Apparatus-inertia fit provenance -- written by the direct flat-key block in the exporter
+    # (embed-values principle, schema section 5 / D11), not the ledger. Source is the Bender
+    # attrs apparatus_inertia_calibration (dict) + apparatus_inertia_calibration_file (path),
+    # both EXCLUDED. String scalars follow the null-sentinel rule ('NA' when no fit is loaded).
+    {"key": "calibration_inertia_apparatus_fit_file", "tier": "metadata",
+     "source": "computed",
+     "note": "Provenance path/name of the loaded apparatus_inertia_fit.json artifact; "
+             "'NA' when no fit is loaded. Direct-write block, not the ledger."},
+    {"key": "calibration_inertia_apparatus_fit_form", "tier": "metadata",
+     "source": "computed",
+     "note": "Selected fit-form equation string (e.g. F4 separable quadratic) from the artifact; "
+             "'NA' when no fit is loaded. Direct-write block, not the ledger."},
+    {"key": "calibration_inertia_apparatus_fit_json", "tier": "metadata",
+     "source": "computed",
+     "note": "FULL apparatus-inertia fit artifact serialized as a JSON string dataset "
+             "(coefficients, source_files, metrics, valid_domain, sign note, per-trial rows) so "
+             "the file is self-contained; 'NA' when no fit is loaded. Direct-write block, not the ledger."},
     {"key": "index_step_*", "tier": "metadata",
      "source": "computed", "note": "Parallel per-step arrays (sample_start/end/type/target/...); derived from trial_records step boundaries."},
 ]

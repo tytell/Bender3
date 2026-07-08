@@ -835,6 +835,29 @@ def export_primary_h5(
         g_meta.attrs['calibration_inertia_apparatus_aor_to_clamp_millimeter'] = _aor_val
         written_keys.add('calibration_inertia_apparatus_aor_to_clamp_millimeter')
 
+        # Apparatus-inertia fit provenance -- embed the FULL fit (values), not just a filename
+        # pointer, so the file is self-contained for re-processing (schema section 5 / D11
+        # embed-values principle). Three keys:
+        #   _fit_file : provenance path/name (str)
+        #   _fit_form : the selected form id/equation string (str)
+        #   _fit_json : the ENTIRE artifact serialized (coefficients, source_files, excluded_files,
+        #               metrics, valid_domain, sign note, per-trial aor/width/I + aor_source) as a
+        #               vlen-str dataset, same pattern as step_manifest / daq_ai_channel_map.
+        # Null-sentinel rule (2026-07-02): string scalars are 'NA' when absent. All three are CLAIMED
+        # in written_keys so the ledger and NA-fill sweep leave them alone.
+        _fit_art = getattr(bender, 'apparatus_inertia_calibration', None)
+        _fit_art = _fit_art if isinstance(_fit_art, dict) else {}
+        _fit_file = str(getattr(bender, 'apparatus_inertia_calibration_file', '') or '')
+        g_meta.attrs['calibration_inertia_apparatus_fit_file'] = _fit_file if _fit_file else 'NA'
+        _fit_form = str(_fit_art.get('fit_form', '') or '')
+        g_meta.attrs['calibration_inertia_apparatus_fit_form'] = _fit_form if _fit_form else 'NA'
+        _fit_json = json.dumps(_fit_art, default=str) if _fit_art else 'NA'
+        g_meta.create_dataset('calibration_inertia_apparatus_fit_json',
+                              data=_fit_json, dtype=h5py.special_dtype(vlen=str))
+        written_keys.add('calibration_inertia_apparatus_fit_file')
+        written_keys.add('calibration_inertia_apparatus_fit_form')
+        written_keys.add('calibration_inertia_apparatus_fit_json')
+
         # protocol_metadata subgroup REMOVED (PI decision, post-Phase-0 audit). Its attr-mirror keys
         # are written canonically by the ledger pass below; block_sequence is routed as
         # protocol_block_sequence (JSON). Run-computed provenance now routed canonically too
