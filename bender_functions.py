@@ -6172,17 +6172,25 @@ class Bender:
 
 APPARATUS_INERTIA_FIT_SCHEMA = 'bender_apparatus_inertia_fit_v1'
 
-# Candidate fit forms. All treat aor as the parallel-axis (squared) term; width
-# is at most a secondary correction (physics: widening the clamp separates mass
-# at the SAME distance from the axis of rotation, so it should barely change I).
+# Candidate fit forms for apparatus MOI I(aor, width). aor = axis-of-rotation-to-clamp
+# distance; width = plate-to-plate span. F1-F4 treat aor as the parallel-axis (squared)
+# term with width as an increasingly-flexible correction. F5 is the physically-grounded
+# form: each clamp half sits at distance d = sqrt(aor^2 + (width/2)^2) from the axis
+# (right triangle: aor is the perpendicular offset, width/2 the tangential half-spread),
+# so by the parallel-axis theorem the MOVABLE clamp mass scales as m*d^2 with a SINGLE
+# shared coefficient b. The constant a absorbs the fixed-position apparatus inertia plus
+# the clamps' self-inertia. If the geometry holds, the F4 aor^2:width^2 coefficient ratio
+# should be ~4:1 (because (width/2)^2 = width^2/4).
 _APPARATUS_FIT_FORMS = {
     'F1': 'I_gram_millimeter_squared = a + b*aor_millimeter**2',
     'F2': 'I_gram_millimeter_squared = a + b*aor_millimeter + c*aor_millimeter**2',
     'F3': 'I_gram_millimeter_squared = a + b*aor_millimeter**2 + c*width_millimeter',
     'F4': 'I_gram_millimeter_squared = a + b*aor_millimeter**2 + c*width_millimeter**2',
+    'F5': 'I_gram_millimeter_squared = a + b*(aor_millimeter**2 + (width_millimeter/2)**2)',
 }
 _APPARATUS_FIT_TERMS = {'F1': ('a', 'b'), 'F2': ('a', 'b', 'c'),
-                        'F3': ('a', 'b', 'c'), 'F4': ('a', 'b', 'c')}
+                        'F3': ('a', 'b', 'c'), 'F4': ('a', 'b', 'c'),
+                        'F5': ('a', 'b')}
 
 
 def _apparatus_fit_design_row(form_id, aor_mm, width_mm):
@@ -6197,6 +6205,8 @@ def _apparatus_fit_design_row(form_id, aor_mm, width_mm):
         return [1.0, a * a, w]
     if form_id == 'F4':
         return [1.0, a * a, w * w]
+    if form_id == 'F5':
+        return [1.0, a * a + (w / 2.0) ** 2]
     raise ValueError('Unknown apparatus fit form: ' + str(form_id))
 
 
@@ -6402,7 +6412,7 @@ def fit_apparatus_inertia_calibration(
             for w in np.linspace(width.min(), width.max(), 4)]
 
     candidates = {}
-    for form_id in ('F1', 'F2', 'F3', 'F4'):
+    for form_id in ('F1', 'F2', 'F3', 'F4', 'F5'):
         X = np.array([_apparatus_fit_design_row(form_id, a, w) for a, w in zip(aor, width)], dtype=float)
         if X.shape[0] <= X.shape[1]:
             continue  # not enough points to fit + cross-validate this form
@@ -6422,18 +6432,51 @@ def fit_apparatus_inertia_calibration(
             'physically_valid': bool(min_pred > 0.0),
         }
 
-    # Selection: among physically-valid forms, lowest LOO-RMSE; prefer the
-    # simpler form when two are within 5% of each other (parsimony).
+    # Selection priority:
+    #  1. Prefer F5 (Pythagorean geometry, 2 params, physically grounded) when it is valid,
+    #     its movable-term coefficient b > 0, and its LOO-RMSE is within 10% of the best
+    #     UNCONSTRAINED form (min LOO among valid F1-F4). This favors the physical model
+    #     unless an unconstrained form beats it by a meaningful margin.
+    #  2. Otherwise: lowest LOO-RMSE among valid forms, with F1 (2 params) preferred over
+    #     any richer form within 5% (parsimony).
     valid = {k: v for k, v in candidates.items() if v['physically_valid']}
     selected = None
     if valid:
         order = sorted(valid.items(), key=lambda kv: kv[1]['loo_cv_rmse_gram_millimeter_squared'])
         best_id, best = order[0]
-        # Parsimony: F1 (2 params) preferred over any 3-param form within 5%.
+        # Parsimony: F1 (2 params) preferred over any richer form within 5%.
         if 'F1' in valid and best_id != 'F1':
             if valid['F1']['loo_cv_rmse_gram_millimeter_squared'] <= 1.05 * best['loo_cv_rmse_gram_millimeter_squared']:
                 best_id, best = 'F1', valid['F1']
+        # F5 geometry preference (top priority) overrides the above when it holds up.
+        unconstrained = {k: v for k, v in valid.items() if k in ('F1', 'F2', 'F3', 'F4')}
+        if 'F5' in valid and unconstrained:
+            f5 = valid['F5']
+            best_unconstrained_loo = min(v['loo_cv_rmse_gram_millimeter_squared'] for v in unconstrained.values())
+            if f5['coefficients'].get('b', 0.0) > 0.0 and \
+                    f5['loo_cv_rmse_gram_millimeter_squared'] <= 1.10 * best_unconstrained_loo:
+                best_id, best = 'F5', f5
         selected = best_id
+
+    # Geometry check: under the F5 Pythagorean model the F4 unconstrained aor^2 : width^2
+    # coefficient ratio should be ~4:1 (since (width/2)^2 = width^2/4). A ratio far from 4
+    # while F4 clearly beats F5 flags a geometry anomaly for physical investigation.
+    geometry_check = None
+    if 'F4' in candidates:
+        f4c = candidates['F4']['coefficients']
+        b_aor = float(f4c.get('b', float('nan')))   # aor^2 coefficient
+        c_width = float(f4c.get('c', float('nan')))  # width^2 coefficient
+        ratio = (b_aor / c_width) if (np.isfinite(c_width) and c_width != 0.0) else float('nan')
+        f4_loo = candidates['F4']['loo_cv_rmse_gram_millimeter_squared']
+        f5_loo = candidates.get('F5', {}).get('loo_cv_rmse_gram_millimeter_squared', float('nan'))
+        f4_beats_f5_by_10pct = bool(np.isfinite(f5_loo) and f4_loo < 0.90 * f5_loo)
+        anomaly = bool(f4_beats_f5_by_10pct and np.isfinite(ratio) and not (2.0 <= ratio <= 8.0))
+        geometry_check = {
+            'f4_aor2_over_width2_ratio': ratio,
+            'expected_ratio': 4.0,
+            'f4_beats_f5_by_10pct': f4_beats_f5_by_10pct,
+            'anomaly': anomaly,
+        }
 
     # Outlier flags relative to the SELECTED form's LOO residuals.
     outliers = [{'file': t['file'], 'reason': 'r2_below_' + str(r2_min)} for t in fit_trials if t['r2'] < r2_min]
@@ -6463,6 +6506,18 @@ def fit_apparatus_inertia_calibration(
         sign_note = ('MIXED slope signs across trials (' + str(n_neg) + '/' + str(len(fit_trials))
                      + ' negative): sign convention is not consistent. Investigate before trusting.')
 
+    # aor provenance across the fitted trials: 'metadata' = read from the file,
+    # 'override' = supplied externally (e.g. transcribed from lab notes because the file
+    # recorded NaN), 'mixed' = a combination. Surfaced as one explicit field so a reader
+    # of the embedded artifact knows at a glance whether the aor axis was measured or entered.
+    _aor_sources = {str(t.get('aor_source', 'unknown')) for t in fit_trials}
+    if _aor_sources == {'metadata'}:
+        aor_provenance = 'metadata'
+    elif _aor_sources == {'override'}:
+        aor_provenance = 'override'
+    else:
+        aor_provenance = 'mixed'
+
     artifact = {
         'schema': APPARATUS_INERTIA_FIT_SCHEMA,
         'build_date': build_date,
@@ -6471,6 +6526,7 @@ def fit_apparatus_inertia_calibration(
         'n_trials_fit': len(fit_trials),
         'alpha_source_default': 'measured_angle_double_diff',
         'alpha_reference_rms_rad_s2': alpha_ref,
+        'aor_provenance': aor_provenance,
         'fit_form': (_APPARATUS_FIT_FORMS[selected] if selected else ''),
         'fit_form_id': selected or '',
         'fit_coefficients': (candidates[selected]['coefficients'] if selected else {}),
@@ -6478,6 +6534,7 @@ def fit_apparatus_inertia_calibration(
         'loo_cv_rmse_gram_millimeter_squared': (
             candidates[selected]['loo_cv_rmse_gram_millimeter_squared'] if selected else float('nan')),
         'valid_domain': domain,
+        'geometry_check': geometry_check,
         'sign_convention_note': sign_note,
         'candidate_forms': candidates,
         'outliers': outliers,
