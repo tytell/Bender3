@@ -2671,25 +2671,31 @@ class Bender:
             angle_reader = CounterReader(angle_in.in_stream)
             self.angledata = np.zeros((len(self.t),), dtype=np.float64)
 
-            # write the output
-            analog_writer = AnalogMultiChannelWriter(analog_out.out_stream, 
-                                                    auto_start=False)
-            analog_writer.write_many_sample(self.stimcmdhi)
-
-            digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
-                                                        auto_start=False)
-            nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
-            expected_out = int(len(self.tout))
-            if int(nwritten) != expected_out:
-                raise RuntimeError(
-                    f'DO write incomplete: wrote {nwritten} of {expected_out} samples. '
-                    'Try lowering daq_ao_do_sample_rate_hz or shortening the protocol.'
-                )
-
             # start everthing
             # make sure to start the output first, because it'll wait until the input starts
             run_completed_ok = False
             try:
+                # Write the AO (stim trigger) and DO (motor) waveforms INSIDE this protected try so
+                # that a write failure -- e.g. an AO command exceeding the +/-10 V range -- still
+                # runs the finally below (stop tasks, close handles, reset_device + release the
+                # motor, clear the enable power-up cache). Previously these writes sat BEFORE the
+                # try, so an AO-range DaqWriteError skipped all cleanup: the device was left
+                # un-reset and the motor de-energized, and every following run inherited that wedged
+                # state (motor limp, "Disabled") until a full KILL DAQ + app restart.
+                analog_writer = AnalogMultiChannelWriter(analog_out.out_stream,
+                                                        auto_start=False)
+                analog_writer.write_many_sample(self.stimcmdhi)
+
+                digital_writer = DigitalSingleChannelWriter(digital_out.out_stream,
+                                                            auto_start=False)
+                nwritten = digital_writer.write_many_sample_port_uint32(self.dig)
+                expected_out = int(len(self.tout))
+                if int(nwritten) != expected_out:
+                    raise RuntimeError(
+                        f'DO write incomplete: wrote {nwritten} of {expected_out} samples. '
+                        'Try lowering daq_ao_do_sample_rate_hz or shortening the protocol.'
+                    )
+
                 if not getattr(self, 'acquisition_start', None):
                     self.acquisition_start = datetime.now().replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%S')
                 digital_out.start()
