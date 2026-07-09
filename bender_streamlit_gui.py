@@ -2008,20 +2008,32 @@ def _render_isovelocity_stim_fields(b: Bender) -> Optional[dict]:
     )
     left_v = float(
         st.number_input(
-            'Left stim voltage (V)',
+            'Left stim voltage (V) - S88 dial (metadata)',
             key=_widget_key('left_stim_voltage'),
             format='%.6g',
             min_value=0.0,
-            help='Voltage on the LEFT stim channel when a block includes LEFT or BOTH.',
+            help=(
+                'S88 dial setting for the LEFT channel: the stimulation intensity the muscle '
+                'receives. Recorded as METADATA only. The NI DAQ sends the S88 a fixed 5 V trigger '
+                'pulse (timing only), so this value never drives the AO directly and may be any '
+                'level (e.g. 10-30 V) without risking an AO +/-10 V error. The delivered stim is '
+                'captured on the stim_monitor channel.'
+            ),
         )
     )
     right_v = float(
         st.number_input(
-            'Right stim voltage (V)',
+            'Right stim voltage (V) - S88 dial (metadata)',
             key=_widget_key('right_stim_voltage'),
             format='%.6g',
             min_value=0.0,
-            help='Voltage on the RIGHT stim channel when a block includes RIGHT or BOTH.',
+            help=(
+                'S88 dial setting for the RIGHT channel: the stimulation intensity the muscle '
+                'receives. Recorded as METADATA only. The NI DAQ sends the S88 a fixed 5 V trigger '
+                'pulse (timing only), so this value never drives the AO directly and may be any '
+                'level (e.g. 10-30 V) without risking an AO +/-10 V error. The delivered stim is '
+                'captured on the stim_monitor channel.'
+            ),
         )
     )
     onset_sk = _widget_key('isovelocity_stim_onset_s')
@@ -2170,20 +2182,32 @@ def _render_isometric_stim_fields(b: Bender) -> Optional[dict]:
     )
     left_v = float(
         st.number_input(
-            'Left stim voltage (V)',
+            'Left stim voltage (V) - S88 dial (metadata)',
             key=_widget_key('left_stim_voltage'),
             format='%.6g',
             min_value=0.0,
-            help='Voltage on the LEFT stim channel when a block includes LEFT or BOTH.',
+            help=(
+                'S88 dial setting for the LEFT channel: the stimulation intensity the muscle '
+                'receives. Recorded as METADATA only. The NI DAQ sends the S88 a fixed 5 V trigger '
+                'pulse (timing only), so this value never drives the AO directly and may be any '
+                'level (e.g. 10-30 V) without risking an AO +/-10 V error. The delivered stim is '
+                'captured on the stim_monitor channel.'
+            ),
         )
     )
     right_v = float(
         st.number_input(
-            'Right stim voltage (V)',
+            'Right stim voltage (V) - S88 dial (metadata)',
             key=_widget_key('right_stim_voltage'),
             format='%.6g',
             min_value=0.0,
-            help='Voltage on the RIGHT stim channel when a block includes RIGHT or BOTH.',
+            help=(
+                'S88 dial setting for the RIGHT channel: the stimulation intensity the muscle '
+                'receives. Recorded as METADATA only. The NI DAQ sends the S88 a fixed 5 V trigger '
+                'pulse (timing only), so this value never drives the AO directly and may be any '
+                'level (e.g. 10-30 V) without risking an AO +/-10 V error. The delivered stim is '
+                'captured on the stim_monitor channel.'
+            ),
         )
     )
     onset_sk = _widget_key('isometric_stim_onset_s')
@@ -8861,10 +8885,12 @@ def main():
                             or (stim_s2_plot is not None and len(stim_s2_plot) > 0)
                         )
                         if _has_stim_channels:
-                            st.markdown('**Stimulation preview** (commanded AO voltage)')
+                            st.markdown('**Stimulation preview** (commanded AO trigger to S88)')
                             st.caption(
-                                'S1 and S2 are independent AO channels (not summed). '
-                                'Each trace is the commanded voltage for that channel.'
+                                'S1 and S2 are independent AO trigger channels (not summed). Each '
+                                'trace is the fixed-height trigger pulse that gates the S88; its '
+                                'timing (rate/width/onset) is what matters. The delivered stim '
+                                'amplitude is set on the S88 dials and recorded on stim_monitor.'
                             )
                             fig_st = go.Figure()
                             # Use the dense, preview-only stim time axis when a protocol supplies one

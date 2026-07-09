@@ -18,6 +18,9 @@ class _BlockHelperBender(Bender):
         self.specimen_side_index_left = -1
         self.specimen_side_index_right = 1
         self.stim_pulse_rate = 75.0
+        # Fixed AO trigger height sent to the S88 (mirrors Bender.__init__); the per-side dial
+        # voltages passed to the routing helpers are metadata only and never set AO amplitude.
+        self.stim_trigger_pulse_volt = 5.0
 
 
 @pytest.fixture
@@ -116,19 +119,26 @@ def test_normalize_block_sequence_with_off(b):
 
 
 def test_route_stim_sides_volts_left_only(b):
+    # The AO carries a FIXED-height trigger pulse to the S88 (stim_trigger_pulse_volt); the
+    # operator's per-side dial voltages (4.0/6.0 here) are metadata only and do NOT set amplitude.
+    # Routing is what varies: LEFT fires, RIGHT stays zero.
+    trig = float(b.stim_trigger_pulse_volt)
     t = np.linspace(0, 0.1, 200)
     active = (t >= 0.02) & (t < 0.08)
     s1, s2 = b._route_stim_sides_volts(t, active, 75.0, 'left', 4.0, 6.0)
-    assert np.max(np.abs(s1)) == pytest.approx(4.0)
+    assert np.max(np.abs(s1)) == pytest.approx(trig)
     assert np.max(np.abs(s2)) == 0.0
 
 
-def test_route_stim_sides_volts_both_different_voltages(b):
+def test_route_stim_sides_volts_both_uses_fixed_trigger(b):
+    # BOTH sides fire at the SAME fixed trigger height regardless of the (different) dial voltages;
+    # the delivered per-side amplitude is set on the S88, not on the AO.
+    trig = float(b.stim_trigger_pulse_volt)
     t = np.linspace(0, 0.1, 200)
     active = (t >= 0.02) & (t < 0.08)
     s1, s2 = b._route_stim_sides_volts(t, active, 75.0, 'both', 3.5, 7.0)
-    assert np.max(np.abs(s1)) == pytest.approx(3.5)
-    assert np.max(np.abs(s2)) == pytest.approx(7.0)
+    assert np.max(np.abs(s1)) == pytest.approx(trig)
+    assert np.max(np.abs(s2)) == pytest.approx(trig)
 
 
 def test_route_stim_sides_volts_off_is_zero(b):

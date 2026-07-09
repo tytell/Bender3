@@ -538,6 +538,15 @@ class Bender:
         self.block_sequence = [{'direction': 'left', 'stim_sides': 'left'}]
         self.left_stim_voltage = 5.0
         self.right_stim_voltage = 5.0
+        # Fixed height (V) of the trigger pulse train the NI AO (S1stim/S2stim) sends to the Grass
+        # S88. This is NOT the stimulation amplitude the muscle receives: the S88's own dials set
+        # the delivered intensity, and the delivered signal is recorded separately on the
+        # stim_monitor AI channel. The AO only needs to gate/clock the S88 with a stable TTL-level
+        # pulse train, so its height is a fixed, always-in-range value -- never an operator-entered
+        # voltage. left_stim_voltage/right_stim_voltage are the operator's S88 dial settings, kept
+        # as METADATA only; they never drive the AO, so they may be any value (e.g. 10-30 V)
+        # without risking an AO +/-10 V DaqWriteError. 5 V is a proven trigger level on this rig.
+        self.stim_trigger_pulse_volt = 5.0
         # Peak commanded speed for the open-loop return-to-neutral ramp. The reset is open-loop
         # stepper motion: a fixed-duration ramp slews large resets too fast and loses steps, so the
         # motor lands short of physical 0 (residual scales with speed). Sizing the ramp from this
@@ -3250,9 +3259,16 @@ class Bender:
         return float(min(max(pw_s * pr, 0.0), 1.0))
 
     def _pulse_carrier_volts(self, t, active_mask, stim_pulse_rate_hz, stim_voltage):
-        """Square carrier at stim_pulse_rate_hz with pulse_width_ms high time, gated by active_mask."""
+        """Square TRIGGER carrier at stim_pulse_rate_hz with pulse_width_ms high time, gated by active_mask.
+
+        The pulse HEIGHT is the fixed S88 trigger level (``stim_trigger_pulse_volt``), NOT the
+        ``stim_voltage`` argument. ``stim_voltage`` is the operator's S88 dial setting, recorded as
+        metadata only; it must never reach the AO (an out-of-range value would raise an AO +/-10 V
+        DaqWriteError). What matters on the AO is the pulse TIMING (rate/width/gating) -- it clocks
+        when the S88 fires; the delivered amplitude is set on the S88 and captured on stim_monitor.
+        """
         pr = float(stim_pulse_rate_hz)
-        v = float(stim_voltage)
+        v = float(getattr(self, 'stim_trigger_pulse_volt', 5.0))
         frac = self._pulse_high_fraction(pr)
         pulse = (np.mod(t * pr, 1.0) < frac).astype(np.float64) * v
         m = active_mask & np.isfinite(t)
@@ -3340,9 +3356,14 @@ class Bender:
         return s1, s2
 
     def _isometric_pulse_stim(self, t, active_mask, stim_pulse_rate_hz, stim_voltage):
-        """Same carrier shape as make_stimuli (square at stim_pulse_rate_hz, pulse_width_ms high)."""
+        """Same TRIGGER carrier shape as make_stimuli (square at stim_pulse_rate_hz, pulse_width_ms high).
+
+        Pulse HEIGHT is the fixed S88 trigger level (``stim_trigger_pulse_volt``), not the
+        ``stim_voltage`` argument (which is the operator's S88 dial setting, recorded as metadata
+        only and never sent to the AO). See ``_pulse_carrier_volts`` for the full rationale.
+        """
         pr = float(stim_pulse_rate_hz)
-        v = float(stim_voltage)
+        v = float(getattr(self, 'stim_trigger_pulse_volt', 5.0))
         frac = self._pulse_high_fraction(pr)
         pulse = (np.mod(t * pr, 1.0) < frac).astype(np.float64) * v
         m = active_mask & np.isfinite(t)
