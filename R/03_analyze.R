@@ -12,7 +12,7 @@
 # Dependencies: dplyr, tibble, pracma, signal (optional LP filter), cli
 #
 # Typical pipeline for single_finite:
-#   source("R/load_bender_flat.R")
+#   source("R/00_load_bender_flat.R")
 #   source("R/03_analyze.R")
 #   td  <- load_bender_flat("trial.h5")
 #   td  <- set_cycle_types(td)

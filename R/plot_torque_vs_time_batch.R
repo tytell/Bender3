@@ -1,12 +1,12 @@
 # plot_torque_vs_time_batch.R
-# Batch torque-vs-time PNGs using load_bender_flat.R (flat-schema HDF5).
+# Batch torque-vs-time PNGs using 00_load_bender_flat.R (flat-schema HDF5).
 
 repo <- normalizePath("/Users/yjimenez/code/Bender3")
 dropzone <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/00_DropZone"
 outdir <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/tests"
 date_filter <- "2026-07-07"
 
-source(file.path(repo, "R/load_bender_flat.R"))
+source(file.path(repo, "R/00_load_bender_flat.R"))
 library(rhdf5)
 library(dplyr)
 library(ggplot2)
@@ -297,7 +297,6 @@ build_ztorque_stim_overlay_plot <- function(
     protocol = "unknown"
 ) {
   if (zoom_style) {
-    message("[dbg2] td param nrow=", nrow(td), " names=", paste(head(names(td),5), collapse=","))
     if (!"ztorque_plot" %in% names(td)) {
       td$ztorque_plot <- td[[torque_plot_column(td)]]
     }
@@ -319,9 +318,6 @@ build_ztorque_stim_overlay_plot <- function(
         dplyr::filter(is.finite(.data[[time_col]]), is.finite(.data$angle.deg)) |>
         dplyr::arrange(.data[[time_col]])
       n_ang    <- nrow(ang_raw)
-      message("[dbg] build zoom: td nrow=", nrow(td),
-              " ang_raw n_fin=", n_ang,
-              " angle.deg range=", paste(range(ang_raw$angle.deg, na.rm=TRUE), collapse=","))
       step_ang <- max(1L, as.integer(floor(n_ang / 175L)))
       ang_df   <- ang_raw[seq(1L, n_ang, by = step_ang), c(time_col, "angle.deg"), drop = FALSE]
 
