@@ -88,11 +88,22 @@ detect_trial_type <- function(data) {
   n_amp   <- if ("amp.deg" %in% names(data)) dplyr::n_distinct(data$amp.deg, na.rm = TRUE) else NA_integer_
   n_duty  <- dplyr::n_distinct(data$duty, na.rm = TRUE)
   n_phase <- dplyr::n_distinct(data$phase, na.rm = TRUE)
+  # NOTE: actual bass16 corpus `metadata/protocol_type` values are the schema-locked
+  # snake_case strings "dynamic"/"frequency_sweep" (verified against real files,
+  # 2026-07-15) -- NOT the earlier-assumed "constant_frequency"/
+  # "frequency_amplitude_combo" Title/snake sub-type strings, which never occur on
+  # disk. "dynamic" covers both single-condition and multi-parameter-combo trials;
+  # sub-layout is derived from the realized n_freq/n_amp/n_duty/n_phase counts.
   layout <- dplyr::case_when(
+    identical(stimulus_type, "frequency_sweep") ~ "frequency_sweep",
+    identical(stimulus_type, "dynamic") &
+      n_freq <= 1L & n_duty <= 1L & n_phase <= 1L & (is.na(n_amp) | n_amp <= 1L) ~ "single_condition",
+    identical(stimulus_type, "dynamic") & n_freq > 1L & !is.na(n_amp) & n_amp > 1L ~ "freq_amp_combo",
+    identical(stimulus_type, "dynamic") ~ "constant_multi_param",
+    # legacy/alternate protocol_type spellings, kept for forward compatibility
     identical(stimulus_type, "constant_frequency") & n_freq <= 1L & n_duty <= 1L & n_phase <= 1L ~ "single_condition",
     identical(stimulus_type, "constant_frequency") ~ "constant_multi_param",
     identical(stimulus_type, "frequency_amplitude_combo") ~ "freq_amp_combo",
-    identical(stimulus_type, "frequency_sweep") ~ "frequency_sweep",
     .default = "unknown"
   )
   group_keys <- detect_muscle_group_keys(data, stimulus_type = stimulus_type, layout = layout)
@@ -437,10 +448,29 @@ detect_passive_mode <- function(data, cycles_keep = NULL) {
 
 
 #' Muscle torque via active minus passive subtraction.
+#' @param phase_match_all_rows Only used with include_all_active_samples =
+#'   TRUE and passive_mode = "halfcycle" (dynamic trials). Whole-CYCLE
+#'   act/pass gating (from index_cycle_active) marks a cycle "pass" the
+#'   moment the protocol's DESIGNED active block ends -- but real muscle
+#'   force does not vanish at that instant; it decays over the following
+#'   relaxation period, which typically falls inside the very next
+#'   "pass"-labeled cycle(s). With the default FALSE, those rows are
+#'   dropped entirely (not just set NA -- absent from the returned tibble),
+#'   truncating any relaxation-tail display at the block boundary -- most
+#'   visible at higher cycle frequencies (e.g. 3 Hz => 0.33 s/cycle) where
+#'   the fixed post-stim relaxation window spans several cycles and hits a
+#'   "pass" cycle almost immediately. Setting TRUE returns EVERY row
+#'   (both "act"- and "pass"-labeled cycles) subtracted against the SAME
+#'   phase(t.perc)-matched passive baseline used for "act" rows -- for
+#'   true rest cycles this correctly yields a near-zero residual; for the
+#'   relaxation tail immediately after a block, it reveals the decaying
+#'   real force instead of an artificial cutoff. Does not change which
+#'   rows count as "pass" when building the passive baseline itself.
 calc_muscle_torque <- function(data, torque_col = NULL, sample_freq.Hz = NULL,
                                group_keys = NULL, cycles_keep = NULL,
                                passive_mode = "auto",
-                               include_all_active_samples = FALSE) {
+                               include_all_active_samples = FALSE,
+                               phase_match_all_rows = FALSE) {
   if (is.null(torque_col)) {
     torque_col <- intersect(
       c("xtorque.Nm", "xtorque0.Nm", "bodytorque.Nm"),
@@ -482,7 +512,7 @@ calc_muscle_torque <- function(data, torque_col = NULL, sample_freq.Hz = NULL,
 
   if (passive_mode == "halfcycle") {
     pass_rows <- dplyr::filter(df, .data$cycletype == "pass")
-    act_rows  <- dplyr::filter(df, .data$cycletype == "act")
+    act_rows  <- if (isTRUE(phase_match_all_rows)) df else dplyr::filter(df, .data$cycletype == "act")
   } else if (passive_mode == "stim_off") {
     pass_rows <- dplyr::filter(df, as.character(.data$stim) == "0")
     act_rows  <- df
@@ -565,15 +595,26 @@ summarize_muscle_cycles <- function(muscletorque, cycles_keep = NULL,
     dplyr::summarise(
       work.J         = calc_work(.data$pos.rad, .data$muscle_torque.Nm),
       avg_power.W    = mean(.data$insta_power.W, na.rm = TRUE),
+      peak_power.W   = max(abs(.data$insta_power.W), na.rm = TRUE),
       peak_torque.Nm = max(abs(.data$muscle_torque.Nm), na.rm = TRUE),
-      muscle_mass.kg = dplyr::first(.data[[mass_col]]),
+      muscle_mass.kg = if (mass_col %in% names(df)) dplyr::first(.data[[mass_col]]) else NA_real_,
       .groups        = "drop"
     ) |>
     dplyr::mutate(
       work.Jkg    = if (mass_normalize && is.finite(.data$muscle_mass.kg[1L]))
         .data$work.J / .data$muscle_mass.kg else NA_real_,
       avg_power.Wkg = if (mass_normalize && is.finite(.data$muscle_mass.kg[1L]))
-        .data$avg_power.W / .data$muscle_mass.kg else NA_real_
+        .data$avg_power.W / .data$muscle_mass.kg else NA_real_,
+      # Peak (not mean) instantaneous mass-specific power, for direct
+      # comparison against Coughlin et al. 1996 scup red-muscle steady-state
+      # power limits (coughlin_steady_state_power_limits(), below) -- "is
+      # this twitch weak or strong" per PI direction, 2026-07-16.
+      peak_power.Wkg = if (mass_normalize && is.finite(.data$muscle_mass.kg[1L]))
+        .data$peak_power.W / .data$muscle_mass.kg else NA_real_,
+      coughlin_limit_lo_Wkg = coughlin_steady_state_power_limits()$lo,
+      coughlin_limit_hi_Wkg = coughlin_steady_state_power_limits()$hi,
+      exceeds_coughlin_hi = .data$peak_power.Wkg > .data$coughlin_limit_hi_Wkg,
+      below_coughlin_lo   = .data$peak_power.Wkg < .data$coughlin_limit_lo_Wkg
     )
 }
 
@@ -632,79 +673,414 @@ score_step_sinusoid_quality <- function(df, min_n = 20L,
 
 
 # =============================================================================
-# segmented_finite stubs
+# segmented_finite: isometric (FL) / isovelocity (FV) analysis
+#
+# COMPLETED 2026-07-15 (was a stub through the M1 dispatcher milestone;
+# BUILD_PLAN.md M2+ "Segmented analysis" scope). Requires
+# R/muscle_geometry.R and R/fit_fv_fl.R to be sourced first.
+#
+# Windowing (PI-confirmed, 2026-07-15):
+#   Force_passive = mean torque over the step's pre-stim baseline window
+#     [index_step_t_pre_baseline_start_second, _end_second].
+#   Force_active  = mean torque over [index_step_stim_t0_second,
+#     index_step_stim_t1_second + 0.5s] -- the 0.5 s tail implements the
+#     "continue passive subtraction for 0.5s after stimulus removal"
+#     deactivation-window rule (twitch decay outlasts the electrical pulse).
+#   Force_muscle  = Force_active - Force_passive, torque_inertia_corrected_Nm.
+#
+# ADDITIONAL interpolated-baseline method (PI-directed, 2026-07-16, isometric
+# only -- see build_segmented_step_summary()'s passive_force_Nm_interp
+# comment): the static pre-stim-only baseline above is contaminated by
+# ongoing viscoelastic stress relaxation that hasn't settled by the time the
+# active window is sampled, biasing Force_muscle by an amount that scales
+# with |displacement| and can mimic a monotonic FL trend. muscle_force_Nm_interp
+# (analyze_isometric()) linearly interpolates the passive reference between
+# the pre- and post-baseline window means instead. This is KEPT SEPARATE from
+# Force_muscle above (not a replacement) and is only surfaced in
+# "_interpbaseline"-suffixed plots (run_fv_fl_power_pipeline.R).
+#
+# NOTE (PI direction, 2026-07-16): isometric FL summary plots no longer fit a
+# model (parabola) to either muscle_force_Nm or muscle_force_Nm_interp by
+# default -- see fit_fv_fl.R module header / build_summary_plot_isometric()
+# (plot_summary_profiles.R). analyze_isometric() therefore returns EMPTY
+# fits/fits_interp lists; they are kept as fields (rather than removed) only
+# so the shared isometric/isovelocity per-trial reporting code in
+# run_fv_fl_power_pipeline.R doesn't need a separate code path.
+#
+# Muscle side / contraction mode: see resolve_step_contraction()
+# (muscle_geometry.R). Unilateral steps fold into ONE curve per stimulated
+# side (concentric + eccentric together); bilateral_simultaneous steps are
+# reported separately and EXCLUDED from the per-side FL/FV fits (net torque
+# can't be attributed to one muscle when both are stimulated at once).
+#
+# FL x-axis / FV x-axis use predicted MUSCLE strain / strain-rate (not raw
+# joint angle/velocity), from the commanded operating_point run through the
+# same curvature -> strain geometry as the rest of the pipeline (see
+# compute_predicted_strain(), muscle_geometry.R): shortening_strain_pct =
+# shortening_value * pi/180 / dclamp_m * r_m * 100.
 # =============================================================================
 
-#' (STUB) Force-length curve analysis for isometric steps.
-#'
-#' Parses step_manifest + index_step_* from the loaded tibble and returns a
-#' per-step summary. FL curve fitting and Hill-equation fit are deferred to a
-#' follow-on session (M3 approved scope boundary).
-#'
-#' @param td Tibble from load_bender_flat() for a segmented_finite isometric file.
-#' @return Per-step tibble with step_number, target_angle_degree, and raw torque
-#'   statistics (mean passive, mean active). Fit columns are NA until implemented.
-analyze_isometric <- function(td) {
-  stopifnot(is.data.frame(td))
-  if (!"step_number" %in% names(td)) {
-    cli::cli_abort("analyze_isometric: step_number column absent; load with load_bender_flat()")
+#' Read the per-step index_step_* geometry/timing table + file-level geometry
+#' attrs needed for segmented FL/FV analysis.
+.read_segmented_step_geometry <- function(filename) {
+  h5 <- rhdf5::H5Fopen(filename, "H5F_ACC_RDONLY")
+  on.exit(try(rhdf5::H5Fclose(h5), silent = TRUE), add = TRUE)
+
+  m_attrs <- tryCatch(rhdf5::h5readAttributes(h5, "/metadata"), error = function(e) list())
+  m_a  <- function(key) m_attrs[[key]]
+  m_ds <- function(key) {
+    path <- paste0("/metadata/", key)
+    if (rhdf5::H5Lexists(h5, path)) tryCatch(rhdf5::h5read(h5, path), error = function(e) NULL) else NULL
+  }
+  dbl1 <- function(v, default = NA_real_) {
+    v <- suppressWarnings(as.numeric(v[1L]))
+    if (length(v) == 0L || is.na(v)) default else v
   }
 
-  tq_col <- intersect(c("xtorque.Nm", "bodytorque.Nm"), names(td))[1L]
-  if (is.na(tq_col)) {
-    cli::cli_abort("analyze_isometric: no torque column found (need xtorque.Nm or bodytorque.Nm)")
+  step_number <- as.integer(m_ds("index_step_number"))
+  if (is.null(step_number) || length(step_number) == 0L) {
+    cli::cli_abort(".read_segmented_step_geometry: index_step_number absent in {basename(filename)}")
   }
 
-  td |>
-    dplyr::group_by(.data$step_number) |>
-    dplyr::summarise(
-      n_samples       = dplyr::n(),
-      target_angle_deg = dplyr::first(dplyr::coalesce(
-        .data[["index_step_target_angle_degree"]], NA_real_
-      )),
-      torque_mean_Nm  = mean(.data[[tq_col]], na.rm = TRUE),
-      torque_sd_Nm    = stats::sd(.data[[tq_col]], na.rm = TRUE),
-      torque_peak_Nm  = max(abs(.data[[tq_col]]), na.rm = TRUE),
-      # FL fit deferred -- TODO implement Hill fit
-      FL_Fo_Nm        = NA_real_,
-      FL_Lo_deg       = NA_real_,
-      .groups = "drop"
-    )
+  # block_number/direction are only present when use_block_stim was active for
+  # the trial (schema SS4 "Block metadata") -- default to NA so callers (e.g.
+  # the fatigue-check plot) can fall back to treating the whole trial as one
+  # block rather than erroring on older/non-block protocols.
+  block_number <- suppressWarnings(as.numeric(m_ds("index_step_block_number")))
+  if (is.null(block_number) || length(block_number) != length(step_number)) {
+    block_number <- rep(NA_real_, length(step_number))
+  }
+  block_direction <- m_ds("index_step_block_direction")
+  if (is.null(block_direction) || length(block_direction) != length(step_number)) {
+    block_direction <- rep(NA_character_, length(step_number))
+  }
+
+  steps <- tibble::tibble(
+    step_number             = step_number,
+    operating_point          = as.numeric(m_ds("index_step_operating_point")),
+    operating_point_units    = as.character(m_ds("index_step_operating_point_units")),
+    recruitment              = as.character(m_ds("index_step_recruitment")),
+    stim_t0_s                = as.numeric(m_ds("index_step_stim_t0_second")),
+    stim_t1_s                = as.numeric(m_ds("index_step_stim_t1_second")),
+    t_pre_baseline_start_s   = as.numeric(m_ds("index_step_t_pre_baseline_start_second")),
+    t_pre_baseline_end_s     = as.numeric(m_ds("index_step_t_pre_baseline_end_second")),
+    t_post_baseline_start_s  = as.numeric(m_ds("index_step_t_post_baseline_start_second")),
+    t_post_baseline_end_s    = as.numeric(m_ds("index_step_t_post_baseline_end_second")),
+    block_number             = as.integer(block_number),
+    block_direction          = as.character(block_direction)
+  )
+
+  local_body_width_mm  <- dbl1(m_a("measurement_specimen_local_body_width_millimeter"))
+  local_body_height_mm <- dbl1(m_a("measurement_specimen_local_body_height_millimeter"))
+  dclamp_mm            <- dbl1(m_a("measurement_clamp_separation_millimeter"))
+  density_g_per_mm3    <- dbl1(m_a("measurement_specimen_density_gram_per_cubic_millimeter"))
+
+  # Mass/CSA estimate (PI-directed, 2026-07-16) for mass-/area-specific
+  # properties -- see compute_muscle_mass_and_csa() (muscle_geometry.R) for
+  # the oval-CSA x test-section-length x 3%-fraction recipe and caveats.
+  muscle <- compute_muscle_mass_and_csa(local_body_width_mm, local_body_height_mm,
+                                        dclamp_mm, density_g_per_mm3)
+
+  list(
+    steps               = steps,
+    local_body_width_mm = local_body_width_mm,
+    local_body_height_mm = local_body_height_mm,
+    muscle_depth_mm_raw  = dbl1(m_a("measurement_target_muscle_depth_millimeter")),
+    dclamp_mm            = dclamp_mm,
+    density_g_per_mm3    = density_g_per_mm3,
+    muscle               = muscle,
+    lidx_pos_motor       = dbl1(m_a("daq_specimen_lateral_index_on_positive_motor_side")),
+    lidx_left            = dbl1(m_a("daq_specimen_side_index_left")),
+    lidx_right           = dbl1(m_a("daq_specimen_side_index_right"))
+  )
 }
 
 
-#' (STUB) Force-velocity curve analysis for isovelocity steps.
+#' Deactivation-window active-sample mask for a segmented (isometric /
+#' isovelocity) td: TRUE within [stim_t0, stim_t1 + 0.5s] of the sample's step.
+.segmented_active_mask <- function(td, step_geom, deactivation_window_s = 0.5) {
+  active <- rep(FALSE, nrow(td))
+  steps  <- step_geom$steps
+  for (i in seq_len(nrow(steps))) {
+    if (!is.finite(steps$stim_t0_s[i]) || !is.finite(steps$stim_t1_s[i])) next
+    in_step <- td$step_number == steps$step_number[i]
+    in_win  <- td$t.s >= steps$stim_t0_s[i] & td$t.s <= (steps$stim_t1_s[i] + deactivation_window_s)
+    active[in_step & in_win] <- TRUE
+  }
+  active
+}
+
+
+#' Velocity-matched passive torque for isovelocity steps (PI-directed fix,
+#' 2026-07-15): a STATIC pre-motion baseline can't capture the
+#' velocity-dependent viscoelastic drag present once the specimen is
+#' actually moving, which biases active-minus-passive "muscle force" at
+#' higher commanded speeds (concentric trends spuriously negative, eccentric
+#' spuriously inflated positive). Instead, match each STIMULATED step to the
+#' no-stim step in the same trial commanded to the SAME operating_point
+#' (same speed AND bend direction) and use that step's own torque over the
+#' analogous window as the passive reference.
 #'
-#' Returns a per-step tibble with velocity and torque statistics.
-#' P0 estimation and Hill FV fit are deferred to a follow-on session.
+#' No-stim steps are detected from the ACTUAL delivered stim (td$stim != "0"
+#' during the step's samples), not from index_step_recruitment -- this
+#' corpus's bilateral_simultaneous "calibration" steps list a recruited side
+#' but never actually fire the stimulator (stim_side stays "none"
+#' throughout), so they are exactly the velocity-matched no-stim ramps this
+#' fix needs, despite their recruitment label.
 #'
-#' @param td Tibble from load_bender_flat() for a segmented_finite isovelocity file.
-#' @return Per-step tibble with step_number, velocity_deg_s, and torque statistics.
-analyze_isovelocity <- function(td) {
+#' @return Named numeric vector (by step_number) of matched passive torque;
+#'   NA for steps with no same-operating_point no-stim match (caller should
+#'   fall back to the static baseline in that case rather than dropping the
+#'   step).
+.isovelocity_velocity_matched_passive <- function(td, steps, deactivation_window_s) {
+  is_no_stim_step <- vapply(steps$step_number, function(sn) {
+    rows <- td$step_number == sn
+    !any(as.character(td$stim[rows]) != "0", na.rm = TRUE)
+  }, logical(1L))
+
+  matched <- vapply(seq_len(nrow(steps)), function(i) {
+    if (is_no_stim_step[i]) return(NA_real_)
+    match_idx <- which(is_no_stim_step & abs(steps$operating_point - steps$operating_point[i]) < 1e-3)
+    if (length(match_idx) == 0L) return(NA_real_)
+    match_step <- steps$step_number[match_idx[1L]]
+    rows <- td$step_number == match_step
+    win <- td$t.s[rows] >= steps$stim_t0_s[i] & td$t.s[rows] <= (steps$stim_t1_s[i] + deactivation_window_s)
+    if (!any(win, na.rm = TRUE)) return(NA_real_)
+    mean(td$torque_inertia_corrected_Nm[rows][win], na.rm = TRUE)
+  }, numeric(1L))
+
+  stats::setNames(matched, steps$step_number)
+}
+
+
+#' Shared per-step force/strain/side summary for isometric + isovelocity.
+#' Returns list(step_summary, td) -- td gains strain_active_pct/
+#' strain_passive_pct/torque_inertia_corrected_Nm columns for the required
+#' per-trial compound plot; step_summary is one row per step with muscle
+#' force, side, contraction mode, and the FL/FV x-axis value.
+#'
+#' @param passive_mode "static_baseline" (default; mean torque over the
+#'   step's own pre-stim baseline window -- correct when the specimen isn't
+#'   moving, i.e. isometric) or "velocity_matched" (isovelocity: passive
+#'   torque taken from a same-operating_point no-stim step instead; falls
+#'   back to the static baseline for any step lacking a no-stim match).
+build_segmented_step_summary <- function(td, filename = attr(td, "Filename"),
+                                         torque_col = "torque_inertia_corrected_Nm",
+                                         deactivation_window_s = 0.5,
+                                         passive_mode = c("static_baseline", "velocity_matched")) {
+  passive_mode <- match.arg(passive_mode)
   stopifnot(is.data.frame(td))
   if (!"step_number" %in% names(td)) {
-    cli::cli_abort("analyze_isovelocity: step_number column absent; load with load_bender_flat()")
+    cli::cli_abort("build_segmented_step_summary: step_number column absent; load with load_bender_flat()")
   }
-
-  tq_col <- intersect(c("xtorque.Nm", "bodytorque.Nm"), names(td))[1L]
-  if (is.na(tq_col)) {
-    cli::cli_abort("analyze_isovelocity: no torque column found (need xtorque.Nm or bodytorque.Nm)")
+  if (!torque_col %in% names(td)) {
+    cli::cli_abort("build_segmented_step_summary: {torque_col} column absent -- run deconvolve_bender() and attach it first")
   }
+  geom <- .read_segmented_step_geometry(filename)
 
-  td |>
+  active_mask <- .segmented_active_mask(td, geom, deactivation_window_s)
+  td <- attach_predicted_strain(td, geom$local_body_width_mm, geom$muscle_depth_mm_raw,
+                                active_mask = active_mask)
+  td$torque_inertia_corrected_Nm <- td[[torque_col]]
+
+  depth <- resolve_muscle_depth_mm(geom$muscle_depth_mm_raw)
+  dclamp_m <- geom$dclamp_mm / 1000.0
+
+  side_tbl <- resolve_step_contraction(
+    geom$steps$recruitment, geom$steps$operating_point,
+    geom$lidx_pos_motor, geom$lidx_left, geom$lidx_right
+  )
+  steps <- dplyr::bind_cols(geom$steps, side_tbl)
+
+  # commanded-operating-point -> muscle-strain(-rate) x-axis, using the same
+  # curvature geometry as the rest of the pipeline (r_m from strain formula).
+  # d(curvature)/dt = d(angle)/dt * pi/180 / dclamp_m, so running this same
+  # formula on operating_point gives STRAIN (%) for isometric (operating_point
+  # is an angle) and STRAIN RATE (%/s) for isovelocity (operating_point is an
+  # angular velocity) -- shared column name, units follow the caller's protocol.
+  strain_res <- compute_predicted_strain(1.0, geom$local_body_width_mm, depth$depth_mm) # for r_m only
+  r_m <- strain_res$r_m
+  steps$shortening_strain_pct <- steps$shortening_value * pi / 180.0 / dclamp_m * r_m * 100.0
+
+  force_by_step <- td |>
     dplyr::group_by(.data$step_number) |>
     dplyr::summarise(
-      n_samples        = dplyr::n(),
-      velocity_deg_s   = dplyr::first(dplyr::coalesce(
-        .data[["index_step_velocity_degree_per_second"]], NA_real_
-      )),
-      torque_mean_Nm   = mean(.data[[tq_col]], na.rm = TRUE),
-      torque_sd_Nm     = stats::sd(.data[[tq_col]], na.rm = TRUE),
-      torque_peak_Nm   = max(abs(.data[[tq_col]]), na.rm = TRUE),
-      # FV fit deferred -- TODO implement Hill FV + P0/Vmax estimates
-      FV_P0_Nm         = NA_real_,
-      FV_Vmax_deg_s    = NA_real_,
-      FV_power_max_W   = NA_real_,
+      passive_force_Nm_static = {
+        s <- geom$steps[geom$steps$step_number == dplyr::first(.data$step_number), ]
+        win <- .data$t.s >= s$t_pre_baseline_start_s & .data$t.s <= s$t_pre_baseline_end_s
+        mean(.data$torque_inertia_corrected_Nm[win], na.rm = TRUE)
+      },
+      # Post-stim baseline mean (2026-07-16 addition): NOT used by the
+      # original static-baseline muscle_force_Nm below (kept unchanged), but
+      # feeds passive_force_Nm_interp just below -- see that block's comment
+      # for why the pre-stim-only baseline is biased.
+      post_force_Nm_static = {
+        s <- geom$steps[geom$steps$step_number == dplyr::first(.data$step_number), ]
+        win <- .data$t.s >= s$t_post_baseline_start_s & .data$t.s <= s$t_post_baseline_end_s
+        mean(.data$torque_inertia_corrected_Nm[win], na.rm = TRUE)
+      },
+      active_force_Nm = {
+        s <- geom$steps[geom$steps$step_number == dplyr::first(.data$step_number), ]
+        win <- .data$t.s >= s$stim_t0_s & .data$t.s <= (s$stim_t1_s + deactivation_window_s)
+        if (any(win, na.rm = TRUE) && any(.data$is_active_sample[win], na.rm = TRUE)) {
+          mean(.data$torque_inertia_corrected_Nm[win], na.rm = TRUE)
+        } else {
+          NA_real_
+        }
+      },
+      n_samples = dplyr::n(),
       .groups = "drop"
     )
+
+  steps <- dplyr::left_join(steps, force_by_step, by = "step_number")
+
+  # Interpolated-baseline alternative (2026-07-16, PI-directed investigation
+  # of the bass17/bass16 isometric FL curve resembling a monotonic "total
+  # tension" shape instead of a bell): binning raw torque across a full
+  # isometric hold shows it keeps decaying continuously from the pre-stim
+  # baseline window all the way through the post-stim baseline window
+  # (viscoelastic stress relaxation of the bent specimen, amplitude scaling
+  # with |displacement|) -- there is no settled plateau. Because
+  # passive_force_Nm_static is sampled EARLY in that decay and
+  # active_force_Nm is sampled slightly LATER along the SAME decay,
+  # active - passive_force_Nm_static is biased by an amount that grows with
+  # |displacement| regardless of stimulation, which masquerades as a
+  # monotonic force-vs-strain trend. This interpolates the passive
+  # reference (evaluated at the active window's own mean time) linearly
+  # between the pre- and post-baseline window means, cancelling a
+  # (locally) linear relaxation trend instead of assuming the passive
+  # torque is flat across the whole hold. Falls back to the static value
+  # when no valid post-baseline mean exists (e.g. trailing step cut off).
+  # Kept STRICTLY ADDITIONAL: passive_force_Nm/muscle_force_Nm (below) are
+  # untouched, so all existing plots/fits reproduce exactly as before --
+  # this only adds *_interp columns, surfaced in separate
+  # "_interpbaseline"-suffixed outputs.
+  steps <- steps |>
+    dplyr::mutate(
+      .t_pre_mid_s    = (.data$t_pre_baseline_start_s + .data$t_pre_baseline_end_s) / 2,
+      .t_post_mid_s   = (.data$t_post_baseline_start_s + .data$t_post_baseline_end_s) / 2,
+      .t_active_mid_s = (.data$stim_t0_s + (.data$stim_t1_s + deactivation_window_s)) / 2,
+      passive_force_Nm_interp = dplyr::if_else(
+        is.finite(.data$post_force_Nm_static) & is.finite(.data$.t_post_mid_s) &
+          (.data$.t_post_mid_s != .data$.t_pre_mid_s),
+        .data$passive_force_Nm_static +
+          (.data$post_force_Nm_static - .data$passive_force_Nm_static) *
+            (.data$.t_active_mid_s - .data$.t_pre_mid_s) / (.data$.t_post_mid_s - .data$.t_pre_mid_s),
+        .data$passive_force_Nm_static
+      )
+    ) |>
+    dplyr::select(-".t_pre_mid_s", -".t_post_mid_s", -".t_active_mid_s")
+
+  if (passive_mode == "velocity_matched") {
+    matched <- .isovelocity_velocity_matched_passive(td, steps, deactivation_window_s)
+    steps$passive_force_Nm_matched <- unname(matched[as.character(steps$step_number)])
+    # fall back to the static baseline for any step lacking a same-velocity
+    # no-stim match, rather than silently dropping it from the FL/FV data.
+    steps$passive_force_Nm <- dplyr::if_else(
+      is.finite(steps$passive_force_Nm_matched),
+      steps$passive_force_Nm_matched, steps$passive_force_Nm_static
+    )
+    steps$passive_force_source <- dplyr::if_else(
+      is.finite(steps$passive_force_Nm_matched), "velocity_matched", "static_baseline_fallback"
+    )
+  } else {
+    steps$passive_force_Nm <- steps$passive_force_Nm_static
+    steps$passive_force_source <- "static_baseline"
+  }
+
+  steps <- steps |>
+    dplyr::mutate(
+      # force_sign (muscle_geometry.R::resolve_step_contraction) re-expresses
+      # RAW lab-frame torque (which follows commanded-angle sign -- opposite
+      # for left- vs right-bend regardless of which muscle is active) into
+      # the recruited muscle's OWN contraction-positive frame. Without this,
+      # left/right FL & FV curves are mirror images of each other purely from
+      # the lab-frame sign flip, not from real physiological sidedness.
+      muscle_force_Nm       = .data$force_sign * (.data$active_force_Nm - .data$passive_force_Nm),
+      # Interpolated-baseline counterpart of muscle_force_Nm above (see
+      # passive_force_Nm_interp comment) -- always computed from the static
+      # pre/post windows regardless of passive_mode, so it is available for
+      # isovelocity steps too even though only the isometric path currently
+      # surfaces it in plots/fits.
+      muscle_force_Nm_interp = .data$force_sign * (.data$active_force_Nm - .data$passive_force_Nm_interp),
+      muscle_depth_mm_used  = depth$depth_mm,
+      muscle_depth_assumed  = depth$assumed
+    )
+
+  list(step_summary = steps, td = td, r_m = r_m, dclamp_m = dclamp_m, muscle = geom$muscle,
+       muscle_depth_mm_used = depth$depth_mm, muscle_depth_assumed = depth$assumed)
+}
+
+
+#' Force-Length curve analysis for isometric steps (completes the M1 stub).
+#'
+#' Windows Force_active/Force_passive per step (deactivation-window rule) and
+#' folds unilateral steps by stimulated muscle side (concentric + eccentric
+#' together); bilateral_simultaneous steps are reported but excluded from the
+#' per-side grouping (see module header).
+#'
+#' Does NOT fit a model (parabola) to the resulting FL points by default (PI
+#' direction, 2026-07-16 -- see fit_fv_fl.R module header): the default FL
+#' visualization is a connect-the-mean line with no imposed functional form
+#' (build_summary_plot_isometric(), plot_summary_profiles.R). `fits` /
+#' `fits_interp` below are therefore always EMPTY lists -- kept as fields
+#' only so callers (run_fv_fl_power_pipeline.R) share one code path with
+#' analyze_isovelocity(), which still returns real Hill fits.
+#'
+#' @param td Tibble from load_bender_flat() with torque_inertia_corrected_Nm
+#'   already attached (see deconvolve_bender()).
+#' @param filename Raw H5 path (defaults to attr(td, "Filename")).
+#' @return list(step_summary, td, fits = list(), fits_interp = list()).
+analyze_isometric <- function(td, filename = attr(td, "Filename")) {
+  built <- build_segmented_step_summary(td, filename)
+  steps <- built$step_summary
+
+  list(step_summary = steps, td = built$td, fits = list(), fits_interp = list(),
+       r_m = built$r_m, dclamp_m = built$dclamp_m, muscle = built$muscle,
+       muscle_depth_mm_used = built$muscle_depth_mm_used,
+       muscle_depth_assumed = built$muscle_depth_assumed)
+}
+
+
+#' Force-Velocity curve analysis for isovelocity steps (completes the M1 stub).
+#'
+#' Same side-folding as analyze_isometric(), but Force_passive uses a
+#' VELOCITY-MATCHED no-stim reference step (same commanded operating_point)
+#' rather than a static pre-motion baseline -- a static baseline can't
+#' capture velocity-dependent viscoelastic drag once the specimen is moving,
+#' which otherwise biases muscle_force_Nm at higher commanded speeds
+#' (PI-directed fix, 2026-07-15; see build_segmented_step_summary()'s
+#' passive_mode doc and .isovelocity_velocity_matched_passive()). Fits a
+#' Hill hyperbola per side on the CONCENTRIC (shortening) limb, anchored at
+#' F0 = the step's own zero-velocity (isometric) muscle force when available.
+#'
+#' @param td Tibble from load_bender_flat() with torque_inertia_corrected_Nm attached.
+#' @param filename Raw H5 path (defaults to attr(td, "Filename")).
+#' @return list(step_summary, td, fits = list(left=, right=)).
+analyze_isovelocity <- function(td, filename = attr(td, "Filename")) {
+  built <- build_segmented_step_summary(td, filename, passive_mode = "velocity_matched")
+  steps <- built$step_summary
+
+  fits <- list()
+  for (sd in c("left", "right")) {
+    ss <- dplyr::filter(steps, .data$muscle_side == sd, is.finite(.data$muscle_force_Nm))
+    f0_row <- dplyr::filter(ss, abs(.data$shortening_value) < 1e-6)
+    f0_iso <- if (nrow(f0_row) > 0L) mean(f0_row$muscle_force_Nm, na.rm = TRUE) else NA_real_
+    ss_conc <- dplyr::filter(ss, .data$contraction_mode %in% c("concentric", "isometric_zero"))
+    fits[[sd]] <- fit_force_velocity_curve(
+      ss_conc$shortening_strain_pct, ss_conc$muscle_force_Nm,
+      side_label = sd, f0_isometric = f0_iso
+    )
+    # Mass-/area-specific properties (PI-directed, 2026-07-16) -- specific
+    # tension (N/cm^2, from F0) AND mass-specific peak power (W/kg, from the
+    # Hill fit's composite peak_power) -- see add_specific_properties_to_fit()
+    # (muscle_geometry.R) for the torque/strain-rate -> physical-units
+    # derivation. No-op if the fit failed or geometry is unavailable.
+    fits[[sd]] <- add_specific_properties_to_fit(fits[[sd]], built$r_m, built$dclamp_m, built$muscle, kind = "FV")
+  }
+
+  list(step_summary = steps, td = built$td, fits = fits,
+       r_m = built$r_m, dclamp_m = built$dclamp_m, muscle = built$muscle,
+       muscle_depth_mm_used = built$muscle_depth_mm_used,
+       muscle_depth_assumed = built$muscle_depth_assumed)
 }

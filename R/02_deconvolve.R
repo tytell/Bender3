@@ -32,9 +32,11 @@ deconvolve_bender <- function(
     raw_path,
     hub_path       = NULL,
     return_series  = TRUE,
-    verbose        = TRUE
+    verbose        = TRUE,
+    components     = FALSE  # if TRUE, return list(t_s, tau_raw, tau_corrected) for signal-processing diagnostics (e.g. diag_torque_smoothing.R) instead of just the final corrected vector -- existing callers are unaffected (default FALSE preserves the original return contract).
 ) {
   result <- NULL
+  components_out <- NULL
 
   tryCatch({
     h5r <- H5Fopen(raw_path, "H5F_ACC_RDONLY")
@@ -55,12 +57,27 @@ deconvolve_bender <- function(
     angle_ds <- .dcv_read_angle(h5r, verbose)
     if (is.null(angle_ds)) stop("angle time series unavailable")
 
-    # Angular acceleration via central differences (deg/s^2)
-    t_s   <- angle_ds$t_s
-    ang   <- angle_ds$angle_deg
-    dt    <- c(diff(t_s)[1L], diff(t_s))
-    vel   <- c(diff(ang)[1L] / dt[1L], diff(ang) / diff(t_s))
-    alpha_deg_s2 <- c(NA_real_, diff(vel) / diff(t_s))
+    # Angular acceleration via central differences (deg/s^2).
+    # segmented_finite concatenates step_NNN subgroups, each with its own
+    # local time axis restarting near 0 -- diff(t_s) is non-positive at every
+    # step boundary. NA out velocity/acceleration at those boundary samples
+    # rather than differencing across the discontinuity (would otherwise
+    # inject a spurious torque-correction spike at every step seam).
+    t_s      <- angle_ds$t_s
+    ang      <- angle_ds$angle_deg
+    dt_fwd   <- diff(t_s)
+    boundary <- c(FALSE, dt_fwd <= 0)
+
+    dt  <- c(dt_fwd[1L], dt_fwd)
+    dt[boundary] <- NA_real_
+    vel <- c(diff(ang)[1L] / dt[1L], diff(ang) / dt_fwd)
+    vel[boundary] <- NA_real_
+
+    dvel <- diff(vel)
+    alpha_deg_s2 <- c(NA_real_, dvel / dt_fwd)
+    alpha_deg_s2[boundary] <- NA_real_
+    # second sample after a boundary also differenced across the seam (dvel uses vel[i]-vel[i-1])
+    alpha_deg_s2[which(boundary) + 1L] <- NA_real_
 
     N          <- min(length(tau_raw), length(alpha_deg_s2))
     tau_raw    <- tau_raw[seq_len(N)]
@@ -92,12 +109,14 @@ deconvolve_bender <- function(
     }
 
     result <- tau_corrected
+    components_out <- list(t_s = t_s[seq_len(N)], tau_raw = tau_raw, tau_corrected = tau_corrected)
     if (!is.null(hub_path)) .dcv_write_hub(hub_path, tau_corrected, verbose)
 
   }, error = function(e) {
     cli::cli_alert_danger("deconvolve_bender: {conditionMessage(e)}")
   })
 
+  if (isTRUE(components)) return(invisible(components_out))
   if (isTRUE(return_series)) invisible(result) else invisible(NULL)
 }
 
@@ -162,17 +181,46 @@ deconvolve_bender <- function(
 
 
 .dcv_read_angle <- function(h5r, verbose) {
-  # try single_finite flat path, then first step subgroup
-  for (base in c("/timeseries", "/timeseries/step_001")) {
-    tp <- paste0(base, "/time_second")
-    if (!H5Lexists(h5r, tp)) next
-    ap <- paste0(base, "/angle_measured_degree")
-    if (!H5Lexists(h5r, ap)) ap <- paste0(base, "/angle_commanded_degree")
-    t_s <- tryCatch(as.numeric(h5read(h5r, tp)), error = function(e) NULL)
+  # single_finite: flat /timeseries dataset.
+  flat_tp <- "/timeseries/time_second"
+  if (H5Lexists(h5r, flat_tp)) {
+    ap <- "/timeseries/angle_measured_degree"
+    if (!H5Lexists(h5r, ap)) ap <- "/timeseries/angle_commanded_degree"
+    t_s <- tryCatch(as.numeric(h5read(h5r, flat_tp)), error = function(e) NULL)
     ang <- tryCatch(as.numeric(h5read(h5r, ap)), error = function(e) NULL)
     if (!is.null(t_s)) return(list(t_s = t_s, angle_deg = ang))
   }
-  NULL
+
+  # segmented_finite: concatenate ALL step_NNN subgroups in step order (must
+  # match the same concatenation order used for derived/forcetorque_calibrated
+  # and for load_bender_flat()'s .bfl_read_segmented_finite, or samples misalign).
+  ts_info <- tryCatch(h5ls(h5r, recursive = TRUE), error = function(e) NULL)
+  if (is.null(ts_info)) return(NULL)
+  step_names <- sort(ts_info$name[
+    ts_info$group == "/timeseries" & grepl("^step_\\d+$", ts_info$name)
+  ])
+  if (length(step_names) == 0L) return(NULL)
+
+  t_parts <- vector("list", length(step_names))
+  a_parts <- vector("list", length(step_names))
+  for (i in seq_along(step_names)) {
+    base <- paste0("/timeseries/", step_names[[i]], "/")
+    tp <- paste0(base, "time_second")
+    if (!H5Lexists(h5r, tp)) next
+    ap <- paste0(base, "angle_measured_degree")
+    if (!H5Lexists(h5r, ap)) ap <- paste0(base, "angle_commanded_degree")
+    t_parts[[i]] <- tryCatch(as.numeric(h5read(h5r, tp)), error = function(e) NULL)
+    a_parts[[i]] <- tryCatch(as.numeric(h5read(h5r, ap)), error = function(e) NULL)
+  }
+  t_s <- unlist(t_parts, use.names = FALSE)
+  ang <- unlist(a_parts, use.names = FALSE)
+  if (length(t_s) == 0L) return(NULL)
+  if (verbose) {
+    cli::cli_alert_info(
+      "deconvolve: concatenated {length(step_names)} step_NNN subgroups ({length(t_s)} samples) for angle/alpha"
+    )
+  }
+  list(t_s = t_s, angle_deg = ang)
 }
 
 
