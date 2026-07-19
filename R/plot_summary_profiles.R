@@ -167,7 +167,7 @@ generic_skeletal_muscle_FL_shape <- function(strain_pct, gamma = 0.45) {
 #'   with a trial_id column added by the caller), filtered to muscle_side %in% c("left","right").
 #' @param title Plot title override (default unchanged from the original
 #'   static-baseline caption) -- lets callers reuse this builder unmodified
-#'   for the "_interpbaseline" variant (2026-07-16) by passing a
+#'   for the "_baselineInterp" variant (2026-07-16) by passing a
 #'   muscle_force_Nm-substituted step_summary plus a distinguishing title.
 build_summary_plot_isometric <- function(step_summary, title = "Isometric summary: Force-Length") {
   side_colors <- c(left = "#1d4ed8", right = "#b91c1c")

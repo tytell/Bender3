@@ -8,7 +8,7 @@
 #
 # Also produces a pooled power-spectral-density plot of the UNSMOOTHED
 # inertia-corrected signal during the active stim window, to directly test
-# the ~32 Hz wave observed by eye in force_vs_time_isometric.png.
+# the ~32 Hz wave observed by eye in forceTime_isometric_legacy.png.
 #
 # Run with:  Rscript R/diag_torque_smoothing.R
 

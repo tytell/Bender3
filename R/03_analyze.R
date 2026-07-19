@@ -697,7 +697,8 @@ score_step_sinusoid_quality <- function(df, min_n = 20L,
 # (analyze_isometric()) linearly interpolates the passive reference between
 # the pre- and post-baseline window means instead. This is KEPT SEPARATE from
 # Force_muscle above (not a replacement) and is only surfaced in
-# "_interpbaseline"-suffixed plots (run_fv_fl_power_pipeline.R).
+# "_baselineInterp"-suffixed plots (run_fv_fl_power_pipeline.R;
+# see FIGURES_README.md for the naming convention).
 #
 # NOTE (PI direction, 2026-07-16): isometric FL summary plots no longer fit a
 # model (parabola) to either muscle_force_Nm or muscle_force_Nm_interp by
@@ -954,7 +955,7 @@ build_segmented_step_summary <- function(td, filename = attr(td, "Filename"),
   # Kept STRICTLY ADDITIONAL: passive_force_Nm/muscle_force_Nm (below) are
   # untouched, so all existing plots/fits reproduce exactly as before --
   # this only adds *_interp columns, surfaced in separate
-  # "_interpbaseline"-suffixed outputs.
+  # "_baselineInterp"-suffixed outputs.
   steps <- steps |>
     dplyr::mutate(
       .t_pre_mid_s    = (.data$t_pre_baseline_start_s + .data$t_pre_baseline_end_s) / 2,

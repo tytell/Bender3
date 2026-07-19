@@ -54,6 +54,8 @@ src("plot_fatigue_check.R")
 src("plot_strain_validation.R")
 src("plot_angle_sono_validation.R")
 src("plot_force_vs_time.R")
+src("muscle_force_vector.R")
+src("plot_muscle_force_vector.R")
 
 fs::dir_create(TRIAL_PLOT_DIR, recurse = TRUE)
 fs::dir_create(SUMMARY_PLOT_DIR, recurse = TRUE)
@@ -193,7 +195,7 @@ DEACTIVATION_WINDOW_S <- 0.5
 #' @param force_col Column in step_summary to broadcast (default
 #'   "muscle_force_Nm", the original static-baseline method). Pass
 #'   "muscle_force_Nm_interp" to build the interpolated-baseline variant
-#'   (2026-07-16) for the "_interpbaseline"-suffixed compound plot instead --
+#'   (2026-07-16) for the "_baselineInterp"-suffixed compound plot instead --
 #'   always written to td$muscle_force_Nm either way, since
 #'   build_trial_compound_plot() only knows that one column name.
 .attach_segmented_muscle_force <- function(td, step_summary, deactivation_window_s = DEACTIVATION_WINDOW_S,
@@ -244,6 +246,15 @@ strain_check_all      <- list()
 angle_check_all       <- list()
 sono_strain_check_all <- list()
 force_ts_all          <- list(isometric = list(), isovelocity = list(), dynamic = list())
+# Vector (6-axis line-of-action) muscle-force accumulators (PI-directed,
+# 2026-07-18) -- additive, see muscle_force_vector.R.
+isometric_steps_vec_all   <- list()
+isovelocity_steps_vec_all <- list()
+iso_vec_inputs            <- list()   # deferred isovelocity trials -> cross-trial batch
+fv_l0_all                 <- tibble::tibble()  # sono-confirmed FV L0 crossings
+uhat_tbl_all              <- list()
+force_ts_vec_all          <- list(isometric = list(), isovelocity = list())
+sanity_check_all          <- list()
 n_plots_written       <- 0L
 
 for (i in seq_len(nrow(manifest))) {
@@ -282,9 +293,27 @@ for (i in seq_len(nrow(manifest))) {
     if (row$category %in% c("isometric", "isovelocity")) {
       analyze_fn <- if (row$category == "isometric") analyze_isometric else analyze_isovelocity
       res <- analyze_fn(td, filename = row$fullpath)
+      res$trial_id <- tid
+
+      # 6-axis line-of-action (u_hat) vector muscle force (PI-directed,
+      # 2026-07-18) -- additive path; reloads the full wrench in isolation so
+      # the existing single-axis (zTorque) force path is unaffected. Isometric
+      # is computed per-trial here; isovelocity is DEFERRED to a post-loop
+      # batch (compute_isovelocity_vector_batch) so an active ramp can borrow an
+      # angle-matched passive ramp CROSS-TRIAL within the same individual. See
+      # muscle_force_vector.R.
+      vec <- NULL; iso_input <- NULL
+      if (row$category == "isometric") {
+        vec <- tryCatch(
+          attach_vector_muscle_force(res, row$fullpath, row$category),
+          error = function(e) { cli::cli_warn("vector muscle force failed for {tid}: {conditionMessage(e)}"); NULL }
+        )
+      } else if (row$category == "isovelocity") {
+        iso_input <- list(trial_id = tid, filename = row$fullpath, res = res)
+      }
       # Adds strain_measured_step_pct (encoder-based, same sign fold as
       # shortening_strain_pct) so the FL/FV curve's own commanded-target
-      # x-axis can be validated against actual motion (strain_validation_measured.png).
+      # x-axis can be validated against actual motion (strainValidMeas.png).
       steps <- attach_step_measured_strain(res$td, res$step_summary) |> dplyr::mutate(trial_id = tid, .before = 1L)
 
       # Isometric no longer fits a model by default (PI direction,
@@ -321,7 +350,7 @@ for (i in seq_len(nrow(manifest))) {
       # step_summary()'s passive_force_Nm_interp comment). Original `plt`
       # above is untouched; this is a second, separately-saved figure
       # (run_fv_fl_power_pipeline.R section 2 save block appends the
-      # "_interpbaseline" filename suffix), not a replacement.
+      # "_baselineInterp" filename suffix), not a replacement.
       plt_interp <- NULL
       if (row$category == "isometric") {
         td_plot_interp <- .attach_segmented_muscle_force(res$td, res$step_summary, force_col = "muscle_force_Nm_interp")
@@ -380,7 +409,8 @@ for (i in seq_len(nrow(manifest))) {
 
       list(category = row$category, plot = plt, plot_interp = plt_interp, steps = steps,
            strain_check = strain_check, force_ts = force_ts,
-           angle_check = angle_check_common, sono_check = sono_check)
+           angle_check = angle_check_common, sono_check = sono_check, vec = vec,
+           iso_input = iso_input)
 
     } else if (row$category == "frequency_sweep") {
       geom <- .read_file_level_geometry(row$fullpath)
@@ -492,7 +522,8 @@ for (i in seq_len(nrow(manifest))) {
     # (the verification check below requires that count to equal the
     # trial-file count for the ORIGINAL method's plots).
     if (!is.null(result$plot_interp)) {
-      out_path_interp <- file.path(TRIAL_PLOT_DIR, paste0(tid, "_interpbaseline.png"))
+      # Naming convention: FIGURES_README.md ("baselineInterp" method token).
+      out_path_interp <- file.path(TRIAL_PLOT_DIR, paste0(tid, "_baselineInterp.png"))
       ggplot2::ggsave(out_path_interp, result$plot_interp, width = 9, height = 9, dpi = 150)
     }
 
@@ -506,6 +537,18 @@ for (i in seq_len(nrow(manifest))) {
     if (!is.null(result$force_ts) && nrow(result$force_ts) > 0L && result$category %in% names(force_ts_all)) {
       force_ts_all[[result$category]][[tid]] <- result$force_ts
     }
+
+    # Vector (6-axis LOA) muscle-force collection (additive, PI-directed 2026-07-18).
+    # Isometric is complete here; isovelocity is stashed for the cross-trial batch.
+    if (!is.null(result$vec)) {
+      vsteps <- dplyr::mutate(result$vec$step_summary, trial_id = tid)
+      if (result$category == "isometric") isometric_steps_vec_all[[tid]] <- vsteps
+      if (nrow(result$vec$uhat_tbl) > 0L) uhat_tbl_all[[tid]] <- dplyr::mutate(result$vec$uhat_tbl, trial_id = tid)
+      if (nrow(result$vec$force_ts) > 0L && result$category %in% names(force_ts_vec_all)) {
+        force_ts_vec_all[[result$category]][[tid]] <- dplyr::mutate(result$vec$force_ts, trial_id = tid)
+      }
+    }
+    if (!is.null(result$iso_input)) iso_vec_inputs[[tid]] <- result$iso_input
   }
 
   trial_reports[[tid]] <- report
@@ -566,19 +609,19 @@ if (length(isometric_steps_all) > 0L) {
     "Isometric pooled FL: n = {nrow(iso_steps)} points pooled across {dplyr::n_distinct(iso_steps$trial_id)} trial(s) -- no model fit (connect-the-mean default, see summary plot)"
   )
   p_iso <- build_summary_plot_isometric(iso_steps)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "summary_isometric_FL.png"), p_iso, width = 9, height = 6, dpi = 150)
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FL_isometric_legacy.png"), p_iso, width = 9, height = 6, dpi = 150)
 
   # ADDITIONAL interpolated-baseline FL summary (2026-07-16, see
   # 03_analyze.R module header / build_segmented_step_summary()'s
   # passive_force_Nm_interp comment) -- saved as a SEPARATE file, original
-  # summary_isometric_FL.png above is untouched. Reuses
+  # FL_isometric_legacy.png above is untouched. Reuses
   # build_summary_plot_isometric() unmodified by substituting
   # muscle_force_Nm with muscle_force_Nm_interp before calling it. Same
   # no-model-fit default applies (see above).
   iso_steps_interp <- dplyr::mutate(iso_steps, muscle_force_Nm = .data$muscle_force_Nm_interp)
   p_iso_interp <- build_summary_plot_isometric(iso_steps_interp,
                                                 title = "Isometric summary: Force-Length [interpolated baseline]")
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "summary_isometric_FL_interpbaseline.png"), p_iso_interp,
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FL_isometric_baselineInterp.png"), p_iso_interp,
                   width = 9, height = 6, dpi = 150)
 }
 
@@ -603,23 +646,23 @@ if (length(isovelocity_steps_all) > 0L) {
   # combines the descriptive connect-the-mean note with the full per-side
   # Hill fit annotation, so it wraps to more lines (see .wrap_subtitle(),
   # plot_summary_profiles.R) and needs the extra width to stay legible.
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "summary_isovelocity_FV.png"), p_isv, width = 11, height = 6.5, dpi = 150)
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FV_isovelocity_legacy.png"), p_isv, width = 11, height = 6.5, dpi = 150)
 }
 
 if (length(dynamic_cycles_all) > 0L) {
   dyn_cycles <- dplyr::bind_rows(dynamic_cycles_all)
   p_dyn <- build_summary_plot_dynamic(dyn_cycles)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "summary_dynamic_power.png"), p_dyn, width = 9, height = 6, dpi = 150)
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "powerDynamic.png"), p_dyn, width = 9, height = 6, dpi = 150)
 
   # ADDITIONAL mass-specific power summary (PI-directed, 2026-07-16, see
   # compute_muscle_mass_and_csa()/muscle_geometry.R + .attach_dynamic_muscle_force
-  # muscle_mass.kg wiring above) -- original summary_dynamic_power.png (raw
+  # muscle_mass.kg wiring above) -- original powerDynamic.png (raw
   # Watts) is untouched; this is a separately-saved W/kg version with a
   # Coughlin et al. 1996 reference band for weak/strong-twitch context.
   if (any(is.finite(dyn_cycles$avg_power.Wkg))) {
     p_dyn_msp <- build_summary_plot_dynamic_massspecific(dyn_cycles)
     if (!is.null(p_dyn_msp)) {
-      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "summary_dynamic_power_massspecific.png"), p_dyn_msp,
+      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "powerDynamicMassSpec.png"), p_dyn_msp,
                       width = 9, height = 6, dpi = 150)
       lims <- coughlin_steady_state_power_limits()
       n_exceed <- sum(dyn_cycles$exceeds_coughlin_hi, na.rm = TRUE)
@@ -635,14 +678,101 @@ if (length(dynamic_cycles_all) > 0L) {
       )
     }
   } else {
-    cli::cli_alert_warning("summary_dynamic_power_massspecific.png skipped -- avg_power.Wkg all NA (muscle mass estimate unavailable, check specimen geometry attrs)")
+    cli::cli_alert_warning("powerDynamicMassSpec.png skipped -- avg_power.Wkg all NA (muscle mass estimate unavailable, check specimen geometry attrs)")
   }
 }
 
 if (length(freqsweep_cycles_all) > 0L) {
   fs_cycles <- dplyr::bind_rows(freqsweep_cycles_all)
   p_fs <- build_summary_plot_frequency_sweep(fs_cycles)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "summary_frequency_sweep_stiffness_damping.png"), p_fs, width = 9, height = 8, dpi = 150)
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "stiffnessDamping_freqsweep.png"), p_fs, width = 9, height = 8, dpi = 150)
+}
+
+
+# =============================================================================
+# 4b. Vector (6-axis line-of-action) muscle-force summaries
+#     (PI-directed, 2026-07-18) -- ADDITIVE; existing single-axis (zTorque)
+#     FL/FV/force-vs-time outputs above are untouched. Muscle force is
+#     recovered as the tension along the empirical line of action u_hat from
+#     the FULL 6-axis wrench (projected active moment / |r x u_hat|), instead
+#     of the passive-stiffness-dominated zTorque axis alone. See
+#     muscle_force_vector.R / plot_muscle_force_vector.R.
+# =============================================================================
+
+cli::cli_h1("Building 6-axis line-of-action (u_hat) muscle-force summaries")
+specimen_muscle <- specimen_geom$muscle
+
+# Cross-trial (same-individual) isovelocity batch: an active ramp with no
+# same-trial angle-overlapping passive borrows an angle-matched no-stim ramp
+# from ANOTHER trial of THIS specimen at the same signed velocity, and the FV
+# force is sampled at the sono-confirmed L0 crossing (right muscle).
+if (length(iso_vec_inputs) > 0L) {
+  cli::cli_alert_info("Isovelocity cross-trial vector batch: {length(iso_vec_inputs)} trial(s) of this specimen")
+  isv_batch <- tryCatch(compute_isovelocity_vector_batch(iso_vec_inputs),
+                        error = function(e) { cli::cli_warn("isovelocity vector batch failed: {conditionMessage(e)}"); NULL })
+  if (!is.null(isv_batch)) {
+    for (bt in names(isv_batch$step_summaries)) isovelocity_steps_vec_all[[bt]] <- isv_batch$step_summaries[[bt]]
+    if (nrow(isv_batch$uhat_tbl) > 0L) uhat_tbl_all[["isovelocity_batch"]] <- isv_batch$uhat_tbl
+    if (nrow(isv_batch$force_ts) > 0L) force_ts_vec_all[["isovelocity"]][["batch"]] <- isv_batch$force_ts
+    fv_l0_all <- isv_batch$fv_l0
+  }
+}
+
+if (length(isometric_steps_vec_all) > 0L) {
+  iso_vec <- dplyr::bind_rows(isometric_steps_vec_all)
+  for (vt in names(isometric_steps_vec_all)) {
+    rank_isometric_steps_by_activation(isometric_steps_vec_all[[vt]], trial_id = vt)
+    sc <- muscle_force_specific_tension_check(isometric_steps_vec_all[[vt]], specimen_muscle, trial_id = vt)
+    if (!is.null(sc)) sanity_check_all[[vt]] <- sc
+  }
+  p_fl_vec <- build_summary_plot_FL_vector(iso_vec)
+  if (!is.null(p_fl_vec)) {
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FL_isometric_uhatBoth.png"), p_fl_vec, width = 12, height = 6, dpi = 150)
+    cli::cli_alert_info("FL_isometric_uhatBoth.png: {sum(is.finite(iso_vec$muscle_force_vector_N))} vector-force point(s) across {dplyr::n_distinct(iso_vec$trial_id)} trial(s)")
+  }
+}
+
+if (length(isovelocity_steps_vec_all) > 0L) {
+  isv_vec <- dplyr::bind_rows(isovelocity_steps_vec_all)
+  p_fv_vec <- build_summary_plot_FV_vector(isv_vec)
+  if (!is.null(p_fv_vec)) ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FV_isovelocity_uhatBoth.png"), p_fv_vec, width = 12, height = 6, dpi = 150)
+  n_within <- sum(isv_vec$passive_source == "angle_matched", na.rm = TRUE)
+  n_cross  <- sum(isv_vec$passive_source == "angle_matched_cross_trial", na.rm = TRUE)
+  n_fallback <- sum(isv_vec$passive_source == "static_baseline_fallback", na.rm = TRUE)
+  cli::cli_alert_info("Isovelocity passive subtraction: {n_within} within-trial angle-matched, {n_cross} cross-trial (same individual) angle-matched, {n_fallback} static-baseline fallback")
+
+  # sono-confirmed FV at the L0 crossing (right muscle only)
+  if (nrow(fv_l0_all) > 0L) {
+    p_fv_l0 <- build_summary_plot_FV_L0_vector(fv_l0_all)
+    if (!is.null(p_fv_l0)) {
+      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FVl0_isovelocity_uhatBoth.png"), p_fv_l0, width = 9, height = 6, dpi = 150)
+      cli::cli_alert_info("FVl0_isovelocity_uhatBoth.png: {nrow(fv_l0_all)} sono-confirmed L0 crossing(s) (right muscle) across {dplyr::n_distinct(fv_l0_all$trial_id)} trial(s)")
+    }
+  } else {
+    cli::cli_alert_warning("No sono-confirmed FV L0 crossings (right muscle) -- sono unavailable or no ramp spanned L0")
+  }
+}
+
+if (length(uhat_tbl_all) > 0L) {
+  uhat_df <- dplyr::bind_rows(uhat_tbl_all)
+  p_uhat <- build_uhat_comparison_plot(uhat_df)
+  if (!is.null(p_uhat)) {
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "uhatCompare_empVsGeom.png"), p_uhat, width = 8, height = 7, dpi = 150)
+    cli::cli_alert_info("uhatCompare_empVsGeom.png: {sum(is.finite(uhat_df$uhat_angle_emp_deg) & is.finite(uhat_df$uhat_angle_geom_deg))} step(s) with both empirical + geometric u_hat")
+  }
+}
+
+for (fam in names(force_ts_vec_all)) {
+  ts_list <- force_ts_vec_all[[fam]]
+  if (length(ts_list) == 0L) next
+  ts_df <- dplyr::bind_rows(ts_list)
+  facet_var <- if (fam == "isovelocity") "contraction_mode" else NULL
+  p_tv <- build_force_vs_time_vector_plot(
+    ts_df, title = sprintf("Muscle force along u_hat vs time (%s, pooled)", fam), facet_var = facet_var)
+  if (!is.null(p_tv)) {
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("forceTime_%s_uhatBoth.png", fam)), p_tv,
+                    width = if (!is.null(facet_var)) 12 else 10, height = 6, dpi = 150)
+  }
 }
 
 # Diagnostic (not an originally-required deliverable): fatigue check --
@@ -659,18 +789,18 @@ if (nrow(segmented_all) > 0L) {
       dplyr::filter(segmented_all, protocol_family == fam),
       title = sprintf("Fatigue check (%s): muscle force vs. stimulation order", fam)
     )
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("fatigue_check_%s.png", fam)), p_fat, width = 10, height = 6, dpi = 150)
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("fatigueCheck_%s_legacy.png", fam)), p_fat, width = 10, height = 6, dpi = 150)
   }
   # ADDITIONAL interpolated-baseline fatigue check (isometric only, same
   # substitution pattern as the FL summary above) -- original
-  # fatigue_check_isometric.png is untouched.
+  # fatigueCheck_isometric_legacy.png is untouched.
   if ("isometric" %in% segmented_all$protocol_family) {
     p_fat_interp <- build_fatigue_check_plot(
       dplyr::filter(segmented_all, protocol_family == "isometric") |>
         dplyr::mutate(muscle_force_Nm = .data$muscle_force_Nm_interp),
       title = "Fatigue check (isometric) [interpolated baseline]: muscle force vs. stimulation order"
     )
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "fatigue_check_isometric_interpbaseline.png"), p_fat_interp,
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "fatigueCheck_isometric_baselineInterp.png"), p_fat_interp,
                     width = 10, height = 6, dpi = 150)
   }
 }
@@ -692,30 +822,30 @@ if (nrow(segmented_all) > 0L) {
 if (length(strain_check_all) > 0L) {
   strain_check_df <- dplyr::bind_rows(strain_check_all)
   p_strain <- build_measured_vs_predicted_strain_plot(strain_check_df)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strain_validation_commanded.png"), p_strain, width = 12, height = 5, dpi = 150)
-  cli::cli_alert_info("strain_validation_commanded.png: {nrow(strain_check_df)} actively-stimulated samples pooled across {dplyr::n_distinct(strain_check_df$trial_id)} trial(s)")
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidCmd.png"), p_strain, width = 12, height = 5, dpi = 150)
+  cli::cli_alert_info("strainValidCmd.png: {nrow(strain_check_df)} actively-stimulated samples pooled across {dplyr::n_distinct(strain_check_df$trial_id)} trial(s)")
 } else {
-  cli::cli_alert_warning("No actively-stimulated samples found for strain_validation_commanded.png -- skipped")
+  cli::cli_alert_warning("No actively-stimulated samples found for strainValidCmd.png -- skipped")
 }
 
 if (nrow(segmented_all) > 0L && "strain_measured_step_pct" %in% names(segmented_all)) {
   step_strain_df <- dplyr::filter(segmented_all, is.finite(.data$shortening_strain_pct), is.finite(.data$strain_measured_step_pct))
   if (nrow(step_strain_df) > 0L) {
     p_step_strain <- build_step_strain_validation_plot(step_strain_df)
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strain_validation_measured.png"), p_step_strain, width = 10, height = 5, dpi = 150)
-    cli::cli_alert_info("strain_validation_measured.png: {nrow(step_strain_df)} step(s) pooled across {dplyr::n_distinct(step_strain_df$trial_id)} trial(s)")
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidMeas.png"), p_step_strain, width = 10, height = 5, dpi = 150)
+    cli::cli_alert_info("strainValidMeas.png: {nrow(step_strain_df)} step(s) pooled across {dplyr::n_distinct(step_strain_df$trial_id)} trial(s)")
   } else {
-    cli::cli_alert_warning("No finite step-level strain pairs found for strain_validation_measured.png -- skipped")
+    cli::cli_alert_warning("No finite step-level strain pairs found for strainValidMeas.png -- skipped")
   }
 } else {
-  cli::cli_alert_warning("No segmented (isometric/isovelocity) steps found for strain_validation_measured.png -- skipped")
+  cli::cli_alert_warning("No segmented (isometric/isovelocity) steps found for strainValidMeas.png -- skipped")
 }
 
 # PI-requested (2026-07-16): three additional validation figures, ALL
 # samples (no active-stim restriction -- these are purely mechanical/
 # geometric checks), one panel per protocol category where data exists:
-#   1) angle_validation.png -- measured (E6 encoder) vs. commanded angle.
-#   2/3) strain_validation_sono_vs_{encoder,commanded}.png -- measured
+#   1) angleValid.png -- measured (E6 encoder) vs. commanded angle.
+#   2/3) strainValidSono{Enc,Cmd}.png -- measured
 #      (sonomicrometry, RIGHT muscle -- the only wired sono channel in this
 #      rig) vs. predicted (curvature geometry, right-folded) strain, from
 #      each of the two candidate angle sources. See
@@ -724,10 +854,10 @@ if (nrow(segmented_all) > 0L && "strain_measured_step_pct" %in% names(segmented_
 if (length(angle_check_all) > 0L) {
   angle_check_df <- dplyr::bind_rows(angle_check_all)
   p_angle <- build_angle_validation_plot(angle_check_df)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "angle_validation.png"), p_angle, width = 12, height = 8, dpi = 150)
-  cli::cli_alert_info("angle_validation.png: {nrow(angle_check_df)} samples pooled across {dplyr::n_distinct(angle_check_df$trial_id)} trial(s)")
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "angleValid.png"), p_angle, width = 12, height = 8, dpi = 150)
+  cli::cli_alert_info("angleValid.png: {nrow(angle_check_df)} samples pooled across {dplyr::n_distinct(angle_check_df$trial_id)} trial(s)")
 } else {
-  cli::cli_alert_warning("No angle data found for angle_validation.png -- skipped")
+  cli::cli_alert_warning("No angle data found for angleValid.png -- skipped")
 }
 
 if (length(sono_strain_check_all) > 0L) {
@@ -736,15 +866,15 @@ if (length(sono_strain_check_all) > 0L) {
     cli::cli_alert_warning("sono_right channel/calibration unavailable in every trial -- sono validation figures skipped")
   } else {
     p_sono_enc <- build_sono_strain_validation_plot(sono_check_df, "strain_pred_encoder_right_pct", "encoder")
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strain_validation_sono_vs_encoder.png"), p_sono_enc, width = 12, height = 8, dpi = 150)
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidSonoEnc.png"), p_sono_enc, width = 12, height = 8, dpi = 150)
     p_sono_cmd <- build_sono_strain_validation_plot(sono_check_df, "strain_pred_commanded_right_pct", "commanded")
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strain_validation_sono_vs_commanded.png"), p_sono_cmd, width = 12, height = 8, dpi = 150)
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidSonoCmd.png"), p_sono_cmd, width = 12, height = 8, dpi = 150)
     cli::cli_alert_info(
-      "strain_validation_sono_vs_{{encoder,commanded}}.png: {sum(is.finite(sono_check_df$strain_sono_pct))} samples with valid sono data, pooled across {dplyr::n_distinct(dplyr::filter(sono_check_df, is.finite(strain_sono_pct))$trial_id)} trial(s)"
+      "strainValidSono{{Enc,Cmd}}.png: {sum(is.finite(sono_check_df$strain_sono_pct))} samples with valid sono data, pooled across {dplyr::n_distinct(dplyr::filter(sono_check_df, is.finite(strain_sono_pct))$trial_id)} trial(s)"
     )
   }
 } else {
-  cli::cli_alert_warning("No sono-strain data found -- strain_validation_sono_vs_{{encoder,commanded}}.png skipped")
+  cli::cli_alert_warning("No sono-strain data found -- strainValidSono{{Enc,Cmd}}.png skipped")
 }
 
 # Muscle force vs. time, pooled across trials, one figure per protocol
@@ -772,9 +902,9 @@ for (fam in names(force_ts_all)) {
 
   p_ts <- build_force_vs_time_plot(ts_df, title = sprintf("Muscle force vs. time (%s, pooled across trials)", fam),
                                     facet_var = facet_var, color_var = color_var)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("force_vs_time_%s.png", fam)), p_ts,
+  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("forceTime_%s_legacy.png", fam)), p_ts,
                   width = if (!is.null(facet_var)) 13 else 10, height = 6, dpi = 150)
-  cli::cli_alert_info("force_vs_time_{fam}.png: {dplyr::n_distinct(ts_df$unit_id)} stim event(s)/step(s) across {dplyr::n_distinct(ts_df$trial_id)} trial(s)")
+  cli::cli_alert_info("forceTime_{fam}_legacy.png: {dplyr::n_distinct(ts_df$unit_id)} stim event(s)/step(s) across {dplyr::n_distinct(ts_df$trial_id)} trial(s)")
 
   # Dynamic-only: additionally break the pooled plot into one figure PER
   # commanded variable (frequency, amplitude, duty, phase), each faceted by
@@ -791,16 +921,16 @@ for (fam in names(force_ts_all)) {
     for (bname in names(dyn_breakdowns)) {
       b <- dyn_breakdowns[[bname]]
       if (!b$col %in% names(ts_df) || dplyr::n_distinct(ts_df[[b$col]], na.rm = TRUE) < 1L) {
-        cli::cli_alert_warning("force_vs_time_dynamic_by_{bname}.png: no finite '{b$col}' values -- skipped")
+        cli::cli_alert_warning("forceTime_dynamic_by_{bname}.png: no finite '{b$col}' values -- skipped")
         next
       }
       p_dyn <- build_force_vs_time_plot(
         ts_df, title = sprintf("Muscle force vs. time (dynamic, grouped by %s)", b$label),
         facet_var = b$col, color_var = "muscle_side"
       )
-      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("force_vs_time_dynamic_by_%s.png", bname)), p_dyn,
+      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("forceTime_dynamic_by_%s.png", bname)), p_dyn,
                       width = 13, height = 8, dpi = 150)
-      cli::cli_alert_info("force_vs_time_dynamic_by_{bname}.png: {dplyr::n_distinct(ts_df[[b$col]], na.rm = TRUE)} distinct {bname} level(s)")
+      cli::cli_alert_info("forceTime_dynamic_by_{bname}.png: {dplyr::n_distinct(ts_df[[b$col]], na.rm = TRUE)} distinct {bname} level(s)")
     }
   }
 }

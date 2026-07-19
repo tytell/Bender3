@@ -1,10 +1,10 @@
 # plot_angle_sono_validation.R
 # Three PI-requested validation figures, independent of (and complementary
 # to) plot_strain_validation.R's commanded-vs-encoder strain checks:
-#   1) angle_validation.png            -- measured (encoder) vs. commanded angle
-#   2) strain_validation_sono_vs_encoder.png   -- measured (sonomicrometry) vs.
+#   1) angleValid.png            -- measured (encoder) vs. commanded angle
+#   2) strainValidSonoEnc.png   -- measured (sonomicrometry) vs.
 #      predicted (from ENCODER angle) strain
-#   3) strain_validation_sono_vs_commanded.png -- measured (sonomicrometry) vs.
+#   3) strainValidSonoCmd.png -- measured (sonomicrometry) vs.
 #      predicted (from COMMANDED angle) strain
 #
 # All three use ALL samples (no active-stim restriction) -- these are purely
