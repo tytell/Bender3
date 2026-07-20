@@ -440,4 +440,51 @@ debugging time by encoding a world that no longer exists.
 - stdout and stderr must be reconfigured to UTF-8 with errors='replace' at 
   startup as defense-in-depth (bender_streamlit_gui.py, commit 5036691).
 
- 
+---
+
+## File placement (project folder auto-designation)
+
+When creating or writing a new file inside proj_crittergripper/, place it
+according to these rules. Apply to NEW file creation only — never move
+or rename existing files without explicit approval. All folder references
+are project-relative (resolved from the project root) — never use an
+absolute or machine-specific path.
+
+- Code files (.R, .py, .ipynb, .qmd) → 00_code/ (local mirror; flag if
+  path resolves inside OneDrive sync tree)
+- CAD, STEP, apparatus reference files (.step, .stp, .stl, .f3d, .dwg,
+  manufacturer PDFs) → 00_design_crittergripper/
+- Manifests, decision logs, project meta (raw_manifest.csv, proj_meta.md,
+  *_manifest.*, *_log.md) → 00_records/ (create if absent)
+- Measured/curated human-authored data (CSA spreadsheets, external
+  benchmark CSVs) → 01_inputs/
+- Code-generated derived data (per-trial CSVs, derived h5) →
+  02_processed/data_processed/
+- Figures:
+  - Per-specimen working figures → 02_processed/figs_{specimen}/
+    (e.g., figs_bass17/, figs_rod40a/)
+  - Cross-specimen or pooled summary figures → 02_processed/figs_summary/
+  - Figures explicitly promoted as manuscript candidates →
+    02_processed/figs_contenders/
+  - Final manuscript-bound figures (explicit promotion only) → 03_figs/
+- Stats:
+  - Per-specimen stats outputs → 02_processed/stats_{specimen}/
+  - Cross-specimen summary stats → 02_processed/stats_summary/
+  - Final manuscript-bound stats tables (explicit promotion only) →
+    04_stats/
+- Manuscript drafts, response letters, cover letters → 05_manuscript/
+
+Ambiguous cases:
+- If a new file does not clearly match any rule above AND the correct
+  parent folder itself is not obvious from the file type or content, do
+  NOT guess or default silently. Prompt the user in chat with: (a) the
+  filename and inferred type, (b) 2-3 candidate destinations from the
+  rules above, (c) a request to confirm before writing.
+- Ambiguous figures, analyses, or derived data (parent folder known,
+  subfolder unclear) → default to 02_processed/ (parent, not a specific
+  subfolder)
+- Ambiguous stats outputs (parent folder known, subfolder unclear) →
+  default to 04_stats/ (parent, not a specific subfolder) and flag in
+  chat
+- Never place new files at project root — always inside a numbered or
+  00_-prefixed folder.
