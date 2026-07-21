@@ -19,7 +19,8 @@
 # Torque columns when derived/forcetorque_calibrated is present:
 #   xtorque0.Nm (raw pre-bias), xtorque.Nm (bias-sub + filtered), and y/z variants.
 #
-# Tibble attrs: SampleFrequency.Hz, Filename, protocol_sampling_mode.
+# Tibble attrs: SampleFrequency.Hz, Filename, protocol_sampling_mode,
+#   session_acquisition_start.
 
 library(rhdf5)
 library(dplyr)
@@ -67,6 +68,13 @@ load_bender_flat <- function(
                       .bfl_dbl(m_a("measurement_specimen_standardlength_millimeter"), NA_real_))
     fishlength_m  <- if (is.finite(fl_mm)) fl_mm / 1000.0 else NA_real_
     fishmass_g    <- .bfl_dbl(m_a("measurement_specimen_body_mass_gram"), NA_real_)
+    # PER-FILE wall-clock anchor (added 2026-07-21, fatigue-timeline dynamic
+    # L0 bookends -- see extract_dynamic_l0_bookends.R): despite the name,
+    # this is NOT a session-wide constant -- verified to increase
+    # monotonically across one specimen's trial sequence. `%H:%M:%S` only
+    # (no fractional seconds); as.POSIXct(..., format = "%Y-%m-%dT%H:%M:%OS")
+    # still parses it fine since %OS accepts an optional fractional part.
+    session_acquisition_start <- .bfl_chr(m_a("session_acquisition_start"), NA_character_)
 
     # -- read timeseries --------------------------------------------------
     td <- if (sampling_mode == "single_finite") {
@@ -173,9 +181,10 @@ load_bender_flat <- function(
       }
     }
 
-    attr(td, "SampleFrequency.Hz")     <- sampfreq
-    attr(td, "Filename")               <- filename
-    attr(td, "protocol_sampling_mode") <- sampling_mode
+    attr(td, "SampleFrequency.Hz")        <- sampfreq
+    attr(td, "Filename")                  <- filename
+    attr(td, "protocol_sampling_mode")    <- sampling_mode
+    attr(td, "session_acquisition_start") <- session_acquisition_start
 
   }, error = function(err) {
     cli::cli_alert_danger("load_bender_flat: {conditionMessage(err)}")

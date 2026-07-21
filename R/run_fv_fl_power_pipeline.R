@@ -67,6 +67,7 @@ src("plot_angle_sono_validation.R")
 src("plot_force_vs_time.R")
 src("muscle_force_vector.R")
 src("plot_muscle_force_vector.R")
+src("extract_dynamic_l0_bookends.R")
 
 fs::dir_create(TRIAL_PLOT_DIR, recurse = TRUE)
 fs::dir_create(SUMMARY_PLOT_DIR, recurse = TRUE)
@@ -263,6 +264,12 @@ force_ts_all          <- list(isometric = list(), isovelocity = list(), dynamic 
 isometric_steps_vec_all   <- list()
 isovelocity_steps_vec_all <- list()
 iso_vec_inputs            <- list()   # deferred isovelocity trials -> cross-trial batch
+# L0 (0 deg) isometric bookend contractions embedded in dynamic trial files
+# (PI-directed, 2026-07-21) -- see extract_dynamic_l0_bookends.R. Kept in a
+# SEPARATE accumulator (not merged into isometric_steps_vec_all) so
+# provenance (source_protocol) stays explicit; merged with iso_vec only at
+# the point build_fatigue_timeline_plot() is called, below.
+dynamic_l0_vec_all        <- list()
 fv_l0_all                 <- tibble::tibble()  # sono-confirmed FV L0 crossings
 uhat_tbl_all              <- list()
 force_ts_vec_all          <- list(isometric = list(), isovelocity = list())
@@ -282,6 +289,10 @@ for (i in seq_len(nrow(manifest))) {
 
     td <- load_bender_flat(row$fullpath, do_filter = TRUE, loadtorques = "x")
     if (is.null(td) || nrow(td) == 0L) stop("load_bender_flat returned no data")
+    # Captured BEFORE the row-count subsetting below (data.frame `[` drops
+    # custom attributes, same reason "Filename" is re-set after it) -- used
+    # only by the dynamic-trial L0 bookend branch further down.
+    session_acquisition_start <- attr(td, "session_acquisition_start")
 
     tau <- deconvolve_bender(row$fullpath, hub_path = NULL, verbose = FALSE)
     if (is.null(tau)) stop("deconvolve_bender failed (see warning above)")
@@ -455,6 +466,88 @@ for (i in seq_len(nrow(manifest))) {
 
     } else { # dynamic
       geom <- .read_file_level_geometry(row$fullpath)
+
+      # -- L0 (0 deg) isometric bookend contractions (PI-directed, 2026-07-21) --
+      # Every dynamic trial brackets its active cycling with up to 4 static
+      # isometric stim bursts (left+right BEFORE, left+right AFTER) at the
+      # commanded 0 deg bend -- see extract_dynamic_l0_bookends.R header.
+      # These feed plot_fatigue_timeline.R as genuine L0 contractions, same
+      # as isometric-trial L0 reps, even though they live inside a "dynamic"
+      # file with no index_step_* table. Must run on `td` BEFORE any of the
+      # mutations below (harmless either way -- t.s/angle.deg/stim are never
+      # removed -- but keeps this block self-contained and independent of
+      # the rest of the dynamic path).
+      dynamic_l0_vec <- tryCatch({
+        bookends <- detect_dynamic_l0_bookends(td)
+        if (nrow(bookends) == 0L) {
+          tibble::tibble()
+        } else {
+          # attach_vector_muscle_force() filters td6$step_number ==
+          # s$step_number -- dynamic/single_finite loads have no
+          # step_number column at all (only segmented_finite does), so one
+          # must be injected here (constant, since every bookend on this
+          # trial shares the one synthetic "step"). Load td6 ONCE per trial
+          # (td6_override) and reuse it across all detected bookends rather
+          # than re-reading the 6-axis wrench per event.
+          td_be  <- td
+          td_be$step_number <- 1L
+          td6_be <- mfv_load_six_axis(row$fullpath, td_be)
+          if (is.null(td6_be)) {
+            cli::cli_warn("{tid}: 6-axis wrench unavailable for dynamic L0 bookends -- skipped")
+            tibble::tibble()
+          } else {
+            td6_be$step_number <- 1L
+            sess_start_posix <- suppressWarnings(as.POSIXct(
+              session_acquisition_start, format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC"
+            ))
+            be_rows <- lapply(seq_len(nrow(bookends)), function(bi) {
+              b <- bookends[bi, ]
+              # category = "isometric" is physically correct here (a real
+              # fixed-angle stimulated contraction), NOT just a convenient
+              # label -- it gates .mfv_finalize_step()'s geometric-u_hat
+              # cross-check onto s$operating_point (muscle_force_vector.R).
+              # source_protocol (below) carries the dynamic-file provenance
+              # instead, kept separate from this physics-branching argument.
+              ss_one <- tibble::tibble(
+                step_number = 1L, muscle_side = b$muscle_side, operating_point = b$operating_point,
+                contraction_mode = b$contraction_mode,
+                stim_t0_s = b$stim_t0_s, stim_t1_s = b$stim_t1_s,
+                t_pre_baseline_start_s = b$t_pre_baseline_start_s, t_pre_baseline_end_s = b$t_pre_baseline_end_s
+              )
+              vec_be <- tryCatch(
+                attach_vector_muscle_force(list(step_summary = ss_one, trial_id = tid, td = td_be),
+                                           row$fullpath, "isometric", td6_override = td6_be),
+                error = function(e) {
+                  cli::cli_warn("{tid}: dynamic L0 bookend vector force failed ({b$muscle_side}, t={round(b$stim_t0_s, 2)}s): {conditionMessage(e)}")
+                  NULL
+                }
+              )
+              if (is.null(vec_be) || nrow(vec_be$step_summary) == 0L) return(NULL)
+              r <- vec_be$step_summary[1L, ]
+              # wall_clock_start = this trial's own session_acquisition_start
+              # (per-file wall-clock anchor, NOT session-wide despite the
+              # name -- see 00_load_bender_flat.R) + the burst's local
+              # stim_t0_s offset (can be negative, e.g. a PRE burst before
+              # t=0) -- same "%Y-%m-%dT%H:%M:%OS"-parseable format
+              # build_fatigue_timeline_plot() already expects.
+              r$wall_clock_start <- if (is.finite(sess_start_posix)) {
+                format(sess_start_posix + b$stim_t0_s, "%Y-%m-%dT%H:%M:%OS3", tz = "UTC")
+              } else {
+                NA_character_
+              }
+              r$trial_id <- tid
+              r$source_protocol <- "dynamic_bookend"
+              r
+            })
+            be_rows <- Filter(Negate(is.null), be_rows)
+            if (length(be_rows) == 0L) tibble::tibble() else dplyr::bind_rows(be_rows)
+          }
+        }
+      }, error = function(e) {
+        cli::cli_warn("{tid}: dynamic L0 bookend extraction failed: {conditionMessage(e)}")
+        tibble::tibble()
+      })
+
       is_passive_only <- all(as.character(td$stim) == "0")
       active_mask <- as.character(td$stim) != "0"
       td <- attach_predicted_strain(td, geom$local_body_width_mm, geom$muscle_depth_mm_raw,
@@ -515,7 +608,7 @@ for (i in seq_len(nrow(manifest))) {
         muscle_force_note = if (is_passive_only) "passive-only dynamic trial -- no active stimulation, Force_muscle undefined" else NULL
       )
       list(category = row$category, plot = plt, cycles = cyc_summary, strain_check = strain_check, force_ts = force_ts,
-           angle_check = angle_check_common, sono_check = sono_check)
+           angle_check = angle_check_common, sono_check = sono_check, dynamic_l0_vec = dynamic_l0_vec)
     }
   }, error = function(e) {
     report$status <<- "error"
@@ -561,6 +654,12 @@ for (i in seq_len(nrow(manifest))) {
       }
     }
     if (!is.null(result$iso_input)) iso_vec_inputs[[tid]] <- result$iso_input
+
+    # L0 bookend contractions embedded in dynamic trial files (PI-directed,
+    # 2026-07-21) -- see extract_dynamic_l0_bookends.R.
+    if (!is.null(result$dynamic_l0_vec) && nrow(result$dynamic_l0_vec) > 0L) {
+      dynamic_l0_vec_all[[tid]] <- result$dynamic_l0_vec
+    }
   }
 
   trial_reports[[tid]] <- report
@@ -751,7 +850,19 @@ if (length(isometric_steps_vec_all) > 0L) {
   # enforced here, this only plots and reports the numbers for PI review.
   # build_fatigue_timeline_plot() ALWAYS returns a real plot (real data or a
   # placeholder explaining why not) -- always ggsave, never skip the file.
-  fatigue_tl <- build_fatigue_timeline_plot(iso_vec)
+  # Merge in the dynamic-trial L0 bookend contractions (PI-directed,
+  # 2026-07-21 -- see extract_dynamic_l0_bookends.R) so the timeline
+  # reflects the TRUE earliest stimulated step of the session (dynamic
+  # trials commonly precede the isometric trials for a given specimen).
+  # build_fatigue_timeline_plot() needs NO changes for this -- it only
+  # requires the same schema, which dynamic_l0_vec_all's rows already
+  # match; source_protocol is additional provenance the plot ignores.
+  fatigue_input <- if (length(dynamic_l0_vec_all) > 0L) {
+    dplyr::bind_rows(iso_vec, dplyr::bind_rows(dynamic_l0_vec_all))
+  } else {
+    iso_vec
+  }
+  fatigue_tl <- build_fatigue_timeline_plot(fatigue_input)
   ggplot2::ggsave(file.path(FIGS_DIAGNOSTIC_DIR, sprintf("%s_fatiguetimeline.png", SPECIMEN_ID)),
                   fatigue_tl$plot, width = 9, height = 6, dpi = 150)
   if (fatigue_tl$is_placeholder) {
