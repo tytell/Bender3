@@ -24,7 +24,8 @@ src("paths_config.R")
 # file if the OneDrive folder layout ever moves again.
 SOURCE_DIR <- raw_source_dir(BASS16_RAW_SUBFOLDER)
 OUTPUT_DIR <- figs_dir("bass16")
-SUMMARY_PLOT_DIR <- file.path(OUTPUT_DIR, "summary_plots")
+# Flat, no summary_plots subfolder (2026-07-21, matches run_fv_fl_power_pipeline.R).
+SUMMARY_PLOT_DIR <- OUTPUT_DIR
 
 src("00_load_bender_flat.R")
 src("02_deconvolve.R")

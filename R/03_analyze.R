@@ -756,11 +756,23 @@ score_step_sinusoid_quality <- function(df, min_n = 20L,
     block_direction <- rep(NA_character_, length(step_number))
   }
 
+  # wall_clock_start (ISO-8601 string, per-step) -- single point where this
+  # gets surfaced into the pipeline; flows through build_segmented_step_summary()
+  # -> analyze_isometric()/analyze_isovelocity() -> attach_vector_muscle_force()
+  # unchanged (plain left_join column), reaching plot_fatigue_timeline.R without
+  # further plumbing. Added 2026-07-21 for the near-L0-vs-real-elapsed-time
+  # fatigue timeline (see analysis_muscle_force_vector_log.md, Gate A).
+  wall_clock_start_raw <- m_ds("index_step_wall_clock_start")
+  if (is.null(wall_clock_start_raw) || length(wall_clock_start_raw) != length(step_number)) {
+    wall_clock_start_raw <- rep(NA_character_, length(step_number))
+  }
+
   steps <- tibble::tibble(
     step_number             = step_number,
     operating_point          = as.numeric(m_ds("index_step_operating_point")),
     operating_point_units    = as.character(m_ds("index_step_operating_point_units")),
     recruitment              = as.character(m_ds("index_step_recruitment")),
+    wall_clock_start         = as.character(wall_clock_start_raw),
     stim_t0_s                = as.numeric(m_ds("index_step_stim_t0_second")),
     stim_t1_s                = as.numeric(m_ds("index_step_stim_t1_second")),
     t_pre_baseline_start_s   = as.numeric(m_ds("index_step_t_pre_baseline_start_second")),

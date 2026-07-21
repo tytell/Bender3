@@ -35,8 +35,20 @@ src("paths_config.R")
 ## file if the OneDrive folder layout ever moves again.
 SOURCE_DIR <- Sys.getenv("BENDER3_SOURCE_DIR", raw_source_dir(BASS16_RAW_SUBFOLDER))
 OUTPUT_DIR <- Sys.getenv("BENDER3_OUTPUT_DIR", figs_dir("bass16"))
-TRIAL_PLOT_DIR   <- file.path(OUTPUT_DIR, "trial_plots")
-SUMMARY_PLOT_DIR <- file.path(OUTPUT_DIR, "summary_plots")
+# PI-directed flatten (2026-07-21): per-fish folders are flat (no trial_plots/
+# summary_plots subfolders), matching figs_diagnostic/ and figs_summary/'s
+# existing flat layout. Both names point at OUTPUT_DIR directly -- kept as two
+# names (not collapsed to one) only so the ~25 call sites below don't need
+# individual edits; trial-plot filenames (bass16_bender_09_isometric.png) and
+# summary-plot filenames (FL_isometric_uhatBoth.png) have distinct naming
+# shapes already, so merging them into one folder creates no collisions.
+TRIAL_PLOT_DIR   <- OUTPUT_DIR
+SUMMARY_PLOT_DIR <- OUTPUT_DIR
+# Derived from OUTPUT_DIR's own "figs_{specimen}" naming (paths_config.R::figs_dir())
+# rather than re-parsed from raw filenames -- single point of truth for which
+# specimen this pipeline run is for. Used only for cross-individual-folder
+# (figs_diagnostic/) filenames below; per-specimen folders don't need it.
+SPECIMEN_ID <- sub("^figs_", "", basename(OUTPUT_DIR))
 
 src("00_load_bender_flat.R")
 src("01_calibrate.R")
@@ -49,6 +61,7 @@ src("parse_trial_filename.R")
 src("plot_trial_compound.R")
 src("plot_summary_profiles.R")
 src("plot_fatigue_check.R")
+src("plot_fatigue_timeline.R")
 src("plot_strain_validation.R")
 src("plot_angle_sono_validation.R")
 src("plot_force_vs_time.R")
@@ -57,6 +70,7 @@ src("plot_muscle_force_vector.R")
 
 fs::dir_create(TRIAL_PLOT_DIR, recurse = TRUE)
 fs::dir_create(SUMMARY_PLOT_DIR, recurse = TRUE)
+fs::dir_create(FIGS_DIAGNOSTIC_DIR, recurse = TRUE)
 
 DEACTIVATION_WINDOW_S <- 0.5
 
@@ -727,6 +741,25 @@ if (length(isometric_steps_vec_all) > 0L) {
   if (!is.null(p_fl_vec)) {
     ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FL_isometric_uhatBoth.png"), p_fl_vec, width = 12, height = 6, dpi = 150)
     cli::cli_alert_info("FL_isometric_uhatBoth.png: {sum(is.finite(iso_vec$muscle_force_vector_N))} vector-force point(s) across {dplyr::n_distinct(iso_vec$trial_id)} trial(s)")
+  }
+
+  # Diagnostic + individual-tier (dual-tagged, flat figs_diagnostic/, see
+  # FIGURES_README.md): L0 (commanded 0 deg) force vs. real elapsed session
+  # time, ALL isometric trials of this specimen pooled. Gathers the decay
+  # data needed to set Gate A's fatigue-exclusion threshold
+  # (analysis_muscle_force_vector_log.md) -- no threshold is applied/
+  # enforced here, this only plots and reports the numbers for PI review.
+  # build_fatigue_timeline_plot() ALWAYS returns a real plot (real data or a
+  # placeholder explaining why not) -- always ggsave, never skip the file.
+  fatigue_tl <- build_fatigue_timeline_plot(iso_vec)
+  ggplot2::ggsave(file.path(FIGS_DIAGNOSTIC_DIR, sprintf("%s_fatiguetimeline.png", SPECIMEN_ID)),
+                  fatigue_tl$plot, width = 9, height = 6, dpi = 150)
+  if (fatigue_tl$is_placeholder) {
+    cli::cli_alert_warning("{SPECIMEN_ID}_fatiguetimeline.png: placeholder written (see warning above for reason)")
+  } else {
+    cli::cli_alert_info(
+      "{SPECIMEN_ID}_fatiguetimeline.png: L0 = {fatigue_tl$l0_angle_deg} deg, {fatigue_tl$n_near_l0} L0 contraction(s), session start {fatigue_tl$session_start}"
+    )
   }
 }
 

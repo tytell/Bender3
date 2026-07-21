@@ -14,14 +14,48 @@ OneDrive layout moves again, update that file only (this doc + the
 Renamed 2026-07-19/2026-07-20/2026-07-21 to match the `.cursorrules` "File
 placement" convention (`figures/` -> `02_processed/figs_*`;
 `bass_summary_figures/` -> `figs_summary/`, matching the "cross-specimen or
-pooled summary figures" rule).
-- `figs_{bassID}/trial_plots/` — one compound diagnostic plot per trial file.
-- `figs_{bassID}/summary_plots/` — per-fish pooled summaries across trials.
-- `figs_diagnostic/` — cross-individual pooled superplots (flat, bassID
-  list embedded in the name since it spans specimens).
+pooled summary figures" rule). Flattened 2026-07-21 (PI-directed): every
+folder below is FLAT, no subfolders anywhere -- `trial_plots/`/
+`summary_plots/` per-fish subfolders were removed; trial-plot and
+summary-plot filenames already have distinct naming shapes
+(`{bassID}_bender_{NN}_{protocol}...` vs. `{signal}_{protocol}...`), so
+merging them into one folder creates no collisions.
+- `figs_{bassID}/` — flat: one compound trial plot per trial file
+  (`{bassID}_bender_{NN}_{protocol}[_{method}].png`) PLUS that fish's
+  pooled summary plots, side by side in the same folder.
+- `figs_diagnostic/` — flat: cross-individual pooled superplots, AND
+  (2026-07-21) diagnostic/decision-making plots that compare filters or
+  calculations rather than reporting a final result (see "Diagnostic vs.
+  individual vs. summary" below) -- topic carried in the filename, not a
+  subfolder, since these plots are per-decision, not per-fish.
 - `figs_summary/` — flattened, curated copies (only SNR-passing
   material) pulled from all three fish for side-by-side browsing; every
   filename here is prefixed with the bass ID since the folder mixes fish.
+
+## Diagnostic vs. individual vs. summary (adopted 2026-07-21)
+Three tiers, not just two -- see `analysis_muscle_force_vector_log.md` for
+the point-selection design this feeds:
+- **Diagnostic** (`figs_diagnostic/`, flat, filename-tagged by topic, not
+  per-fish): plots that compare filters/calculations to make a decision
+  (e.g. empirical vs. geometric u_hat, legacy vs. vector force, own-step
+  vs. interpolated baseline, smoothing cutoffs). Once a decision is locked,
+  it's recorded in a manifest (`00_records/`, not yet built) rather than
+  re-litigated per plot. Current tokens: `musclepullmethod`,
+  `muscleforceestimate`, `passivebaselinemethod`, `torquesmoothingmethod`,
+  `sonosmoothingmethod`, `sonotiminglag`, `forcedevtiming` (dual-tagged,
+  see below), `fatiguetimeline` (dual-tagged), `snrfiltereffect`.
+- **Individual** (`figs_{bassID}/`): trial-level plots, PLUS per-fish
+  aggregated plots (all trials for that fish, trial identity kept visible
+  via color/shape) using whichever method won its diagnostic decision.
+  `forcedevtiming` and `fatiguetimeline` are dual-tagged -- diagnostic
+  output that is ALSO a legitimate individual-tier visualization (within-
+  step force development timing; near-L0 force vs. real elapsed session
+  time), so they may appear in both places.
+- **Summary** (`figs_summary/`): side-by-side per-individual panels (not
+  pooled into one panel), raw / individual-mean / group-mean tiers.
+  Individual-mean definition is still open (point-selection method design,
+  see the decision log) -- do not assume a fitted curve vs. binned mean
+  without checking that file first.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders;
@@ -49,8 +83,12 @@ names in use).
   not dropped).
 
 ## Old name -> new name
+Historical migration record (2026-07-19 renaming pass) -- the `trial_plots/`/
+`summary_plots/` subfolder references below describe the layout AS IT WAS
+THEN, not the current one (flattened 2026-07-21, see "Folder layout" above).
+The filename tokens themselves are still current.
 
-### Trial plots (`trial_plots/`, filename root = `{bassID}_bender_{NN}_{protocol}`, unchanged)
+### Trial plots (was in `trial_plots/`, filename root = `{bassID}_bender_{NN}_{protocol}`, unchanged)
 | Old | New |
 |---|---|
 | `{tid}.png` | unchanged |

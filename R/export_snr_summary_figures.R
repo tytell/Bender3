@@ -8,9 +8,10 @@
 # scope for this export.
 #
 # Three handling rules, by plot type:
-#   1. TRIAL plots (trial_plots/*_isometric*.png, *_isovelocity*.png):
-#      copied AS-IS (single-trial view, unfiltered) only if a MAJORITY of
-#      that trial's steps have activation_snr >= MFV_UHAT_SNR_MIN.
+#   1. TRIAL plots (per-fish folder is flat, 2026-07-21 -- matched by
+#      filename shape "{bassID}_bender_{NN}_{isometric|isovelocity}*.png",
+#      not by subfolder): copied AS-IS (single-trial view, unfiltered) only
+#      if a MAJORITY of that trial's steps have activation_snr >= MFV_UHAT_SNR_MIN.
 #   2. SNR-AWARE summary plots (u_hat vector FL/FV, FV L0 sono, u_hat
 #      empirical-vs-geometric, force-vs-time vector): REGENERATED from the
 #      SNR-passing subset only (steps/points below threshold are DROPPED,
@@ -62,9 +63,15 @@ snr_filter <- function(df) {
   mean(ss$activation_snr >= MFV_UHAT_SNR_MIN)
 }
 
+# Per-fish folders are now FLAT (2026-07-21, no trial_plots/ subfolder), so a
+# bare "*isometric*.png"/"*isovelocity*.png" glob would also catch summary
+# plots that happen to contain those substrings (FL_isometric_legacy.png,
+# forceTime_isovelocity_uhatBoth.png, etc.) -- folder scoping no longer
+# disambiguates trial vs. summary, so the glob must anchor on the trial-plot
+# filename SHAPE instead: "{BASS_ID}_bender_{NN}_{protocol}[...].png".
 trial_pngs <- unique(c(
-  fs::dir_ls(TRIAL_PLOT_DIR, glob = "*isometric*.png"),
-  fs::dir_ls(TRIAL_PLOT_DIR, glob = "*isovelocity*.png")
+  fs::dir_ls(TRIAL_PLOT_DIR, glob = sprintf("%s_bender_*isometric*.png", BASS_ID)),
+  fs::dir_ls(TRIAL_PLOT_DIR, glob = sprintf("%s_bender_*isovelocity*.png", BASS_ID))
 ))
 n_trial_copied <- 0L
 for (f in trial_pngs) {
