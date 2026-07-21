@@ -14,11 +14,15 @@ suppressPackageStartupMessages({
   library(ggplot2); library(cli); library(patchwork); library(signal)
 })
 
-SRC_DIR <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-15_bass17_bender"
-OUT_DIR <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/bass_summary_figures"
-
 .pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
 src <- function(f) source(file.path(.pipeline_root, f))
+src("paths_config.R")
+
+# Defaults come from paths_config.R (single source of truth) -- see that
+# file if the OneDrive folder layout ever moves again.
+SRC_DIR <- raw_source_dir(BASS17_RAW_SUBFOLDER)
+OUT_DIR <- FIGS_SUMMARY_DIR
+
 src("00_load_bender_flat.R")
 src("01_calibrate.R")
 src("02_deconvolve.R")

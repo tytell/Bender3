@@ -39,19 +39,21 @@ suppressPackageStartupMessages({
 })
 
 .root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
-for (f in c("00_load_bender_flat.R", "01_calibrate.R", "02_deconvolve.R",
+for (f in c("paths_config.R", "00_load_bender_flat.R", "01_calibrate.R", "02_deconvolve.R",
             "muscle_geometry.R", "fit_fv_fl.R", "03_analyze.R",
             "parse_trial_filename.R", "plot_strain_validation.R",
             "plot_angle_sono_validation.R", "muscle_force_vector.R")) {
   source(file.path(.root, f))
 }
 
+# Defaults come from paths_config.R (single source of truth) -- see that
+# file if the OneDrive folder layout ever moves again.
 SPECIMEN_DIRS <- c(
-  bass16 = "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-14_bass16_bender",
-  bass17 = "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-15_bass17_bender",
-  bass18 = "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-16_bass18_bender"
+  bass16 = raw_source_dir(BASS16_RAW_SUBFOLDER),
+  bass17 = raw_source_dir(BASS17_RAW_SUBFOLDER),
+  bass18 = raw_source_dir(BASS18_RAW_SUBFOLDER)
 )
-OUTPUT_DIR <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/diagnostic_figures"
+OUTPUT_DIR <- FIGS_DIAGNOSTIC_DIR
 fs::dir_create(OUTPUT_DIR, recurse = TRUE)
 
 STRAIN_BIN_PCT   <- 5.0   # common length-bin width for the mean lines / dots

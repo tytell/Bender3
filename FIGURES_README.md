@@ -1,24 +1,32 @@
 # Figure naming convention (adopted 2026-07-19)
 
 Figures live outside the repo, on the shared OneDrive hub:
-`proj_crittergripper/figures/`. This file documents the naming scheme so a
-filename tells you what it is without opening it. It replaces ad hoc
+`proj_crittergripper/02_processed/`. This file documents the naming scheme so
+a filename tells you what it is without opening it. It replaces ad hoc
 suffixes (`_interpbaseline`, `_vector`, `_L0_sono`, `_snr_passing`) that had
 grown inconsistently across scripts.
 
-## Folder layout (unchanged)
-- `bass{ID}_figures/trial_plots/` — one compound diagnostic plot per trial file.
-- `bass{ID}_figures/summary_plots/` — per-fish pooled summaries across trials.
-- `diagnostic_figures/` — cross-individual pooled superplots (flat, bassID
+All folder paths below are single-sourced in `R/paths_config.R` -- if the
+OneDrive layout moves again, update that file only (this doc + the
+`R/*.R` scripts read from it, not from hardcoded strings).
+
+## Folder layout
+Renamed 2026-07-19/2026-07-20/2026-07-21 to match the `.cursorrules` "File
+placement" convention (`figures/` -> `02_processed/figs_*`;
+`bass_summary_figures/` -> `figs_summary/`, matching the "cross-specimen or
+pooled summary figures" rule).
+- `figs_{bassID}/trial_plots/` — one compound diagnostic plot per trial file.
+- `figs_{bassID}/summary_plots/` — per-fish pooled summaries across trials.
+- `figs_diagnostic/` — cross-individual pooled superplots (flat, bassID
   list embedded in the name since it spans specimens).
-- `bass_summary_figures/` — flattened, curated copies (only SNR-passing
+- `figs_summary/` — flattened, curated copies (only SNR-passing
   material) pulled from all three fish for side-by-side browsing; every
   filename here is prefixed with the bass ID since the folder mixes fish.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders;
 `{bassID}_{signal}_{protocol}[_{method}][_{filter}].png` inside
-`bass_summary_figures/`. Tokens always appear in this order; omit a
+`figs_summary/`. Tokens always appear in this order; omit a
 bracketed token when it doesn't apply (e.g. `legacy` method is implicit and
 dropped in a few original-workflow names — see table below for the exact
 names in use).
@@ -75,13 +83,13 @@ names in use).
 | `summary_dynamic_power_massspecific.png` | `powerDynamicMassSpec.png` |
 | `summary_frequency_sweep_stiffness_damping.png` | `stiffnessDamping_freqsweep.png` |
 
-### Cross-individual superplots (`diagnostic_figures/`, flat)
+### Cross-individual superplots (`figs_diagnostic/`, flat)
 | Old | New |
 |---|---|
 | `superplot_FL_pooled_bass16_17_18.png` | `FLsuperplot_isometric_isovelocity_pooled.png` |
 | `superplot_FL_pooled_bass16_17_18_snr_passing.png` | `FLsuperplot_isometric_isovelocity_pooled_snrPass.png` |
 
-### `bass_summary_figures/` (flat, curated, bassID-prefixed; only SNR-passing material)
+### `figs_summary/` (flat, curated, bassID-prefixed; only SNR-passing material)
 Trial plots copied as-is (already `bassID_bender_NN_protocol[_baselineInterp].png`).
 Legacy summary copies (no filtering possible) and regenerated SNR-passing
 summaries both follow `{bassID}_{new-summary-name-above}[_snrPass].png`, e.g.

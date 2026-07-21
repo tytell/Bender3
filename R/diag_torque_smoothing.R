@@ -16,12 +16,16 @@ suppressPackageStartupMessages({
   library(dplyr); library(tibble); library(purrr); library(ggplot2); library(cli); library(rhdf5)
 })
 
-SOURCE_DIR <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-14_bass16_bender"
-OUTPUT_DIR <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/bass16_figures"
-SUMMARY_PLOT_DIR <- file.path(OUTPUT_DIR, "summary_plots")
-
 .pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
 src <- function(f) source(file.path(.pipeline_root, f))
+src("paths_config.R")
+
+# Defaults come from paths_config.R (single source of truth) -- see that
+# file if the OneDrive folder layout ever moves again.
+SOURCE_DIR <- raw_source_dir(BASS16_RAW_SUBFOLDER)
+OUTPUT_DIR <- figs_dir("bass16")
+SUMMARY_PLOT_DIR <- file.path(OUTPUT_DIR, "summary_plots")
+
 src("00_load_bender_flat.R")
 src("02_deconvolve.R")
 src("muscle_geometry.R")

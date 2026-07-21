@@ -1,6 +1,6 @@
 # export_snr_summary_figures.R
 # Bulk export for ONE specimen: copies/regenerates isometric + isovelocity
-# figures into the shared bass_summary_figures/ folder, prefixed with the
+# figures into the shared figs_summary/ folder, prefixed with the
 # specimen ID, restricted to activation-SNR-passing data (PI-directed,
 # 2026-07-18). Scope is isometric/isovelocity ONLY -- dynamic/frequency_sweep
 # and pooled validation plots (angleValid, strainValidCmd,
@@ -28,19 +28,23 @@
 # pattern; sourcing that script regenerates the normal per-fish figures too):
 #   BENDER3_BASS_ID=bass17 \
 #   BENDER3_SOURCE_DIR=/path/to/2026-07-15_bass17_bender \
-#   BENDER3_OUTPUT_DIR=/path/to/figures/bass17_figures \
+#   BENDER3_OUTPUT_DIR=/path/to/figs_bass17 \
 #   Rscript R/export_snr_summary_figures.R
 
 suppressPackageStartupMessages({library(dplyr); library(fs); library(cli); library(ggplot2)})
 
+.pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
+source(file.path(.pipeline_root, "paths_config.R"))
+
 BASS_ID       <- Sys.getenv("BENDER3_BASS_ID", "bass16")
-SUMMARY_DEST  <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/bass_summary_figures"
+# Default comes from paths_config.R (single source of truth) -- see that
+# file if the OneDrive folder layout ever moves again.
+SUMMARY_DEST  <- FIGS_SUMMARY_DIR
 fs::dir_create(SUMMARY_DEST, recurse = TRUE)
 
-.pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
 source(file.path(.pipeline_root, "run_fv_fl_power_pipeline.R"))  # regenerates figures; populates iso_vec/isv_vec/etc.
 
-cli::cli_h1("Exporting SNR-passing figures for {BASS_ID} -> bass_summary_figures/")
+cli::cli_h1("Exporting SNR-passing figures for {BASS_ID} -> figs_summary/")
 
 snr_filter <- function(df) {
   if (is.null(df) || nrow(df) == 0L) return(df)

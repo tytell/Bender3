@@ -10,14 +10,16 @@
 # Reuses ALL extraction logic from superplot_fl_pooled.R by sourcing it (this
 # also regenerates the existing UNFILTERED diagnostic figure, unchanged) --
 # then re-bins/re-plots only the SNR-passing subset of the same `pooled`
-# tibble into a second, separate output for bass_summary_figures/.
+# tibble into a second, separate output for figs_summary/.
 #
 # Run with:  Rscript R/superplot_fl_pooled_snr_passing.R
 
 .root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
-source(file.path(.root, "superplot_fl_pooled.R"))  # builds `pooled` (now incl. activation_snr)
+source(file.path(.root, "superplot_fl_pooled.R"))  # builds `pooled` (now incl. activation_snr); also sources paths_config.R
 
-SUMMARY_OUTPUT_DIR <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/bass_summary_figures"
+# Default comes from paths_config.R (single source of truth) -- see that
+# file if the OneDrive folder layout ever moves again.
+SUMMARY_OUTPUT_DIR <- FIGS_SUMMARY_DIR
 fs::dir_create(SUMMARY_OUTPUT_DIR, recurse = TRUE)
 
 n_total <- nrow(pooled)

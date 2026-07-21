@@ -30,14 +30,15 @@ suppressPackageStartupMessages({
   library(fs); library(ggplot2); library(cli); library(rhdf5); library(patchwork)
 })
 
-OUTPUT_DIR <- Sys.getenv(
-  "BENDER3_COMPARISON_OUTPUT_DIR",
-  "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/bass_summary_figures"
-)
-fs::dir_create(OUTPUT_DIR, recurse = TRUE)
-
 .pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
 src <- function(f) source(file.path(.pipeline_root, f))
+src("paths_config.R")
+
+# Default comes from paths_config.R (single source of truth) -- see that
+# file if the OneDrive folder layout ever moves again.
+OUTPUT_DIR <- Sys.getenv("BENDER3_COMPARISON_OUTPUT_DIR", FIGS_SUMMARY_DIR)
+fs::dir_create(OUTPUT_DIR, recurse = TRUE)
+
 src("00_load_bender_flat.R")
 src("01_calibrate.R")
 src("02_deconvolve.R")
@@ -121,8 +122,8 @@ src("plot_force_vs_time.R")  # .detect_stim_events(), RELAXATION_WINDOW_S
 # =============================================================================
 
 SPECIMENS <- list(
-  bass16 = "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-14_bass16_bender",
-  bass17 = "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-15_bass17_bender"
+  bass16 = raw_source_dir(BASS16_RAW_SUBFOLDER),
+  bass17 = raw_source_dir(BASS17_RAW_SUBFOLDER)
 )
 
 collect_specimen <- function(source_dir, label) {

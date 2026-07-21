@@ -76,7 +76,7 @@ structurally blind to the muscle's actual line of action.
    decide which steps are trustworthy enough to build empirical û from, (b)
    alpha-flag "low confidence" points in every vector summary plot rather
    than silently drop them, and (c) gate which trials/steps get copied or
-   regenerated into `bass_summary_figures/` (majority-of-steps-pass rule for
+   regenerated into `figs_summary/` (majority-of-steps-pass rule for
    trial plots; point/step-level drop for regenerated summary plots).
 
 ## Validated / cross-checked
@@ -104,7 +104,7 @@ structurally blind to the muscle's actual line of action.
   cross-individual FL superplot (isometric + isovelocity instantaneous
   sweep), unfiltered and SNR-filtered.
 - `export_snr_summary_figures.R` — per-fish SNR-gated export pass into
-  `bass_summary_figures/`.
+  `figs_summary/`.
 - `muscle_force_vector_physics.md` — physics model + troubleshooting data
   (SNR/calibration/gain/noise investigation).
 - This file — decision trail only; no formulas, no data.

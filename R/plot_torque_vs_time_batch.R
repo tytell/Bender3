@@ -2,8 +2,12 @@
 # Batch torque-vs-time PNGs using 00_load_bender_flat.R (flat-schema HDF5).
 
 repo <- normalizePath("/Users/yjimenez/code/Bender3")
-dropzone <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/00_DropZone"
-outdir <- "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/tests"
+source(file.path(repo, "R/paths_config.R"))
+
+# Defaults come from paths_config.R (single source of truth) -- see that
+# file if the OneDrive folder layout ever moves again.
+dropzone <- DROPZONE_DIR
+outdir <- FIGS_TESTS_DIR
 date_filter <- "2026-07-07"
 
 source(file.path(repo, "R/00_load_bender_flat.R"))

@@ -23,23 +23,21 @@ suppressPackageStartupMessages({
   library(fs); library(ggplot2); library(cli); library(rhdf5)
 })
 
+.pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
+src <- function(f) source(file.path(.pipeline_root, f))
+src("paths_config.R")
+
 ## SOURCE_DIR / OUTPUT_DIR can be overridden via env vars so the same pipeline
 ## can be pointed at a different specimen's raw-data / figures directories
 ## without editing this file (e.g. Sys.setenv(BENDER3_SOURCE_DIR=...) or
 ## `BENDER3_SOURCE_DIR=... BENDER3_OUTPUT_DIR=... Rscript run_fv_fl_power_pipeline.R`).
-SOURCE_DIR <- Sys.getenv(
-  "BENDER3_SOURCE_DIR",
-  "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/01_PermanentArchive/bender_crittergripper/2026-07-14_bass16_bender"
-)
-OUTPUT_DIR <- Sys.getenv(
-  "BENDER3_OUTPUT_DIR",
-  "/Users/yjimenez/Library/CloudStorage/OneDrive-ProvidenceCollege/01_JimenezLab/02_ResearchHub/proj_crittergripper/figures/bass16_figures"
-)
+## Defaults come from paths_config.R (single source of truth) -- see that
+## file if the OneDrive folder layout ever moves again.
+SOURCE_DIR <- Sys.getenv("BENDER3_SOURCE_DIR", raw_source_dir(BASS16_RAW_SUBFOLDER))
+OUTPUT_DIR <- Sys.getenv("BENDER3_OUTPUT_DIR", figs_dir("bass16"))
 TRIAL_PLOT_DIR   <- file.path(OUTPUT_DIR, "trial_plots")
 SUMMARY_PLOT_DIR <- file.path(OUTPUT_DIR, "summary_plots")
 
-.pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
-src <- function(f) source(file.path(.pipeline_root, f))
 src("00_load_bender_flat.R")
 src("01_calibrate.R")
 src("02_deconvolve.R")
