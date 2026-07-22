@@ -284,6 +284,21 @@ the point-selection design this feeds:
   fresh L0 (bass17 within-block cor(F,|strain|)=+0.88). Each line = one block,
   colored by session order. The arms are the within-block force-|bend|
   residual (passive-subtraction problem), not fatigue/stim.
+  `isopassivemodels` (BUILT 2026-07-22, PROTOTYPE, `R/diag_isometric_passive_models.R`,
+  read-only, cross-fish, 4 files `isopassivemodels_{1_relaxshape,2_leverage,
+  3_zeromusclecontrol,4_flshape}.png`) -- prototypes improved isometric passive
+  subtraction and visualizes the reasoning. Compares M0 (static pre-stim mean,
+  current) vs M1 (pre->post linear interp, pointwise) vs M2 (viscoelastic
+  relaxation loess-fit over quiescent pre+post samples, subtracted POINTWISE),
+  all projected on the geometric u_hat (= muscle_force_vector_geom_N). Plot 3 is
+  a MODEL-FREE proof (a no-activation quiescent window minus M0 reproduces
+  121-169% of the bass16/17 |bend| slope -> the concave-up is mostly a stale-
+  baseline artifact). Pointwise M2 removes it without a spurious bell
+  (cor(F,|strain|) M0->M2: bass16 +0.19->+0.03, bass17 +0.93->+0.25, bass18
+  +0.57->+0.42; bass18's monotonic rise is genuine). CAVEAT: M2 interpolates the
+  passive across the unobservable ~0.3 s stim gap; low-force fish are below the
+  passive-drift floor and must be magnitude/SNR-gated, not read as a shape. NOT
+  a production change -- prototype pending PI decision.
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),

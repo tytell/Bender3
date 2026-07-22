@@ -530,6 +530,31 @@ call above (baselines not settled). Two read-only tests were run:
   confirmed independent of drift, fatigue, and stim. The real fix is accurate
   (pointwise/interp) passive subtraction (item-2).
 
+**Improved isometric passive subtraction PROTOTYPED 2026-07-22 (PI-requested,
+`R/diag_isometric_passive_models.R`, `isopassivemodels_1..4.png`).** Compared
+three passive models on the geometric-u_hat projected force (= muscle_force_
+vector_geom_N): M0 static pre-stim mean (current); M1 pre->post linear interp
+(pointwise); M2 viscoelastic relaxation loess-fit over quiescent pre+post
+samples, subtracted POINTWISE then Method D.
+- **MODEL-FREE proof the concave-up is a stale-baseline artifact:** a NO-
+  activation quiescent window minus M0 (zero-muscle control) reproduces 121% /
+  169% / 61% of the bass16 / bass17 / bass18 |force|-vs-|strain| slope. The M0
+  pre-stim baseline is sampled ~0.5-1 s before the active window on a relaxing
+  passive, so it is STALE; the leftover drift scales with |bend| and masquerades
+  as the FL arms.
+- **Payoff cor(F,|strain|) M0->M1->M2:** bass16 +0.19->+0.11->+0.03; bass17
+  +0.93->+0.91->+0.25; bass18 +0.57->+0.52->+0.42. M1 (linear interp) barely
+  helps; pointwise M2 removes most of the artifactual concave-up WITHOUT
+  creating a spurious bell. bass18's residual monotonic rise toward lengthening
+  survives all baselines -> genuine (not the artifact).
+- **CAVEATS / open decision:** (1) M2 interpolates the passive across the ~0.3 s
+  stim gap (unobservable); it assumes the contraction does not discontinuously
+  perturb the passive. (2) For the low-force fish (bass17) the true force is
+  below the passive-drift floor -> its FL SHAPE is unresolvable and must be
+  magnitude/SNR-gated, not reported as flat-or-bell. Production change (porting a
+  pointwise relaxation-aware passive into the vector path + a magnitude gate) is
+  NOT yet made -- PI decision pending on M2 vs M1 and the gating rule.
+
 ## Where things live (code map)
 - `muscle_force_vector.R` — core: baseline subtraction, û construction
   (empirical + geometric), wrench->force solve, sign standardization,
