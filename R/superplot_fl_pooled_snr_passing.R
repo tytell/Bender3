@@ -8,9 +8,11 @@
 # individual samples within a kept step/ramp.
 #
 # Reuses ALL extraction logic from superplot_fl_pooled.R by sourcing it (this
-# also regenerates the existing UNFILTERED diagnostic figure, unchanged) --
+# also regenerates the existing UNFILTERED diagnostic figures, unchanged) --
 # then re-bins/re-plots only the SNR-passing subset of the same `pooled`
-# tibble into a second, separate output for figs_summary/.
+# tibble into figs_summary/, via the shared .build_fl_superplot() helper
+# (2026-07-21 refactor) -- RAW and NORMALIZED (F/F0, see that file's header)
+# companions, same as the unfiltered diagnostic pair.
 #
 # Run with:  Rscript R/superplot_fl_pooled_snr_passing.R
 
@@ -30,50 +32,36 @@ cli::cli_alert_info("Kept {n_pass} / {n_total} points ({round(100*n_pass/n_total
 
 if (n_pass == 0L) cli::cli_abort("No SNR-passing points -- nothing to plot.")
 
-long_pass <- passing |>
-  tidyr::pivot_longer(c(force_emp_N, force_geom_N), names_to = "method_raw", values_to = "force_N") |>
-  dplyr::mutate(method = factor(dplyr::if_else(method_raw == "force_emp_N",
-                                               method_levels[["empirical"]], method_levels[["geometric"]]),
-                                levels = method_levels)) |>
-  dplyr::filter(is.finite(force_N), is.finite(shortening_strain_pct))
-long_pass$strain_bin <- round(long_pass$shortening_strain_pct / STRAIN_BIN_PCT) * STRAIN_BIN_PCT
-
-per_trial_p <- long_pass |>
-  dplyr::group_by(method, fish, trial_id, strain_bin) |>
-  dplyr::summarise(force_N = mean(force_N, na.rm = TRUE), .groups = "drop")
-per_fish_p <- per_trial_p |>
-  dplyr::group_by(method, fish, strain_bin) |>
-  dplyr::summarise(force_N = mean(force_N, na.rm = TRUE), .groups = "drop")
-per_group_p <- per_fish_p |>
-  dplyr::group_by(method, strain_bin) |>
-  dplyr::summarise(force_N = mean(force_N, na.rm = TRUE), n_fish = dplyr::n(), .groups = "drop")
-
 n_iso_p <- dplyr::n_distinct(dplyr::filter(passing, protocol == "isometric")$trial_id)
 n_isv_p <- dplyr::n_distinct(dplyr::filter(passing, protocol == "isovelocity")$trial_id)
+n_dyn_p <- dplyr::n_distinct(dplyr::filter(passing, protocol == "dynamic")$trial_id)
 
-p2 <- ggplot(mapping = aes(x = strain_bin, y = force_N)) +
-  geom_hline(yintercept = 0, colour = "grey80", linewidth = 0.3) +
-  geom_line(data = per_trial_p, aes(group = trial_id, colour = fish), linewidth = 0.3, alpha = 0.35) +
-  geom_point(data = per_trial_p, aes(colour = fish), size = 0.8, alpha = 0.4) +
-  geom_line(data = per_fish_p, aes(group = fish, colour = fish), linewidth = 1.0, alpha = 0.95) +
-  geom_point(data = per_fish_p, aes(colour = fish), size = 2.1, alpha = 0.95) +
-  geom_line(data = per_group_p, aes(group = 1), colour = "black", linewidth = 1.8) +
-  geom_point(data = per_group_p, colour = "black", size = 2.4) +
-  facet_wrap(~method, ncol = 2) +
-  scale_colour_manual(values = fish_cols, name = "Individual (fish)") +
-  labs(
-    title = "Pooled Force-Length superplot -- SNR-PASSING ONLY (activation_snr >= 3.0)",
-    subtitle = sprintf(
-      "Same pooling as the unfiltered diagnostic superplot, but %s (%d/%d, %.1f%%) omitted for activation_snr < %g\n%d isometric + %d isovelocity trial(s) contribute at least one passing step/ramp | %g%% length bins | connect-the-dots, NO fit",
-      "low-confidence steps/ramps", n_total - n_pass, n_total, 100 * (n_total - n_pass) / n_total, SNR_MIN,
-      n_iso_p, n_isv_p, STRAIN_BIN_PCT),
-    x = "Muscle shortening strain (%, length; + = shortened)",
-    y = "Muscle force along u_hat (N, + = reinforces passive direction)") +
-  theme_bw(12) +
-  theme(legend.position = "right",
-        plot.subtitle = element_text(size = 8),
-        strip.text = element_text(face = "bold"))
+# Reuses .build_fl_superplot() from superplot_fl_pooled.R (2026-07-21 refactor)
+# -- see that file for the RAW-vs-NORMALIZED (F/F0) rationale, and for the
+# V=0-only rule (isometric + isovelocity's own V=0 holds + dynamic L0
+# bookends -- NOT the isovelocity sweep, removed 2026-07-21).
+p2 <- .build_fl_superplot(
+  passing, "force_emp_N", "force_geom_N",
+  title = "Pooled Force-Length superplot -- SNR-PASSING ONLY (activation_snr >= 3.0)",
+  subtitle = sprintf(
+    "Same V=0-only pooling as the unfiltered diagnostic superplot, but %s (%d/%d, %.1f%%) omitted for activation_snr < %g\n%d isometric + %d isovelocity + %d dynamic trial(s) contribute at least one passing point | %g%% length bins | connect-the-dots, NO fit | RAW absolute force",
+    "low-confidence points", n_total - n_pass, n_total, 100 * (n_total - n_pass) / n_total, SNR_MIN,
+    n_iso_p, n_isv_p, n_dyn_p, STRAIN_BIN_PCT),
+  y_lab = "Muscle force along u_hat (N, + = reinforces passive direction)")
+
+n_norm_avail_p <- dplyr::n_distinct(dplyr::filter(passing, is.finite(.data$force_emp_norm))$trial_id)
+p2_norm <- .build_fl_superplot(
+  passing, "force_emp_norm", "force_geom_norm",
+  title = "Pooled Force-Length superplot, NORMALIZED -- SNR-PASSING ONLY",
+  subtitle = sprintf(
+    "Same SNR-passing pooling, each point divided by that trial+side's own L0 force (F/F0) | %d/%d trials contributed a usable F0 | %g%% length bins | connect-the-dots, NO fit\nPROTOTYPE (2026-07-21) -- compare against the RAW file before treating this as canonical",
+    n_norm_avail_p, dplyr::n_distinct(passing$trial_id), STRAIN_BIN_PCT),
+  y_lab = "Muscle force / trial's own L0 force (F/F0, dimensionless)")
 
 outfile2 <- file.path(SUMMARY_OUTPUT_DIR, "FLsuperplot_isometric_isovelocity_pooled_snrPass.png")
 ggplot2::ggsave(outfile2, p2, width = 13, height = 6.5, dpi = 150)
 cli::cli_alert_success("Wrote {outfile2}")
+
+outfile2_norm <- file.path(SUMMARY_OUTPUT_DIR, "FLsuperplot_isometric_isovelocity_pooled_normalized_snrPass.png")
+ggplot2::ggsave(outfile2_norm, p2_norm, width = 13, height = 6.5, dpi = 150)
+cli::cli_alert_success("Wrote {outfile2_norm}")

@@ -94,15 +94,363 @@ structurally blind to the muscle's actual line of action.
   crosstalk. Session-specific mounting/setup remains the leading unproven
   hypothesis for bass17's ~2x higher noise floor.
 
+## Gate A exploration: trial-to-trial force-scale normalization (2026-07-21)
+**Motivation.** `FLsuperplot_isometric_isovelocity_pooled.png` pools RAW
+absolute force across trials (e.g. bass16 has 2 isometric + 2 isovelocity
+trials at IDENTICAL nominal operating points, recorded at different session
+times) -- PI feedback: "currently very unhelpful." Hypothesis: cross-trial
+force-SCALE differences (fatigue, clamp re-seating, etc. between repeat
+trials) are indistinguishable from real FL shape once pooled raw, and are a
+major contributor.
+
+**Two things tried, two different outcomes:**
+1. *Fatigue-timeline (time-based) normalization* -- force / that trial's own
+   MAX force, tested on `plot_fatigue_timeline.R`. Mixed/net-negative
+   result (fixed bass16's mid-session rebound, but hurt bass17/bass18's
+   already-clean signals) -- ABANDONED for that plot, reverted. Wrong
+   reference point (arbitrary max) for a TIME diagnostic.
+2. *FL/FV pooling (length-based) normalization* -- force / that
+   TRIAL+SIDE's own L0 (isometric) or V=0 (isovelocity) force, i.e. F/F0,
+   the classic muscle-physiology normalization, built into
+   `superplot_fl_pooled.R`/`superplot_fl_pooled_snr_passing.R`. First
+   attempt (F0 computed from ALL L0/V0 reps regardless of confidence) blew
+   up into +-1000 spikes -- dividing by a noisy near-zero F0 amplifies
+   noise. FIX: gate F0 itself by the SAME `activation_snr >= MFV_UHAT_SNR_MIN`
+   threshold used everywhere else (not a new invented number) -- only use an
+   L0/V0 rep as F0 if IT is independently trustworthy. Result: clean,
+   symmetric, physiologically-plausible FL peak shape, bass16/bass18
+   tracking consistently.
+
+**Cost, and the decision:** SNR-gating F0 means a trial/fish with NO
+trustworthy L0/V0 rep contributes NO normalized points at all -- bass17
+drops out ENTIRELY (traced: its isometric L0 activation_snr is 1.18-2.36
+across all 4 reps, its isovelocity V=0 holds also never clear 3.0), which
+tracks with the already-documented "~2x higher noise floor" for bass17
+above. PI decision (2026-07-21): ACCEPT this exclusion (a curve built from
+an untrustworthy reference point shouldn't count), and KEEP raw + normalized
+as two side-by-side files for now (`FLsuperplot_..._pooled.png` /
+`FLsuperplot_..._pooled_normalized.png`, same for the `_snrPass` pair) --
+normalized is NOT yet promoted to replace raw as canonical.
+(UPDATE 2026-07-21, later same day: dynamic L0 bookends were added as a
+THIRD F0 source alongside isometric/isovelocity -- bass17 now clears the
+SNR gate via its bookends even though its isometric/isovelocity L0/V0 reps
+still don't, so this specific exclusion no longer applies. See the
+"RESOLVED" item further down for the fuller V=0-only rework.)
+
+**New Gate A framing this opened up:** F/F0 normalization, done safely,
+acts as an IMPLICIT quality gate distinct from a fatigue-based one -- a
+trial is only usable if ITS OWN reference point is independently
+trustworthy, not just whether individual points are SNR-passing. Whether
+this becomes (part of) Gate A's actual architecture, vs. staying a parallel
+diagnostic lens, is still open.
+
+**Raw-peak-DOWN vs. normalized-peak-UP at strain=0% (2026-07-21, PI-flagged
+"very confusing," STILL OPEN).** Root-caused as far as code hygiene goes,
+NOT yet resolved as a modeling question:
+1. *Drift fixed, no visual change (as predicted):* `superplot_fl_pooled.R`'s
+   `extract_isovelocity_sweep()` had its OWN hand-copied implementation of
+   the tension-sign decision, never updated with the `is_l0_step` guard
+   added to `.mfv_finalize_step()` (muscle_force_vector.R) on 2026-07-21.
+   Unified both into one shared helper, `.mfv_tension_sign()`
+   (muscle_force_vector.R). Regenerated both superplots after the fix --
+   the raw plot's trough at strain=0% (group mean ~-0.25, bass18 spike to
+   ~-1.9) is UNCHANGED. Expected: sweep steps already skip
+   `operating_point == 0` holds upstream, so `is_l0_step` never fires for
+   them regardless -- this refactor closes a real drift risk but was never
+   going to touch this specific artifact.
+2. *Actual mechanism (diagnosed, not yet fixed):* an isovelocity sweep step
+   picks ONE fixed `tsign` for its ENTIRE ramp, from that step's own
+   AGGREGATE passive-torque projection (usually unambiguous, since a real
+   sweep's mean is dominated by its large-angle ends). That same fixed sign
+   then gets applied to every sample along the ramp, INCLUDING near the
+   geometric zero-angle crossing, where the projection lever `rxu_e` itself
+   can swing through zero/sign-change purely from geometry -- independent
+   of whether the muscle's real tension is changing. Different steps/
+   trials/fish land on different dominant signs, so pooled+binned points
+   right at the crossing (where the true signal is smallest, hence most
+   sensitive to whichever fixed sign won) scatter/trough. Meanwhile F0
+   (isometric_zero HOLD, routed through `.mfv_finalize_step()`'s
+   `is_l0_step`-forced-ambiguous rule) is mathematically forced
+   non-negative (`tension_sign * F_moment_N == abs(F_moment_N)` there) --
+   so F0 is a stable, always-positive denominator, and isometric's OWN
+   strain=0% points normalize to ~1.0 near-TRIVIALLY (F/F0 where F IS
+   (close to) F0, same window/mean/sign method) -- this is very likely the
+   real source of the normalized plot's "peak UP at exactly 0," not a
+   biological signal.
+3. *RESOLVED 2026-07-21, by removing the mechanism instead of patching it:*
+   PI reframed the question entirely -- "the rule is that FL superplot only
+   contains moments or steps where V = 0" -- rather than deciding how to
+   patch the sweep's per-step-fixed `tsign` near its zero-crossing (option 3
+   above), the isovelocity sweep extraction itself
+   (`extract_isovelocity_sweep()`) was DELETED from `superplot_fl_pooled.R`.
+   It is superseded by three V=0-only sources: isometric holds (unchanged),
+   isovelocity's own embedded `isometric_zero` holds
+   (`extract_isovelocity_zero_points()` -- previously used only as F0,
+   never plotted as data), and dynamic trials' pre-/post-cycling L0 stim
+   bookends (`extract_dynamic_l0_points()`, using
+   `R/extract_dynamic_l0_bookends.R` + the same
+   `attach_vector_muscle_force(..., td6_override=)` pattern already proven
+   by the fatigue-timeline's dynamic integration). Since none of these three
+   sources ever has a mid-ramp geometric zero-crossing (isometric holds a
+   fixed nonzero-or-zero angle; V=0 holds/bookends are AT 0 deg, not
+   crossing through it), the artifact's root cause (item 2 above) cannot
+   occur anymore -- confirmed by re-running both superplots: the raw plot's
+   strain=0% trough/spike is GONE (group mean now a clean local peak, no
+   sign-driven scatter), and the normalized plot's near-1.0 peak at 0% is
+   still present but no longer confusable with the trough -- it's the
+   expected, honest "F/F0 at the reference point is ~1 by construction"
+   behavior, now sitting alone without a mismatched raw-plot trough
+   contradicting it. Bonus: dynamic bookends give bass17 an SNR-passing L0
+   reference it never had from isometric/isovelocity alone, so bass17 now
+   contributes to the normalized plot too (previously zero points, see the
+   `figs_summary/` note above).
+
+**L0 "spike" fully RESOLVED 2026-07-22, by DELETING the passive-relative
+`tension_sign`/`.mfv_tension_sign()` mechanism entirely** (not patching its
+`is_l0_step` special case further -- see item 3 above, which left a residual
+near-1.0 spike/discontinuity at strain=0% because `is_l0_step` forced a
+DIFFERENT sign rule at L0 than everywhere else). PI: "resolve now." Empirical
+check across all 328 real finalized steps (3 fish x isometric + isovelocity-
+V0 + dynamic bookends x muscle_force_vector_N/muscle_force_vector_geom_N/
+force_force_channel_N/force_yTorque_N/force_zTorque_N, captured by
+instrumenting the REAL `.mfv_finalize_step()` calls, not reimplemented) found:
+- `force_zTorque_N` cleanly MIRRORS by anatomical side (left one sign, right
+  the other, consistent across all 3 fish) -- for the SAME reason the legacy
+  zTorque-only path already corrects for via `force_sign = rec_lidx *
+  lidx_pos_motor` (`resolve_step_contraction()`, `muscle_geometry.R`).
+  Unrelated to L0 or concentric/eccentric.
+- `muscle_force_vector_N`/`muscle_force_vector_geom_N`/`force_force_channel_N`
+  are mostly positive (91.5%/94.5%) with a REAL negative minority concentrated
+  in isovelocity (16-21%) -- not a side effect, not an L0 artifact: a
+  passive-relative correction would have been ERASING genuine eccentric-vs-
+  concentric signal to force these positive.
+- `force_yTorque_N` splits almost entirely on STATIC (isometric hold, or
+  isovelocity's own V=0 embedded holds -- 96.4%/89.7% positive) vs. ACTIVELY
+  MOVING (isovelocity's concentric/eccentric ramp, genuinely rotating during
+  the stim window -- 73.3%/83.3% negative) -- see `ytorquesignexamples.png`
+  (`figs_diagnostic/`) for 3 real positive + 3 real negative examples (all
+  SNR >= 6), and `axissnrcomparison.png` for SNR compared across all 4 axes
+  on the SAME noise floor (medians 3.8-5.4, roughly comparable, zTorque
+  slightly highest).
+**New rule (replaces the deleted mechanism):** two DIFFERENT treatments for
+two DIFFERENT behaviors, not one `tension_sign` forced onto all five outputs.
+`force_zTorque_N` gets the FIXED per-side `force_sign` correction (computed
+from file geometry, works identically for dynamic bookends' synthetic step
+rows). The other four are reported in their RAW, as-computed sign -- no
+per-step decision, no L0 special case, because there is no more "ambiguous
+vs. reinforcing/opposing" question left to answer for them. Regenerated
+`FLsuperplot_isometric_isovelocity_pooled(_normalized).png`: the raw plot's
+values are now all-positive (previously alternated sign, described as
+"confusing" by PI) and the normalized plot's L0 region is now a smooth
+trough (classic FL-curve shape), not a spike/discontinuity.
+
+**Isovelocity's y-torque follow-up, same day: CONFIRMED as (partly)
+uncorrected inertial coupling, not purely a stimulus-driven signal.** PI
+observation: "y torque is positive for isometric stims and the rise is
+coincident with muscle stimulation. On the other hand, negative y torques
+in isovelocity happen well after the stimulus and most likely in relation
+to the velocity ramp. Velocity ramp suggests inertial noise?"
+
+First, a CORRECTION to the numbers above: `ytorquesignexamples.png`'s
+isovelocity examples (and the "73.3%/83.3% negative" figure) were captured
+via `extract_isovelocity_zero_points()`'s internal per-step loop, which
+computes EVERY step (including moving ones) with a STATIC pre-stim baseline
+before discarding everything except V=0 -- comparing a fast-moving active
+window against a motionless pre-stim window is guaranteed to show a huge
+motion-linked deviation, unrelated to the REAL isovelocity path
+(`compute_isovelocity_vector_batch()`, angle-matched passive, what actually
+feeds `FV_isovelocity_uhatBoth.png`). Re-run with the CORRECT angle-matched
+computation (313 real finalized steps, angle-matched-only for isovelocity's
+moving rows): isovelocity's moving steps are 54% negative (was 73-83%,
+wrong) vs. static holds' 97% positive (was 96-97%, unaffected by the bug --
+static holds were always computed correctly). 54% is much closer to a coin
+flip than a real directional signal.
+
+Second, the MECHANISM test (`ytorqueinertialtiming.png`,
+`R/diag_ytorque_inertial_timing.R`): a representative active step
+(bass16_bender_16_isovelocity, step 12, left, eccentric, -335.6 deg/s) and
+its matched WITHIN-TRIAL no-stim ramp of the same commanded speed (step 20)
+show the SAME Ty dip at the SAME time (2.129s vs. 2.128s) relative to the
+SAME angular-velocity-profile feature (both peak at 2.057s) -- one of these
+traces has ZERO stimulation. This is a KINEMATIC feature of the ramp's own
+motion, not a stimulus-locked muscle event. Aggregate check across all 123
+isovelocity ramps (moving steps only, both stimulated and no-stim), 3 fish:
+median |t(Ty extremum) - t(|angular velocity| extremum)| = 0.071s (stim) vs.
+0.072s (no-stim) -- essentially IDENTICAL lag with or without stimulation
+(`ytorqueinertialtiming_stats.png`).
+
+Conclusion: `force_yTorque_N`'s isovelocity sign is NOT purely a real
+muscle-force signal being correctly captured -- angle-matched passive
+subtraction reduces but does not fully cancel a genuine inertial-coupling
+artifact from the ramp's own acceleration profile (the active ramp's dip is
+~3.7x larger than the matched no-stim ramp's, so subtraction leaves a real
+residual). This does NOT change the 2026-07-22 sign-convention decision
+above (raw sign, no per-step correction is still correct -- there is no
+"true" sign to correct TOWARD when part of the signal is motion artifact,
+not muscle force) but DOES mean `force_yTorque_N` specifically should be
+treated with LOWER confidence during isovelocity's actively-moving phase
+than during any static hold -- a caveat for whoever next uses this axis for
+anything quantitative (not just sign-checking).
+
+**Muscle-force extraction method (mean-over-window vs. alternatives),
+2026-07-22, PI follow-up on `bass16_forceextractionmethod.png`:** "the max
+in window is probably NOT the best way... it should be calculated from the
+smoothed black line." Built 4 candidates (`muscleforcemethodcompare.png`):
+A = current (MEAN over the full active window), B = MAX raw sample,
+C = peak of the smoothed trace, D = narrow-window (0.15s) mean of RAW
+samples centered on the smoothed peak's timing. `bass16_forceextractionmethod.png`'s own dynamic-bookend
+panel is the clearest case: the smoothed trace rises to a real peak
+(~0.22-0.3 N*m) then fades WITHIN the same active window (twitch/tetanic
+decline) -- A dilutes this to 0.09, while C (0.225) and D (0.184) both
+track the visible peak much better, D being the more noise-robust of the
+two (a single smoothed-line value vs. an averaged plateau).
+
+Aggregate check (`muscleforcemethodsensitivity.png`, 92 real SNR-eligible
+isometric steps, 3 fish) adds an important qualifier: for ISOMETRIC's
+sustained, FLAT holds specifically, method D tracks A almost exactly
+(near-1:1 correlation) -- the extraction-method choice barely matters
+there, because there is no post-peak decay to dilute. B and C both show
+large, noisy departures from A even for isometric (single-sample noise for
+B; onset-transient sensitivity for C -- the smoothed trace's peak search
+can catch the trace still settling into its plateau right at stim onset,
+found and fixed for the compare figure by restricting C/D's peak SEARCH
+window to the stim duration itself, excluding the deactivation tail, but
+the underlying onset-transient sensitivity is a real property of C, not
+fully eliminated). **Net finding: the dynamic-bookend problem is about
+TRANSIENT (rise-then-decay) windows specifically, not a universal flaw in
+method A** -- isovelocity's moving-ramp windows likely share this same
+transient character (visibly non-flat in the compare figure's isovelocity
+panel) and are a second candidate for the same fix; a firm method choice
+is still open, this is a comparison, not yet a decision.
+
+Also clarified the same day: `bass16_forceextractionmethod.png`'s blue
+"MEAN" line is the mean of the ACTIVE (stim) window -- i.e. method A itself,
+what currently gets read off as the "active" reading before baseline
+subtraction. It is NOT a baseline (a source of PI confusion, since
+`bass16_passivebaselinemethod.png` also has a blue "MEAN" line, but of the
+PRE-STIM window instead) -- the extraction figure's subtitle now says so
+explicitly.
+
+**FV superplot built 2026-07-22** (`FVsuperplot_isovelocity_pooled(_normalized).png`,
+`R/superplot_fv_pooled.R`, PI-requested "similar to FL superplots, raw and
+normalized"). Mirrors the FL superplot's V=0-only rule, axis-swapped: pools
+a V=0 anchor (isometric L0 reps + isovelocity's own V=0 holds + dynamic L0
+bookends, same 3 sources FL already uses) plus isovelocity's actual moving
+ramps via the REAL angle-matched batch (angle_matched(/_cross_trial) only,
+same exclusion as the y-torque correction above). X-axis is
+`shortening_strain_pct` (a strain RATE, %/s, for isovelocity) rather than
+raw commanded `operating_point` -- verified empirically that two steps at
+the same |op| but opposite raw sign can share the SAME contraction_mode
+(mirrored motor directions across sides), which raw op would have pooled
+as opposite directions; `shortening_strain_pct` already resolves this
+muscle-centrically (concentric always +, eccentric always -), matching
+`03_analyze.R`'s own documented intent ("FL x-axis / FV x-axis use
+predicted MUSCLE strain / strain-rate"). Normalized F0 falls back from
+trial+side to fish+side when a trial's own V=0 doesn't clear SNR_MIN
+(isovelocity's embedded V=0 holds are usually too low-SNR to self-
+normalize, observed SNR ~0.1-1.9 -- found while building this). Both fish
+branches (concentric and eccentric) land ABOVE the V=0 (isometric) force in
+the pooled result -- NOT the classic Hill-curve shape (concentric should
+fall BELOW isometric, only eccentric should rise above it) -- plausibly
+because the moving-ramp force estimate carries some of the same
+uncorrected inertial-coupling contamination just diagnosed for
+`force_yTorque_N` above (which would elevate both ramp directions
+similarly, roughly independent of sign). Flagged in the figure's own
+subtitle as a limitation, not silently smoothed over; PROTOTYPE, not yet
+canonical.
+
+**Method D adopted as the production active-force extraction method,
+2026-07-22 (PI decision after reviewing `muscleforcemethodcompare.png`/
+`muscleforcemethodsensitivity.png` above): "Agreed. Let's go with D."**
+Replaces the plain full-window MEAN in BOTH real pipeline paths that
+previously shared it (`diag_force_extraction_baseline.R`'s header already
+noted they were "identical MEAN-over-window logic, just a different window
+variable name" -- so both needed the same fix, not just the diagnostic):
+- `muscle_force_vector.R`'s `.mfv_window_peak_means()` -- the 6-axis vector
+  path's ACTIVE window (isometric's `attach_vector_muscle_force()` and
+  isovelocity's `compute_isovelocity_vector_batch()`); feeds
+  `FL_isometric_uhatBoth.png`, `FV_isovelocity_uhatBoth.png`,
+  `FLsuperplot`, `FVsuperplot`, and every SNR-summary export.
+- `03_analyze.R`'s `.legacy_peak_window_mean()` -- the legacy zTorque-only
+  path's `active_force_Nm` (`build_segmented_step_summary()`); feeds
+  `muscle_force_Nm`/`muscle_force_Nm_interp` and everything downstream of
+  those (frequency-sweep power, the pre-vector-force FL/FV outputs).
+The PASSIVE/baseline window in both files is UNCHANGED (still the plain
+mean via `.mfv_window_means()` -- a steady reference has no "peak" to
+chase; only the ACTIVE window's extraction method changed).
+
+**Bug found + fixed the SAME day, before trusting Method D in production**:
+regenerating `FLsuperplot_isometric_isovelocity_pooled.png` with Method D
+surfaced a large, unexplained spike at 0% strain (some individual points
+>2N, vs a real ~0.1-0.8N range everywhere else) that had NOT been present
+before the switch. Root cause traced to the dynamic trials' L0 bookend
+contractions (`extract_dynamic_l0_bookends.R`) specifically: their stim
+bursts are only ~0.05s long (verified directly on bass18's raw files --
+`stim_t1_s - stim_t0_s` = 0.053-0.054s for all 4 bookends checked), a
+fundamentally different regime from isometric/isovelocity's ~0.5-1s+
+windows that `muscleforcemethodsensitivity.png` actually validated Method
+D against. On a burst this short, the smoothed trace is often STILL
+RISING at the search window's own trailing edge (verified: for a bass18
+bookend with a spurious 2.3N output, the smoothed search-window max was
+only 0.48 -- the peak was pinned to the search edge, not a genuine
+interior maximum), so the found "peak time" sits right at the boundary;
+Method D's fixed 0.15s narrow averaging window (bounded by the FULL
+active+deactivation window, not the tiny search window) then extends ~3x
+past that boundary into the deactivation tail, where it can land on a
+large transient (verified directly: raw xforce on that same bookend
+reached 5.16 N a few hundred ms into the deactivation window, versus <0.5N
+everywhere within the actual 55-sample stim burst) unrelated to the pulse
+itself -- most likely a mechanical/motor-related artifact (candidate
+`motorstepartifact` territory), not a real muscle force.
+
+Fixed with a DURATION guard, not a sample-count guard (the existing "too
+few finite samples" fallback wasn't the problem -- there were plenty of
+samples, just not enough elapsed TIME for the trace to reach a genuine
+interior peak): both `.mfv_window_peak_means()` and
+`.legacy_peak_window_mean()` now fall back to the plain full-window mean
+(Method A) whenever the search window's own duration is shorter than the
+0.15s narrow-averaging width, on the reasoning that a narrow window wider
+than the entire search range can't possibly stay confined to it. Re-verified
+directly against the exact bass18 bookend that produced the 2.3N/3.27N
+spurious values -- with the guard, `.mfv_window_peak_means()` now returns
+values identical to the plain mean (0.21-0.79N, matching the physiologically
+plausible range) for all 4 of that trial's bookends. Confirmed the guard
+does NOT change isometric/isovelocity's own Method D behavior (their
+search windows are comfortably >0.15s). Full pipeline + SNR-summary export
++ both superplots rerun clean on all 3 fish after the fix; the spurious
+spike is gone from `FLsuperplot`, and only Method A ever fires for dynamic
+bookends specifically -- isometric and isovelocity's genuinely long/
+sustained or ramping windows still get Method D as intended.
+
 ## Where things live (code map)
 - `muscle_force_vector.R` — core: baseline subtraction, û construction
   (empirical + geometric), wrench->force solve, sign standardization,
-  sono LP/L0, per-step SNR.
+  sono LP/L0, per-step SNR. ACTIVE-window extraction is
+  `.mfv_window_peak_means()` (Method D, added 2026-07-22, duration-guarded
+  fallback to the plain mean); PASSIVE/baseline window stays
+  `.mfv_window_means()` (plain mean, unchanged).
+- `03_analyze.R` — legacy zTorque-only path. ACTIVE-window extraction is
+  `.legacy_peak_window_mean()` (Method D, added 2026-07-22, same
+  duration-guarded fallback as above, independently defined since this
+  file isn't always co-sourced with `muscle_force_vector.R`).
 - `plot_muscle_force_vector.R` — all vector-force plots, confidence-alpha
   flagging, emp-vs-geom faceting.
 - `superplot_fl_pooled.R` / `superplot_fl_pooled_snr_passing.R` — pooled
   cross-individual FL superplot (isometric + isovelocity instantaneous
   sweep), unfiltered and SNR-filtered.
+- `superplot_fv_pooled.R` — pooled cross-individual FV superplot (added
+  2026-07-22), reuses `superplot_fl_pooled.R`'s dynamic-bookend helper
+  rather than re-deriving it.
+- `diag_ytorque_sign_examples.R` — `ytorquesignexamples`/`axissnrcomparison`
+  diagnostics (2026-07-22 correction: real angle-matched isovelocity data,
+  not the static-baseline artifact v1 used).
+- `diag_ytorque_inertial_timing.R` — `ytorqueinertialtiming`(`_stats`)
+  diagnostics (2026-07-22, added): active-vs-matched-passive-ramp timing
+  evidence for isovelocity's y-torque inertial-coupling artifact.
+- `diag_force_extraction_methods_compare.R` — `muscleforcemethodcompare`/
+  `muscleforcemethodsensitivity` diagnostics (2026-07-22, added):
+  MEAN-vs-MAX-vs-smoothed-peak-vs-narrow-window extraction method
+  comparison.
 - `export_snr_summary_figures.R` — per-fish SNR-gated export pass into
   `figs_summary/`.
 - `muscle_force_vector_physics.md` — physics model + troubleshooting data

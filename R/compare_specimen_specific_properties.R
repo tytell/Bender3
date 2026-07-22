@@ -123,7 +123,12 @@ src("plot_force_vs_time.R")  # .detect_stim_events(), RELAXATION_WINDOW_S
 
 SPECIMENS <- list(
   bass16 = raw_source_dir(BASS16_RAW_SUBFOLDER),
-  bass17 = raw_source_dir(BASS17_RAW_SUBFOLDER)
+  bass17 = raw_source_dir(BASS17_RAW_SUBFOLDER),
+  # bass18 ADDED 2026-07-21 (PI-directed fix) -- this script was written
+  # 2026-07-16, the same day bass18's raw data was collected, and was never
+  # updated afterward; the comparison figure had silently been missing a
+  # full third of the corpus (bass16-vs-bass17 only) ever since.
+  bass18 = raw_source_dir(BASS18_RAW_SUBFOLDER)
 )
 
 collect_specimen <- function(source_dir, label) {
@@ -206,7 +211,7 @@ for (r in results) {
 
 wrap_text <- function(s, width) paste(strwrap(s, width = width), collapse = "\n")
 
-side_colors <- c(bass16 = "#1d4ed8", bass17 = "#b91c1c")
+side_colors <- c(bass16 = "#1d4ed8", bass17 = "#b91c1c", bass18 = "#15803d")
 
 dyn_all <- purrr::map_dfr(results, function(r) dplyr::mutate(r$dyn_cyc, specimen = r$label))
 
@@ -249,8 +254,7 @@ p_isov_tension <- if (nrow(isov_df) > 0) {
   ggplot(isov_df, aes(x = interaction(specimen, side, sep = " "), y = specific_tension_Ncm2, fill = specimen)) +
     geom_col(width = 0.6) +
     scale_fill_manual(values = side_colors, guide = "none") +
-    labs(title = "Isovelocity: specific tension", x = NULL, y = "Specific tension (N/cm^2)",
-         caption = "Only fits with status \"ok\" shown (bass16 both sides + bass17 left FAILED/degenerate -- omitted)") +
+    labs(title = "Isovelocity: specific tension", x = NULL, y = "Specific tension (N/cm^2)") +
     theme_bw(base_size = 11) +
     theme(axis.text.x = element_text(angle = 20, hjust = 1))
 } else NULL
@@ -259,8 +263,7 @@ p_isov_power <- if (nrow(isov_df) > 0) {
   ggplot(isov_df, aes(x = interaction(specimen, side, sep = " "), y = mass_specific_peak_power_Wkg, fill = specimen)) +
     geom_col(width = 0.6) +
     scale_fill_manual(values = side_colors, guide = "none") +
-    labs(title = "Isovelocity: mass-specific peak power", x = NULL, y = "Peak power (W/kg)",
-         caption = "Only fits with status \"ok\" shown") +
+    labs(title = "Isovelocity: mass-specific peak power", x = NULL, y = "Peak power (W/kg)") +
     theme_bw(base_size = 11) +
     theme(axis.text.x = element_text(angle = 20, hjust = 1))
 } else NULL
@@ -268,18 +271,31 @@ p_isov_power <- if (nrow(isov_df) > 0) {
 panels <- list(p_mean, p_peak, p_isov_tension, p_isov_power)
 panels <- panels[!sapply(panels, is.null)]
 
+# Generalized to N specimens (2026-07-21 fix, was hardcoded to exactly
+# bass16/bass17 by name) -- reports which isovelocity fits actually made it
+# into isov_df (passed BOTH status=="ok" and the Vmax quality gate above)
+# so the omission reason is visible on the figure itself, not just in a
+# code comment, regardless of which/how many specimens are configured.
+all_combos <- purrr::map_dfr(results, function(r) {
+  tibble::tibble(specimen = r$label, side = names(r$isov_fits))
+})
+kept_combos <- if (nrow(isov_df) > 0) paste(isov_df$specimen, isov_df$side) else character(0)
+omitted_combos <- setdiff(paste(all_combos$specimen, all_combos$side), kept_combos)
+
+mass_csa_caption <- paste(sapply(results, function(r) {
+  sprintf("%s: mass %.3g g, CSA %.3g cm^2", r$label, r$geom$muscle$muscle_mass_g, r$geom$muscle$csa_muscle_cm2)
+}), collapse = " | ")
+
 p_combined <- patchwork::wrap_plots(panels, ncol = 2) +
   patchwork::plot_annotation(
-    title = "bass16 vs. bass17: mass-/area-specific muscle properties by protocol",
-    subtitle = wrap_text(
-      "Isometric FL no longer fits a model by default (connect-the-mean only, PI direction 2026-07-16) -- no specific-tension panel for FL. Isovelocity: bass16 both sides FAILED to converge; bass17 left side degenerate (omitted).",
-      95
-    ),
-    caption = wrap_text(sprintf(
-      "Muscle mass: bass16 %.3g g, bass17 %.3g g | Muscle CSA: bass16 %.3g cm^2, bass17 %.3g cm^2 | est. from 3%% of an oval body cross-section x test-section length",
-      results$bass16$geom$muscle$muscle_mass_g, results$bass17$geom$muscle$muscle_mass_g,
-      results$bass16$geom$muscle$csa_muscle_cm2, results$bass17$geom$muscle$csa_muscle_cm2
-    ), 100)
+    title = sprintf("%s: mass-/area-specific muscle properties by protocol",
+                     paste(names(results), collapse = " vs. ")),
+    subtitle = wrap_text(sprintf(
+      "Isometric FL no longer fits a model by default (connect-the-mean only, PI direction 2026-07-16) -- no specific-tension panel for FL. Isovelocity tension/power panels: only fits with status \"ok\" AND Vmax >= %.0e %%/s shown (specimen-side combos with a degenerate/near-zero-Vmax or non-converged fit are OMITTED, not zero -- omitted: %s).",
+      MIN_MEANINGFUL_VMAX_PCT_PER_S,
+      if (length(omitted_combos) > 0) paste(omitted_combos, collapse = ", ") else "none"
+    ), 95),
+    caption = wrap_text(paste0(mass_csa_caption, " | est. from 3% of an oval body cross-section x test-section length"), 110)
   )
 
 out_path <- file.path(OUTPUT_DIR, "specimen_comparison_specific_properties.png")

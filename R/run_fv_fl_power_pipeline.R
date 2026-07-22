@@ -20,7 +20,7 @@
 
 suppressPackageStartupMessages({
   library(dplyr); library(tibble); library(purrr); library(stringr)
-  library(fs); library(ggplot2); library(cli); library(rhdf5)
+  library(fs); library(ggplot2); library(cli); library(rhdf5); library(patchwork)
 })
 
 .pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
@@ -336,7 +336,10 @@ for (i in seq_len(nrow(manifest))) {
       }
       # Adds strain_measured_step_pct (encoder-based, same sign fold as
       # shortening_strain_pct) so the FL/FV curve's own commanded-target
-      # x-axis can be validated against actual motion (strainValidMeas.png).
+      # x-axis can be validated against actual motion. No longer feeds a
+      # standalone figure (strainValidMeas.png removed 2026-07-21, redundant
+      # with strainValidCmd.png) -- column is kept attached to segmented_all
+      # for potential point-selection use (Gate B candidacy).
       steps <- attach_step_measured_strain(res$td, res$step_summary) |> dplyr::mutate(trial_id = tid, .before = 1L)
 
       # Isometric no longer fits a model by default (PI direction,
@@ -719,16 +722,20 @@ if (length(isometric_steps_all) > 0L) {
   cli::cli_alert_info(
     "Isometric pooled FL: n = {nrow(iso_steps)} points pooled across {dplyr::n_distinct(iso_steps$trial_id)} trial(s) -- no model fit (connect-the-mean default, see summary plot)"
   )
-  p_iso <- build_summary_plot_isometric(iso_steps)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FL_isometric_legacy.png"), p_iso, width = 9, height = 6, dpi = 150)
+  # FL_isometric_legacy.png REMOVED (PI-directed, 2026-07-21: "legacy
+  # figures muddy the waters") -- build_summary_plot_isometric() on the raw
+  # (non-interpolated) baseline is no longer saved as a standalone file.
+  # The vector-force FL summary (FL_isometric_uhatBoth.png, built later
+  # from iso_vec) and the interpolated-baseline variant just below remain.
 
-  # ADDITIONAL interpolated-baseline FL summary (2026-07-16, see
-  # 03_analyze.R module header / build_segmented_step_summary()'s
-  # passive_force_Nm_interp comment) -- saved as a SEPARATE file, original
-  # FL_isometric_legacy.png above is untouched. Reuses
-  # build_summary_plot_isometric() unmodified by substituting
-  # muscle_force_Nm with muscle_force_Nm_interp before calling it. Same
-  # no-model-fit default applies (see above).
+  # Interpolated-baseline FL summary (2026-07-16, see 03_analyze.R module
+  # header / build_segmented_step_summary()'s passive_force_Nm_interp
+  # comment). Reuses build_summary_plot_isometric() unmodified by
+  # substituting muscle_force_Nm with muscle_force_Nm_interp before calling
+  # it. Same no-model-fit default applies (see above). NOT a "_legacy" file
+  # (baselineInterp is a still-open diagnostic decision, see
+  # `passivebaselinemethod` in FIGURES_README.md) -- untouched by the
+  # 2026-07-21 legacy-figure removal.
   iso_steps_interp <- dplyr::mutate(iso_steps, muscle_force_Nm = .data$muscle_force_Nm_interp)
   p_iso_interp <- build_summary_plot_isometric(iso_steps_interp,
                                                 title = "Isometric summary: Force-Length [interpolated baseline]")
@@ -752,29 +759,33 @@ if (length(isovelocity_steps_all) > 0L) {
       "Isovelocity pooled FV fit [{sd}]: OK (Hill model fit; Vmax={round(f$Vmax,2)}%/s [EXTRAPOLATED, not observed], Ppeak={signif(f$peak_power,3)}{if (!is.null(f$mass_specific_peak_power_Wkg)) sprintf(' [%.3g N/cm^2 specific tension, %.3g W/kg peak -- Coughlin scup red muscle ~114-152 W/kg]', f$specific_tension_Ncm2, f$mass_specific_peak_power_Wkg) else ''})"
       else "Isovelocity pooled FV fit [{sd}]: FAILED -- {f$reason}")
   }
-  p_isv <- build_summary_plot_isovelocity(isv_steps, isv_fits)
-  # Wider than the other summary plots (width=11 vs. 9) -- its subtitle
-  # combines the descriptive connect-the-mean note with the full per-side
-  # Hill fit annotation, so it wraps to more lines (see .wrap_subtitle(),
-  # plot_summary_profiles.R) and needs the extra width to stay legible.
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FV_isovelocity_legacy.png"), p_isv, width = 11, height = 6.5, dpi = 150)
+  # FV_isovelocity_legacy.png REMOVED (PI-directed, 2026-07-21: "legacy
+  # figures muddy the waters") -- build_summary_plot_isovelocity() is no
+  # longer saved as a standalone file; isv_fits (Hill fit) is still computed
+  # and logged above (cli_alert loop) since that fit summary is useful on
+  # its own. The vector-force FV summary (FV_isovelocity_uhatBoth.png,
+  # built later from isv_vec) remains.
 }
 
 if (length(dynamic_cycles_all) > 0L) {
   dyn_cycles <- dplyr::bind_rows(dynamic_cycles_all)
   p_dyn <- build_summary_plot_dynamic(dyn_cycles)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "powerDynamic.png"), p_dyn, width = 9, height = 6, dpi = 150)
 
-  # ADDITIONAL mass-specific power summary (PI-directed, 2026-07-16, see
+  # Combined into ONE file (PI-directed, 2026-07-21 -- was two separate
+  # files, powerDynamic.png + powerDynamicMassSpec.png; both share the same
+  # x-axis (freq.Hz) so a patchwork vertical stack keeps them aligned).
+  # Mass-specific panel (PI-directed, 2026-07-16, see
   # compute_muscle_mass_and_csa()/muscle_geometry.R + .attach_dynamic_muscle_force
-  # muscle_mass.kg wiring above) -- original powerDynamic.png (raw
-  # Watts) is untouched; this is a separately-saved W/kg version with a
-  # Coughlin et al. 1996 reference band for weak/strong-twitch context.
+  # muscle_mass.kg wiring above) plots avg_power.Wkg with a Coughlin et al.
+  # 1996 reference band for weak/strong-twitch context; raw-W panel above it
+  # is unchanged. If mass is unavailable, powerDynamic.png falls back to the
+  # raw-W panel alone (previous single-panel behavior), not a blank stack.
   if (any(is.finite(dyn_cycles$avg_power.Wkg))) {
     p_dyn_msp <- build_summary_plot_dynamic_massspecific(dyn_cycles)
     if (!is.null(p_dyn_msp)) {
-      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "powerDynamicMassSpec.png"), p_dyn_msp,
-                      width = 9, height = 6, dpi = 150)
+      p_dyn_combined <- p_dyn / p_dyn_msp
+      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "powerDynamic.png"), p_dyn_combined,
+                      width = 9, height = 11, dpi = 150)
       lims <- coughlin_steady_state_power_limits()
       n_exceed <- sum(dyn_cycles$exceeds_coughlin_hi, na.rm = TRUE)
       n_below  <- sum(dyn_cycles$below_coughlin_lo, na.rm = TRUE)
@@ -787,9 +798,12 @@ if (length(dynamic_cycles_all) > 0L) {
       cli::cli_alert_info(
         "Dynamic mass-specific PEAK instantaneous power (est. muscle mass {signif(specimen_geom$muscle$muscle_mass_g,3)} g): {n_exceed}/{nrow(dyn_cycles)} cycles ABOVE Coughlin scup red-muscle steady-state band ({lims$lo}-{lims$hi} W/kg), {n_below}/{nrow(dyn_cycles)} BELOW -- NOT the same as the plotted mean/cycle-averaged power"
       )
+    } else {
+      ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "powerDynamic.png"), p_dyn, width = 9, height = 6, dpi = 150)
     }
   } else {
-    cli::cli_alert_warning("powerDynamicMassSpec.png skipped -- avg_power.Wkg all NA (muscle mass estimate unavailable, check specimen geometry attrs)")
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "powerDynamic.png"), p_dyn, width = 9, height = 6, dpi = 150)
+    cli::cli_alert_warning("powerDynamic.png: mass-specific panel skipped -- avg_power.Wkg all NA (muscle mass estimate unavailable, check specimen geometry attrs)")
   }
 }
 
@@ -926,7 +940,18 @@ segmented_all <- dplyr::bind_rows(
   if (length(isovelocity_steps_all) > 0L) dplyr::bind_rows(isovelocity_steps_all) |> dplyr::mutate(protocol_family = "isovelocity")
 )
 if (nrow(segmented_all) > 0L) {
-  for (fam in unique(segmented_all$protocol_family)) {
+  # fatigueCheck_isometric_legacy.png REMOVED (PI-directed, 2026-07-21:
+  # "legacy figures muddy the waters") -- isometric now has BOTH a non-
+  # legacy alternative (fatigueCheck_isometric_baselineInterp.png, just
+  # below) AND the much more informative real-elapsed-time
+  # fatiguetimeline.png (plot_fatigue_timeline.R). isovelocity is
+  # DELIBERATELY KEPT for now: fatigueCheck_isovelocity_legacy.png is
+  # currently the ONLY fatigue-check figure for isovelocity data (no
+  # baselineInterp or vector variant exists, and fatiguetimeline.png does
+  # not cover isovelocity) -- removing it would leave isovelocity with NO
+  # fatigue-check coverage at all. Flagged for explicit PI confirmation
+  # before cutting; do not delete without re-confirming this is intended.
+  for (fam in intersect(unique(segmented_all$protocol_family), "isovelocity")) {
     p_fat <- build_fatigue_check_plot(
       dplyr::filter(segmented_all, protocol_family == fam),
       title = sprintf("Fatigue check (%s): muscle force vs. stimulation order", fam)
@@ -934,8 +959,7 @@ if (nrow(segmented_all) > 0L) {
     ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("fatigueCheck_%s_legacy.png", fam)), p_fat, width = 10, height = 6, dpi = 150)
   }
   # ADDITIONAL interpolated-baseline fatigue check (isometric only, same
-  # substitution pattern as the FL summary above) -- original
-  # fatigueCheck_isometric_legacy.png is untouched.
+  # substitution pattern as the FL summary above).
   if ("isometric" %in% segmented_all$protocol_family) {
     p_fat_interp <- build_fatigue_check_plot(
       dplyr::filter(segmented_all, protocol_family == "isometric") |>
@@ -947,41 +971,45 @@ if (nrow(segmented_all) > 0L) {
   }
 }
 
-# Measured (E6 encoder) vs. predicted (commanded-angle) strain -- two levels:
-#  - "_commanded": CONTINUOUS per-sample strain_pct (commanded) vs.
-#    strain_measured_pct (encoder), actively-stimulated samples only, one
-#    pooled panel per protocol_family (dynamic/isovelocity/isometric).
-#    frequency_sweep excluded -- passive-only, no actively-stimulated rows.
-#  - "_measured": STEP-LEVEL shortening_strain_pct (the FL curve's OWN
-#    x-axis, from the step's commanded operating_point) vs. the new
-#    strain_measured_step_pct (encoder, same sign fold) -- ISOMETRIC ONLY.
-#    Isovelocity's shortening_strain_pct is a strain-RATE (%/s, from a
-#    commanded velocity), not a position, so it is not unit-comparable to
-#    positional encoder strain here (see build_step_strain_validation_plot()
-#    docstring); dynamic/frequency_sweep have no discrete-step
-#    operating_point structure. Uses segmented_all, built above for the
-#    fatigue-check plots.
+# Measured (E6 encoder) vs. predicted (commanded-angle) strain: strainValidCmd.png,
+# CONTINUOUS per-sample strain_pct (commanded) vs. strain_measured_pct
+# (encoder), actively-stimulated samples only, one pooled panel per
+# protocol_family (dynamic/isovelocity/isometric). frequency_sweep excluded
+# -- passive-only, no actively-stimulated rows. (A second, STEP-LEVEL/
+# isometric-only variant of this check used to also produce
+# strainValidMeas.png -- removed 2026-07-21 as redundant, see the comment
+# just below strainValidCmd.png's ggsave call.)
+#
+# RELOCATED to figs_diagnostic/ (PI-directed, 2026-07-21): this is a rig/
+# system-behavior check (does the motor track its command / does curvature-
+# derived strain track real motion), not a biological result -- belongs in
+# the diagnostic tier per FIGURES_README.md, not the per-fish individual
+# folder. Same applies to angleValid.png / strainValidSonoEnc.png /
+# strainValidSonoCmd.png just below (same rationale, extended consistently
+# -- PI named strainValidCmd.png specifically but the argument applies
+# word-for-word to its siblings). Prefixed with SPECIMEN_ID since
+# figs_diagnostic/ is flat and shared across all three fish's pipeline runs
+# (unlike the old per-fish OUTPUT_DIR, where no prefix was needed).
 if (length(strain_check_all) > 0L) {
   strain_check_df <- dplyr::bind_rows(strain_check_all)
   p_strain <- build_measured_vs_predicted_strain_plot(strain_check_df)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidCmd.png"), p_strain, width = 12, height = 5, dpi = 150)
-  cli::cli_alert_info("strainValidCmd.png: {nrow(strain_check_df)} actively-stimulated samples pooled across {dplyr::n_distinct(strain_check_df$trial_id)} trial(s)")
+  ggplot2::ggsave(file.path(FIGS_DIAGNOSTIC_DIR, sprintf("%s_strainValidCmd.png", SPECIMEN_ID)), p_strain, width = 12, height = 5, dpi = 150)
+  cli::cli_alert_info("{SPECIMEN_ID}_strainValidCmd.png: {nrow(strain_check_df)} actively-stimulated samples pooled across {dplyr::n_distinct(strain_check_df$trial_id)} trial(s)")
 } else {
-  cli::cli_alert_warning("No actively-stimulated samples found for strainValidCmd.png -- skipped")
+  cli::cli_alert_warning("No actively-stimulated samples found for {SPECIMEN_ID}_strainValidCmd.png -- skipped")
 }
 
-if (nrow(segmented_all) > 0L && "strain_measured_step_pct" %in% names(segmented_all)) {
-  step_strain_df <- dplyr::filter(segmented_all, is.finite(.data$shortening_strain_pct), is.finite(.data$strain_measured_step_pct))
-  if (nrow(step_strain_df) > 0L) {
-    p_step_strain <- build_step_strain_validation_plot(step_strain_df)
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidMeas.png"), p_step_strain, width = 10, height = 5, dpi = 150)
-    cli::cli_alert_info("strainValidMeas.png: {nrow(step_strain_df)} step(s) pooled across {dplyr::n_distinct(step_strain_df$trial_id)} trial(s)")
-  } else {
-    cli::cli_alert_warning("No finite step-level strain pairs found for strainValidMeas.png -- skipped")
-  }
-} else {
-  cli::cli_alert_warning("No segmented (isometric/isovelocity) steps found for strainValidMeas.png -- skipped")
-}
+# strainValidMeas.png REMOVED (PI-directed, 2026-07-21): judged redundant
+# with strainValidCmd.png's isometric panel above -- both check measured
+# (encoder) vs. predicted strain restricted to isometric/active-stim data,
+# even though strainValidCmd's panel is CONTINUOUS per-sample and this one
+# is STEP-LEVEL/windowed (not literally identical data, but redundant
+# enough to cut per PI review). strain_measured_step_pct itself is left
+# attached to segmented_all (attach_step_measured_strain() call above,
+# ~line 340) and build_step_strain_validation_plot() (plot_strain_validation.R)
+# is left defined but uncalled -- both may still be useful for point-
+# selection (Gate B candidacy, analysis_muscle_force_vector_log.md), just
+# not as a standalone summary figure.
 
 # PI-requested (2026-07-16): three additional validation figures, ALL
 # samples (no active-stim restriction -- these are purely mechanical/
@@ -996,10 +1024,10 @@ if (nrow(segmented_all) > 0L && "strain_measured_step_pct" %in% names(segmented_
 if (length(angle_check_all) > 0L) {
   angle_check_df <- dplyr::bind_rows(angle_check_all)
   p_angle <- build_angle_validation_plot(angle_check_df)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "angleValid.png"), p_angle, width = 12, height = 8, dpi = 150)
-  cli::cli_alert_info("angleValid.png: {nrow(angle_check_df)} samples pooled across {dplyr::n_distinct(angle_check_df$trial_id)} trial(s)")
+  ggplot2::ggsave(file.path(FIGS_DIAGNOSTIC_DIR, sprintf("%s_angleValid.png", SPECIMEN_ID)), p_angle, width = 12, height = 8, dpi = 150)
+  cli::cli_alert_info("{SPECIMEN_ID}_angleValid.png: {nrow(angle_check_df)} samples pooled across {dplyr::n_distinct(angle_check_df$trial_id)} trial(s)")
 } else {
-  cli::cli_alert_warning("No angle data found for angleValid.png -- skipped")
+  cli::cli_alert_warning("No angle data found for {SPECIMEN_ID}_angleValid.png -- skipped")
 }
 
 if (length(sono_strain_check_all) > 0L) {
@@ -1008,15 +1036,15 @@ if (length(sono_strain_check_all) > 0L) {
     cli::cli_alert_warning("sono_right channel/calibration unavailable in every trial -- sono validation figures skipped")
   } else {
     p_sono_enc <- build_sono_strain_validation_plot(sono_check_df, "strain_pred_encoder_right_pct", "encoder")
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidSonoEnc.png"), p_sono_enc, width = 12, height = 8, dpi = 150)
+    ggplot2::ggsave(file.path(FIGS_DIAGNOSTIC_DIR, sprintf("%s_strainValidSonoEnc.png", SPECIMEN_ID)), p_sono_enc, width = 12, height = 8, dpi = 150)
     p_sono_cmd <- build_sono_strain_validation_plot(sono_check_df, "strain_pred_commanded_right_pct", "commanded")
-    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "strainValidSonoCmd.png"), p_sono_cmd, width = 12, height = 8, dpi = 150)
+    ggplot2::ggsave(file.path(FIGS_DIAGNOSTIC_DIR, sprintf("%s_strainValidSonoCmd.png", SPECIMEN_ID)), p_sono_cmd, width = 12, height = 8, dpi = 150)
     cli::cli_alert_info(
-      "strainValidSono{{Enc,Cmd}}.png: {sum(is.finite(sono_check_df$strain_sono_pct))} samples with valid sono data, pooled across {dplyr::n_distinct(dplyr::filter(sono_check_df, is.finite(strain_sono_pct))$trial_id)} trial(s)"
+      "{SPECIMEN_ID}_strainValidSono{{Enc,Cmd}}.png: {sum(is.finite(sono_check_df$strain_sono_pct))} samples with valid sono data, pooled across {dplyr::n_distinct(dplyr::filter(sono_check_df, is.finite(strain_sono_pct))$trial_id)} trial(s)"
     )
   }
 } else {
-  cli::cli_alert_warning("No sono-strain data found -- strainValidSono{{Enc,Cmd}}.png skipped")
+  cli::cli_alert_warning("No sono-strain data found -- {SPECIMEN_ID}_strainValidSono{{Enc,Cmd}}.png skipped")
 }
 
 # Muscle force vs. time, pooled across trials, one figure per protocol
@@ -1044,9 +1072,19 @@ for (fam in names(force_ts_all)) {
 
   p_ts <- build_force_vs_time_plot(ts_df, title = sprintf("Muscle force vs. time (%s, pooled across trials)", fam),
                                     facet_var = facet_var, color_var = color_var)
-  ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("forceTime_%s_legacy.png", fam)), p_ts,
-                  width = if (!is.null(facet_var)) 13 else 10, height = 6, dpi = 150)
-  cli::cli_alert_info("forceTime_{fam}_legacy.png: {dplyr::n_distinct(ts_df$unit_id)} stim event(s)/step(s) across {dplyr::n_distinct(ts_df$trial_id)} trial(s)")
+  # forceTime_isometric_legacy.png / forceTime_isovelocity_legacy.png
+  # REMOVED (PI-directed, 2026-07-21: "legacy figures muddy the waters") --
+  # both have a direct vector-force alternative (forceTime_{fam}_uhatBoth.png,
+  # built later from iso_vec/isv_vec). forceTime_dynamic_legacy.png is
+  # DELIBERATELY KEPT for now: dynamic has no vector/uhatBoth force-vs-time
+  # equivalent at all (only the by-{frequency,amplitude,phase,duty}
+  # breakdowns just below, which are a different view, not a replacement)
+  # -- flagged for explicit PI confirmation before cutting.
+  if (fam == "dynamic") {
+    ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, sprintf("forceTime_%s_legacy.png", fam)), p_ts,
+                    width = if (!is.null(facet_var)) 13 else 10, height = 6, dpi = 150)
+    cli::cli_alert_info("forceTime_{fam}_legacy.png: {dplyr::n_distinct(ts_df$unit_id)} stim event(s)/step(s) across {dplyr::n_distinct(ts_df$trial_id)} trial(s)")
+  }
 
   # Dynamic-only: additionally break the pooled plot into one figure PER
   # commanded variable (frequency, amplitude, duty, phase), each faceted by

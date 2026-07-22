@@ -38,42 +38,264 @@ the point-selection design this feeds:
 - **Diagnostic** (`figs_diagnostic/`, flat, filename-tagged by topic, not
   per-fish): plots that compare filters/calculations to make a decision
   (e.g. empirical vs. geometric u_hat, legacy vs. vector force, own-step
-  vs. interpolated baseline, smoothing cutoffs). Once a decision is locked,
-  it's recorded in a manifest (`00_records/`, not yet built) rather than
-  re-litigated per plot. Current tokens: `musclepullmethod`,
-  `muscleforceestimate`, `passivebaselinemethod`, `torquesmoothingmethod`,
+  vs. interpolated baseline, smoothing cutoffs). Diagnostic is the FIRST
+  step of the analysis (PI directive, 2026-07-21) -- everything else is
+  downstream of these decisions, so this tier is meant to be comprehensive:
+  practically any subjective choice that determines the shape of all future
+  data belongs here, not just the choices already made. Once a decision is
+  locked, it's recorded in a manifest (`00_records/`, not yet built) rather
+  than re-litigated per plot. Current tokens: `musclepullmethod`
+  (empirical vs. geometric u_hat line-of-action), `muscleforceestimate`
+  (legacy zTorque-only vs. 6-axis vector force), `forceextractionmethod`
+  (BUILT 2026-07-21, `bass16_forceextractionmethod.png`,
+  `R/diag_force_extraction_baseline.R` -- one representative step per trial
+  type, showing the active window and marking that the CURRENT method is
+  MEAN-over-window, not max-in-window, with n_samples annotated; distinct
+  from `muscleforceestimate`, which is about WHICH axes/method, not which
+  time-window statistic.
+  BUG FIXED same day: `.raw_window()` filtered `td` (the WHOLE trial file,
+  16 steps) by time-range alone, with no `step_number` filter -- but a
+  segmented_finite file's `t.s` RESETS TO 0 AT THE START OF EVERY STEP
+  (confirmed empirically, NOT a global file-wide clock), so the "one
+  representative step" traces were actually all 16 steps' data concatenated
+  together onto the same relative time axis (n_samples was ~801 real vs.
+  ~12816-19224 reported -- ~16x inflated). This is what the earlier
+  "isometric ripple, plausible unfused tetanus" finding below was based on
+  and is now RETRACTED -- the real single-step isometric trace has a much
+  smaller ripple than that (PI correctly doubted the original
+  overplotting-density explanation and asked for it to be re-investigated).
+  Dynamic-bookend panels were never affected (single_finite files have one
+  continuous monotonic `t.s` and no `step_number` column at all).),
+  `passivebaselinemethod` (BUILT 2026-07-21, `bass16_passivebaselinemethod.png`,
+  same script -- STATIC (own-step pre-stim window) vs. INTERPOLATED
+  (pre-/post-stim linear interpolation) side by side for isometric and
+  isovelocity, PLUS the dynamic L0 bookend's fundamentally different
+  runtime-shrunk-window mechanism with no post-baseline counterpart, all
+  three trial types in one figure), `torquesmoothingmethod`,
   `sonosmoothingmethod`, `sonotiminglag`, `forcedevtiming` (dual-tagged,
-  see below), `fatiguetimeline` (dual-tagged), `snrfiltereffect`.
+  see below), `fatiguetimeline` (dual-tagged), `snrfiltereffect`,
+  `signconventioncheck` (added 2026-07-21, NOT YET BUILT -- confirms
+  left/right stim produces the anatomically-expected force sign; per the
+  2026-07-22 sign-convention resolution below, only `force_zTorque_N` is
+  actually side-mirrored/anatomically-fixed, so this check applies to that
+  axis specifically, not to all four),
+  `forcetorquecalcheck` (added 2026-07-21 -- ATI Mini40 `.cal` file
+  raw-voltage-to-N/N*m conversion checked for saturation/clipping/drift
+  across the dataset), `lengthsignalsource` (added 2026-07-21 -- pooled
+  cross-fish version of the per-fish strainValid* commanded/encoder/sono
+  cross-checks, decided once instead of per-fish), `geometrysensitivity`
+  (added 2026-07-21 -- how much the muscle-force estimate shifts under
+  plausible clamp-geometry/moment-arm assumption ranges), `motorstepartifact`
+  (added 2026-07-21 -- whether stepper motor step/dir pulses leak
+  synchronous noise into F/T or sono channels). The 5 tokens added
+  2026-07-21 are DESIGNED/NAMED but not yet built -- no script/figure exists
+  for them yet; do not treat their presence here as confirmation the plot
+  has been generated.
+  `ytorquesignexamples` (BUILT 2026-07-22, `ytorquesignexamples.png`,
+  `R/diag_ytorque_sign_examples.R` -- 3 real positive + 3 real negative
+  `force_yTorque_N` examples, all SNR >= 4, raw Ty trace with the actual
+  passive/active means the pipeline used marked; built as evidence for the
+  sign-convention resolution below) and `axissnrcomparison` (BUILT
+  2026-07-22, same script -- SNR compared across all 4 vector-force axes on
+  the SAME baseline noise floor, pooled and split by trial category) are
+  BUILT, distinct from the 5 designed-but-not-built tokens just above.
+  CORRECTED same day (PI follow-up on isovelocity's y-torque timing, see
+  `ytorqueinertialtiming` below): v1 of `ytorquesignexamples.png` captured
+  isovelocity's non-V0 rows via a STATIC pre-stim baseline (motionless vs.
+  moving -- guaranteed motion-linked distortion), not the REAL angle-matched
+  path (`compute_isovelocity_vector_batch()`, what actually feeds
+  `FV_isovelocity_uhatBoth.png`). Regenerated with the correct angle-matched
+  computation -- reported percentages dropped from 73-83% negative (wrong,
+  motion-contaminated) to 54% negative (correct, angle-matched) for
+  isovelocity's moving steps, much closer to a coin flip than static holds'
+  97% positive -- see `ytorqueinertialtiming` for why.
+  `ytorqueinertialtiming` (BUILT 2026-07-22, `ytorqueinertialtiming.png` +
+  `ytorqueinertialtiming_stats.png`, `R/diag_ytorque_inertial_timing.R` --
+  PI hypothesis test: "negative y torques in isovelocity happen well after
+  the stimulus... velocity ramp suggests inertial noise?" CONFIRMED: the
+  SAME Ty deflection, at the SAME time relative to the SAME velocity-profile
+  feature, appears in BOTH a stimulated ramp AND a completely unstimulated
+  no-stim ramp of the same commanded speed (bass16 step 12 vs. step 20,
+  within-trial) -- a kinematic feature of the ramp's motion, not a
+  stimulus-locked muscle event. Aggregate check across 123 ramps, 3 fish:
+  median lag between the Ty extremum and the angular-velocity extremum is
+  ~0.07s WHETHER OR NOT stim is present -- angle-matched passive subtraction
+  reduces but does not fully cancel this, leaving a residual in
+  `force_yTorque_N` for moving isovelocity steps.
+  `muscleforcemethodcompare` (BUILT 2026-07-22,
+  `muscleforcemethodcompare.png`, `R/diag_force_extraction_methods_compare.R`
+  -- PI follow-up on `forceextractionmethod`: "max in window is probably NOT
+  the best way... it should be calculated from the smoothed black line."
+  4 candidate scalar-extraction methods on the same 3 representative traces
+  (isometric/isovelocity/dynamic bookend): A = MEAN full window (current),
+  B = MAX raw sample, C = peak of the smoothed trace, D = narrow-window
+  (0.15s) mean of RAW samples centered on the smoothed peak's timing. The
+  dynamic bookend panel shows A (0.09) substantially underestimating the
+  visually obvious peak (~0.22-0.3) because the window's post-peak decay
+  dilutes the mean -- C (0.225) and D (0.184) both track it much better,
+  D being the more robust/less noise-sensitive of the two.) and
+  `muscleforcemethodsensitivity` (BUILT 2026-07-22, same script -- aggregate
+  across 92 real SNR-eligible isometric steps, 3 fish: method D tracks A
+  almost exactly (near-perfect correlation) for isometric's sustained FLAT
+  holds, while B and C both show large, noisy departures -- i.e. the
+  extraction-method choice barely matters for isometric specifically, and
+  the dynamic-bookend problem above is about TRANSIENT (rise-then-decay)
+  windows, not a universal flaw in method A). Both are prototypes (PI has
+  not yet picked a replacement method); `forceextractionmethod`'s own
+  blue "MEAN" line was also re-labeled the same day to clarify it is the
+  ACTIVE window's mean, NOT a baseline (a separate quantity, shown in
+  `passivebaselinemethod`) -- this was a real point of PI confusion, not
+  just a plot cosmetic.
+
+  **PI decision 2026-07-22: adopted Method D** (narrow-window mean of RAW
+  samples, centered on the ACTIVE window's own smoothed-trace peak, peak
+  SEARCH restricted to the true stim duration) as the production
+  active-force extraction method, REPLACING the plain full-window mean --
+  in BOTH the 6-axis vector path (`.mfv_window_peak_means()`,
+  `muscle_force_vector.R`, feeding all `FL_isometric_uhatBoth.png`/
+  `FV_isovelocity_uhatBoth.png`/`FLsuperplot`/`FVsuperplot` outputs) and the
+  legacy zTorque-only path (`.legacy_peak_window_mean()`, `03_analyze.R`'s
+  `active_force_Nm`, feeding `muscle_force_Nm`/the frequency-sweep power
+  outputs). The PASSIVE/baseline window is unchanged (still a plain mean --
+  a steady reference has no "peak" to chase). Full pipeline rerun clean on
+  all 3 fish (bass16/17/18) after the switch.
+
+  **Bug found + fixed same day, before promoting Method D**: the dynamic
+  trials' L0 bookend contractions (`extract_dynamic_l0_bookends.R`) have a
+  genuinely different regime from isometric/isovelocity's stim windows --
+  their stim bursts are only ~0.05s (vs ~0.5-1s+ elsewhere), so the
+  smoothed trace is often STILL RISING at the search window's own edge,
+  pinning the found "peak" to that edge; the fixed-width 0.15s narrow
+  averaging window then balloons ~3x past the search boundary into the
+  deactivation tail, which can land on a large transient unrelated to the
+  tiny bookend pulse (observed >2N spurious spikes on bass18, vs a real
+  ~0.1-0.8N range elsewhere, first surfaced as an unexplained spike at 0%
+  strain in a regenerated `FLsuperplot`). Fixed by a DURATION guard (not a
+  sample-count guard): both `.mfv_window_peak_means()` and
+  `.legacy_peak_window_mean()` now fall back to the plain full-window mean
+  whenever the search window itself is narrower than the 0.15s narrow
+  window, so short/fast bursts (dynamic bookends) get Method A while
+  long/sustained or ramping windows (isometric, isovelocity, dynamic
+  bookends' own longer siblings if any) get Method D. Re-verified against
+  the exact bass18 bookend that produced the spurious spike (now matches
+  the plain mean exactly) and reran the full pipeline + both superplots
+  again to confirm the spike is gone.
+  `strainValidCmd`/`angleValid`/`strainValidSonoEnc`/`strainValidSonoCmd`
+  RELOCATED here from the individual tier 2026-07-21 (PI-directed): these
+  are rig/system-behavior checks (does the motor track its command? does
+  curvature-derived strain track real motion?), not biological results --
+  they belong in diagnostic, not `figs_{bassID}/`. Filenames are
+  `{bassID}_strainValidCmd.png` etc. (prefixed, unlike most diagnostic
+  tokens, since these are still per-fish content living in a flat
+  cross-individual folder). `lengthsignalsource` (above) is the FUTURE
+  pooled-across-all-fish version of this same check, decided once instead
+  of per-fish -- not yet built, distinct from these 4 per-fish files.
 - **Individual** (`figs_{bassID}/`): trial-level plots, PLUS per-fish
   aggregated plots (all trials for that fish, trial identity kept visible
   via color/shape) using whichever method won its diagnostic decision.
   `forcedevtiming` and `fatiguetimeline` are dual-tagged -- diagnostic
   output that is ALSO a legitimate individual-tier visualization (within-
   step force development timing; near-L0 force vs. real elapsed session
-  time), so they may appear in both places.
-- **Summary** (`figs_summary/`): side-by-side per-individual panels (not
-  pooled into one panel), raw / individual-mean / group-mean tiers.
-  Individual-mean definition is still open (point-selection method design,
-  see the decision log) -- do not assume a fitted curve vs. binned mean
-  without checking that file first.
+  time), so they may appear in both places. `forcedevtiming` is
+  OVERLAY-ONLY as of 2026-07-21 (PI feedback: the faceted per-step variant
+  wasn't useful and was dropped, code and files both).
+- **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
+  either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
+  per-individual panels in one figure (`specimen_comparison_specific_properties.png`),
+  never a single-fish plot with just a `{bassID}_` filename prefix.
+  Cleaned out 2026-07-21 (PI-directed, "completely unnecessary and
+  unhelpful ... should appear in the bass## folders"): `export_snr_summary_figures.R`
+  used to copy per-fish trial plots and per-fish `_snrPass` variants in here
+  prefixed with the specimen ID -- those were pure duplicates (or, for
+  `_snrPass`, single-fish-only content that never belonged here) and are now
+  generated/kept ONLY in `figs_{bassID}/`, unprefixed. Raw / individual-mean
+  / group-mean cross-fish tiers are still open (point-selection method
+  design, see the decision log) -- do not assume a fitted curve vs. binned
+  mean without checking that file first.
 
 ## Filename tokens
-`{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders;
-`{bassID}_{signal}_{protocol}[_{method}][_{filter}].png` inside
-`figs_summary/`. Tokens always appear in this order; omit a
-bracketed token when it doesn't apply (e.g. `legacy` method is implicit and
+`{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.
+`figs_summary/` has no fixed prefix convention -- it only holds genuinely
+cross-fish content (see "Summary" above), so names describe the comparison
+itself (`FLsuperplot_...`, `specimen_comparison_...`), not a
+`{bassID}_`-prefixed single-fish plot. Per-fish tokens always appear in the
+order above; omit a bracketed token when it doesn't apply (e.g. `legacy` method is implicit and
 dropped in a few original-workflow names — see table below for the exact
 names in use).
 
 - **protocol**: `isometric` | `isovelocity` | `dynamic` | `freqsweep`
 - **signal**: what's plotted — `FL`, `FV`, `FVl0` (FV sampled at sono-confirmed
-  L0 crossing), `forceTime`, `uhatCompare`, `fatigueCheck`, `angleValid`,
-  `strainValidCmd`/`strainValidMeas`/`strainValidSonoEnc`/`strainValidSonoCmd`,
-  `powerDynamic`/`powerDynamicMassSpec`, `stiffnessDamping`, `FLsuperplot`
+  L0 crossing), `forceTime`, `uhatCompare`, `fatigueCheck`,
+  `powerDynamic`, `stiffnessDamping`, `FLsuperplot`.
+  `FLsuperplot_*` REVISED 2026-07-21 (PI-directed, "the rule is that FL
+  superplot only contains moments or steps where V = 0"): the isovelocity
+  continuous-ramp sweep (angle-matched pointwise passive subtraction) was
+  REMOVED outright -- pooling it folded real force-VELOCITY behavior into a
+  force-LENGTH plot regardless of how carefully the passive baseline was
+  subtracted. Three V=0-only sources are pooled instead: isometric holds,
+  isovelocity's OWN embedded V=0 (`isometric_zero`) holds (previously used
+  only as an internal F0 reference, never plotted), and the pre-/post-
+  cycling L0 stim bookends every dynamic trial brackets its sinusoidal sweep
+  with (motor stationary at 0 deg -- `R/extract_dynamic_l0_bookends.R`).
+  Fixing this ALSO resolved the earlier "raw peak DOWN, normalized peak UP"
+  confusion at strain=0% (see `analysis_muscle_force_vector_log.md`) -- the
+  trough/spike artifact was intrinsic to the sweep's mid-ramp zero-angle
+  crossings, not a sign-convention bug, and disappeared once the sweep was
+  dropped.
+  `FLsuperplot_..._normalized[_snrPass].png` (added 2026-07-21, Gate A
+  exploration -- see `analysis_muscle_force_vector_log.md`): same pooling as
+  the corresponding non-`_normalized` file, each point expressed as F/F0
+  (that trial+side's own SNR-passing L0/V0 force, or for a dynamic trial its
+  own pre+post bookend mean) instead of raw absolute N, to correct
+  cross-trial force-scale differences before pooling. Kept SIDE BY SIDE with
+  the raw file, NOT a replacement. bass17 now contributes points to the
+  normalized version too (previously zero) because dynamic bookends give it
+  an SNR-trustworthy L0 reference its isometric/isovelocity trials lacked.
+  `FVsuperplot_isovelocity_pooled[_normalized].png` (BUILT 2026-07-22,
+  `R/superplot_fv_pooled.R`, PI-requested "similar to FL superplots, raw and
+  normalized") -- pooled Force-Velocity superplot, same 3-tier connect-the-
+  dots convention as `FLsuperplot` (thin=trial, medium=individual mean,
+  thick black=group mean), x-axis swapped to `shortening_strain_pct` treated
+  as a STRAIN RATE (%/s, muscle-centric: + = concentric/shortening, - =
+  eccentric/lengthening -- NOT raw commanded `operating_point` sign, which
+  can differ by side/motor-direction at the same contraction_mode).
+  V=0 anchor pools isometric L0 reps + isovelocity's own V=0 holds + dynamic
+  L0 bookends (same 3 sources as `FLsuperplot`'s V=0-only rule, just serving
+  as the anchor here instead of the whole dataset); the velocity-dependent
+  part is isovelocity's actual moving (concentric/eccentric) ramps, via the
+  REAL angle-matched batch (`compute_isovelocity_vector_batch()`,
+  angle_matched(/_cross_trial) sources ONLY -- see `ytorquesignexamples`'s
+  2026-07-22 correction for why static-baseline isovelocity rows are
+  excluded). F0 (normalized companion) falls back from trial+side to
+  fish+side when a trial's own V=0 doesn't clear SNR_MIN (isovelocity's
+  embedded V=0 holds are usually too low-SNR to self-normalize -- observed
+  SNR ~0.1-1.9 vs. isometric's dedicated holds). LIMITATION (documented in
+  the figure's own subtitle): force is MEAN-over-active-window, sampled over
+  whatever strain range the ramp swept through -- NOT sampled at a fixed L0
+  crossing the way a textbook FV curve is defined; a stricter alternative
+  (`.mfv_fv_l0_crossing()` / `fv_l0`, sono-confirmed, right-side-only)
+  already exists in the codebase but would drop most of the data for a
+  first pass, so it is a candidate refinement, not silently substituted in.
+  `angleValid`/`strainValidCmd`/`strainValidSonoEnc`/`strainValidSonoCmd`
+  MOVED to the diagnostic tier 2026-07-21 (PI-directed) -- see "Diagnostic
+  vs. individual vs. summary" above; no longer in `figs_{bassID}/`.
+  `strainValidMeas` REMOVED 2026-07-21 (PI-directed) as redundant with
+  `strainValidCmd`'s isometric panel. `powerDynamicMassSpec` REMOVED
+  2026-07-21 (PI-directed) -- merged INTO `powerDynamic` as a second
+  (patchwork-stacked) panel in the same file rather than a separate one.
 - **method**: which force/baseline calculation —
-  - `legacy` = original single-axis (zTorque only) calculation, no û
+  - `legacy` = original single-axis (zTorque only) calculation, no û.
+    MOSTLY REMOVED 2026-07-21 (PI-directed: "legacy figures muddy the
+    waters") once a vector (`uhatBoth`) or `baselineInterp` alternative
+    existed for that signal/protocol combo. TWO exceptions remain
+    (flagged for PI confirmation, not yet resolved, because no
+    alternative exists for them): `fatigueCheck_isovelocity_legacy.png`
+    and `forceTime_dynamic_legacy.png`.
   - `baselineInterp` = isometric per-step baseline computed via
     cross-step interpolation instead of that step's own pre-stim window
+    -- NOT affected by the `legacy` removal above (this is the separate,
+    still-open `passivebaselinemethod` diagnostic decision, not the
+    force-calculation-method decision)
   - `uhatEmp` / `uhatGeom` = 6-axis vector force via empirical /
     geometric line-of-action
   - `uhatBoth` = both û methods faceted side by side in one file

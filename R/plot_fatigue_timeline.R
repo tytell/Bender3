@@ -48,6 +48,21 @@
 # so the absence of a real fatigue-timeline plot is visible in
 # figs_diagnostic/ itself, not just in a console log the PI may not see.
 
+# TRIAL-MAX NORMALIZATION -- TRIED AND ABANDONED FOR THIS PLOT (2026-07-21):
+# a prototype panel (force / that trial's own max L0 force) was tried here to
+# test whether cross-trial force-scale differences explained bass16's
+# ~40-50 min rebound. Result was genuinely mixed across all three fish: it
+# DID remove bass16's rebound (supporting that it was a scale artifact), but
+# it ADDED a spurious bump to bass17's already-clean raw decay and flattened
+# bass18's trend almost entirely -- net negative on 2/3 fish. PI decision
+# (2026-07-21): abandon this for the fatigue-timeline diagnostic and design
+# Gate A a different way; do not re-add a normalized panel here without
+# revisiting that decision. NOTE: the normalization idea itself was
+# originally motivated by FL/FV curve POOLING across trials (a point-
+# selection / curve-construction question), not by this timeline diagnostic
+# -- that separate question is still open and untested, just not via this
+# plot.
+
 suppressPackageStartupMessages({
   library(dplyr); library(tibble); library(ggplot2); library(cli)
 })

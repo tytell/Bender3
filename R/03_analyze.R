@@ -809,6 +809,55 @@ score_step_sinusoid_quality <- function(df, min_n = 20L,
 }
 
 
+# ACTIVE-window scalar-force extraction width (s) for "Method D" (PI-
+# directed, 2026-07-22, following review of
+# muscleforcemethodcompare.png/muscleforcemethodsensitivity.png): same value
+# as muscle_force_vector.R's MFV_PEAK_WINDOW_S, defined separately here
+# because this file does not always co-source muscle_force_vector.R (some
+# callers use only the legacy zTorque-only path). Keep the two in sync if
+# either changes.
+LEGACY_PEAK_WINDOW_S <- 0.15
+
+#' "Method D" extraction for a step's ACTIVE window: mean of RAW
+#' (unsmoothed) `v` samples in a window `peak_window_s` wide, centered on
+#' the SMOOTHED trace's own peak (via .smooth_trace_display_only(),
+#' plot_force_vs_time.R -- co-sourced with this file everywhere it is
+#' called), with the peak SEARCH restricted to `search_mask` (the true stim
+#' duration, EXCLUDING the post-stim deactivation tail -- searching into the
+#' tail let a settling/recovery transient there get mistaken for the peak,
+#' found empirically on muscleforcemethodcompare.png's isometric panel)
+#' while the narrow averaging window itself is bounded by `avg_mask` (the
+#' full active+deactivation window). Falls back to the plain mean over
+#' `avg_mask` whenever there are too few finite samples to smooth/search
+#' reliably, OR whenever the search window itself is SHORTER than
+#' `peak_window_s` -- see muscle_force_vector.R's .mfv_window_peak_means()
+#' for why (found empirically 2026-07-22 on the ~0.05s dynamic L0 bookends:
+#' a smoothed trace still rising at a too-short search window's own edge
+#' pins the "peak" to that edge, and the narrow window then balloons past
+#' the search boundary into the deactivation tail, landing on transients
+#' unrelated to the pulse itself). Replaces a plain full-window MEAN
+#' (PI-directed, 2026-07-22): validated on 92 real isometric steps
+#' (muscleforcemethodsensitivity.png) to track the plain mean almost
+#' exactly for FLAT/sustained holds, while correctly capturing genuine
+#' rise-then-decay TRANSIENTS (isovelocity's moving ramps) that a plain
+#' mean dilutes.
+.legacy_peak_window_mean <- function(v, t, avg_mask, search_mask, peak_window_s = LEGACY_PEAK_WINDOW_S) {
+  v_avg <- v[avg_mask]
+  full_mean <- mean(v_avg, na.rm = TRUE)
+  if (sum(is.finite(v_avg)) < 3L) return(full_mean)
+  v_search <- v[search_mask]; t_search <- t[search_mask]
+  if (sum(is.finite(v_search)) < 3L) return(full_mean)
+  if (diff(range(t_search, na.rm = TRUE)) < peak_window_s) return(full_mean)
+  v_smooth <- .smooth_trace_display_only(v_search)
+  smax <- max(v_smooth, na.rm = TRUE); smin <- min(v_smooth, na.rm = TRUE)
+  if (!is.finite(smax) || !is.finite(smin)) return(full_mean)
+  use_max <- abs(smax - full_mean) >= abs(smin - full_mean)
+  t_peak <- t_search[if (use_max) which.max(v_smooth) else which.min(v_smooth)]
+  narrow <- avg_mask & t >= (t_peak - peak_window_s / 2) & t <= (t_peak + peak_window_s / 2)
+  if (sum(is.finite(v[narrow])) < 1L) return(full_mean)
+  mean(v[narrow], na.rm = TRUE)
+}
+
 #' Deactivation-window active-sample mask for a segmented (isometric /
 #' isovelocity) td: TRUE within [stim_t0, stim_t1 + 0.5s] of the sample's step.
 .segmented_active_mask <- function(td, step_geom, deactivation_window_s = 0.5) {
@@ -934,9 +983,10 @@ build_segmented_step_summary <- function(td, filename = attr(td, "Filename"),
       },
       active_force_Nm = {
         s <- geom$steps[geom$steps$step_number == dplyr::first(.data$step_number), ]
-        win <- .data$t.s >= s$stim_t0_s & .data$t.s <= (s$stim_t1_s + deactivation_window_s)
+        win        <- .data$t.s >= s$stim_t0_s & .data$t.s <= (s$stim_t1_s + deactivation_window_s)
+        search_win <- .data$t.s >= s$stim_t0_s & .data$t.s <= s$stim_t1_s
         if (any(win, na.rm = TRUE) && any(.data$is_active_sample[win], na.rm = TRUE)) {
-          mean(.data$torque_inertia_corrected_Nm[win], na.rm = TRUE)
+          .legacy_peak_window_mean(.data$torque_inertia_corrected_Nm, .data$t.s, win, search_win)
         } else {
           NA_real_
         }

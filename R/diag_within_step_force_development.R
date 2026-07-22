@@ -4,8 +4,14 @@
 # writes PNGs. Purpose: within-step force development for bass17 -- does
 # muscle force reach a plateau during the 300 ms stimulus or is it still
 # rising at stim-off, and does time-to-plateau differ by length (isometric)
-# / velocity (isovelocity)? Also marks WHERE the pipeline samples its
-# "active" value (mean over [stim_t0, stim_t1 + DEACTIVATION_WINDOW_S]).
+# / velocity (isovelocity)?
+#
+# OVERLAY-ONLY as of 2026-07-21 (PI feedback): this used to also emit a
+# per-step FACETED small-multiples view (raw torque + extraction markers --
+# where the pipeline samples its active value) alongside the overlay: found
+# not useful and dropped, both the ggsave calls AND the build_facets()/
+# iso_raw plumbing that fed only it. Do not re-add without re-confirming
+# it's wanted -- see FIGURES_README.md's `forcedevtiming` entry.
 #
 # Run: Rscript R/diag_within_step_force_development.R
 
@@ -21,7 +27,14 @@ src("paths_config.R")
 # Defaults come from paths_config.R (single source of truth) -- see that
 # file if the OneDrive folder layout ever moves again.
 SRC_DIR <- raw_source_dir(BASS17_RAW_SUBFOLDER)
-OUT_DIR <- FIGS_SUMMARY_DIR
+# Diagnostic tier, not summary (relocated 2026-07-21, PI-directed): this is a
+# filter/calculation decision-making plot (does force plateau within the
+# 300 ms stim window, where does the pipeline sample its active value) --
+# canon token `forcedevtiming`, dual-tagged diagnostic+individual per
+# FIGURES_README.md. Bass-specific content (bass17 only, see SRC_DIR above),
+# so the bass ID is embedded in the filename even though figs_diagnostic/ is
+# flat and not normally per-fish.
+OUT_DIR <- FIGS_DIAGNOSTIC_DIR
 
 src("00_load_bender_flat.R")
 src("01_calibrate.R")
@@ -111,10 +124,9 @@ iso_ts$step_number <- as.integer(stringr::str_extract(iso_ts$unit_id, "(?<=_step
 iso_ts_sel <- dplyr::filter(iso_ts, step_number %in% iso_pick_steps) |>
   dplyr::left_join(dplyr::select(iso_sel, step_number, level_lab, shortening_strain_pct), by = "step_number")
 
-# Raw torque windows + per-step markers (passive baseline, active-window mean).
-iso_raw <- purrr::map_dfr(iso_pick_steps, function(sn) raw_step_window(iso_td, iso_ss[iso_ss$step_number == sn, ][1, ]))
-iso_raw <- dplyr::left_join(iso_raw, dplyr::select(iso_sel, step_number, level_lab), by = "step_number")
-
+# Per-step markers (passive baseline, active-window mean) -- stim_off feeds
+# iso_dur/iso_rep below. (iso_raw, the raw per-sample windows, was only
+# needed by the now-removed facets view -- not computed here anymore.)
 iso_markers <- purrr::map_dfr(iso_pick_steps, function(sn) {
   s <- iso_ss[iso_ss$step_number == sn, ][1, ]
   dur <- s$stim_t1_s - s$stim_t0_s
@@ -247,29 +259,6 @@ build_overlay <- function(ts_sel, stim_dur, title, sub, ylab) {
     theme_bw(base_size = 11) + theme(legend.position = "bottom")
 }
 
-# --- Small multiples: RAW inertia-corrected torque + extraction markers ---
-build_facets <- function(raw_df, markers, stim_dur, title, sub, show_passive = TRUE) {
-  raw_df <- raw_df |> dplyr::arrange(step_number, t_rel) |>
-    dplyr::group_by(step_number) |>
-    dplyr::mutate(y = .smooth_trace_display_only(torque_Nm)) |> dplyr::ungroup()
-  p <- ggplot(raw_df, aes(t_rel, y)) +
-    annotate("rect", xmin = 0, xmax = stim_dur, ymin = -Inf, ymax = Inf, fill = "orange", alpha = 0.10) +
-    geom_rect(data = markers, aes(xmin = 0, xmax = active_win_end, ymin = -Inf, ymax = Inf),
-              inherit.aes = FALSE, fill = "grey50", alpha = 0.08) +
-    geom_line(aes(y = torque_Nm), color = "grey75", linewidth = 0.3) +
-    geom_line(color = "black", linewidth = 0.7) +
-    stim_vlines(stim_dur) +
-    geom_hline(data = markers, aes(yintercept = active_mean), color = "#d95f0e", linetype = "solid", linewidth = 0.7) +
-    facet_wrap(~ level_lab, scales = "free_y", ncol = 1) +
-    labs(title = title, subtitle = wrap_sub(sub),
-         x = "Time relative to stim onset (s)", y = "Inertia-corrected torque (N*m)") +
-    theme_bw(base_size = 11)
-  if (show_passive && "passive_mean" %in% names(markers)) {
-    p <- p + geom_hline(data = markers, aes(yintercept = passive_mean), color = "#1d4ed8", linetype = "dotted", linewidth = 0.7)
-  }
-  p
-}
-
 iso_dur  <- iso_markers$stim_off[1]
 isov_dur <- isov_markers$stim_off[1]
 
@@ -279,16 +268,8 @@ p_iso_overlay <- build_overlay(
   "Common y | orange = 300 ms stim, grey = 0.5 s deactivation tail | colored by held strain",
   "Active muscle force (N*m, shortening +)")
 
-p_iso_facets <- build_facets(
-  iso_raw, iso_markers, iso_dur,
-  "bass17 isometric: raw inertia-corrected torque + extraction markers",
-  "Free y | orange line = active-window mean (pipeline value) | blue dotted = pre-stim passive baseline | grey band = [stim_t0, stim_t1+0.5s] averaging window",
-  show_passive = TRUE)
-
-ggplot2::ggsave(file.path(OUT_DIR, "diag_within_step_force_isometric_overlay.png"),
+ggplot2::ggsave(file.path(OUT_DIR, "bass17_forcedevtiming_isometric_overlay.png"),
                 p_iso_overlay, width = 9, height = 5.5, dpi = 150)
-ggplot2::ggsave(file.path(OUT_DIR, "diag_within_step_force_isometric_facets.png"),
-                p_iso_facets, width = 8, height = 9, dpi = 150)
 
 # Isovelocity: overlay from subtracted trace if present, else raw overlay.
 if (nrow(isov_ts_sel) > 0) {
@@ -310,15 +291,7 @@ if (nrow(isov_ts_sel) > 0) {
     theme_bw(base_size = 11) + theme(legend.position = "bottom")
 }
 
-p_isov_facets <- build_facets(
-  isov_raw, isov_markers, isov_dur,
-  "bass17 isovelocity: raw inertia-corrected torque + extraction markers",
-  "Free y | orange line = active-window mean (pipeline value) | grey band = [stim_t0, stim_t1+0.5s] averaging window",
-  show_passive = FALSE)
-
-ggplot2::ggsave(file.path(OUT_DIR, "diag_within_step_force_isovelocity_overlay.png"),
+ggplot2::ggsave(file.path(OUT_DIR, "bass17_forcedevtiming_isovelocity_overlay.png"),
                 p_isov_overlay, width = 9, height = 5.5, dpi = 150)
-ggplot2::ggsave(file.path(OUT_DIR, "diag_within_step_force_isovelocity_facets.png"),
-                p_isov_facets, width = 8, height = 9, dpi = 150)
 
-cli::cli_alert_success("Saved 4 diagnostic figures to {OUT_DIR}")
+cli::cli_alert_success("Saved 2 forcedevtiming diagnostic figures (overlay only) to {OUT_DIR}")

@@ -42,18 +42,31 @@
 # from the SAME individual (same pipeline run = one specimen) at the same
 # signed velocity (compute_isovelocity_vector_batch()).
 #
-# SIGN CONVENTION (PI-directed, 2026-07-18; REVISED same day per PI
-# biomechanical correction): left and right muscle forces are standardized
-# to ONE convention so the two sides are directly comparable -- see the
-# standardization block in .mfv_finalize_step(). The reference is the RAW
-# PASSIVE torque's own direction at the matched angle/window (NOT an
-# arbitrary "always positive" rule, superseded): a step whose active
-# deviation REINFORCES the passive direction (concentric-consistent) comes
-# out positive and more extreme in that direction; a step whose deviation
-# OPPOSES the passive direction (eccentric-consistent) comes out negative or
-# small. This preserves the physical relative-to-passive relationship instead
-# of erasing it. See `pass_moment_N` / `tension_relative_to_passive` in the
-# step summary for the per-step reference value and classification.
+# SIGN CONVENTION (PI-directed, 2026-07-22 -- REPLACES the 2026-07-18
+# "reinforcing/opposing relative to passive torque" rule below, which is now
+# deleted, not just revised): empirical check across all 328 real finalized
+# steps (3 fish, isometric + isovelocity-V0 + dynamic bookends) showed the
+# reinforcing/opposing rule was MANUFACTURING negative values at some
+# off-L0 angles -- the underlying wrench-derived quantities (F_moment_N,
+# F_force_N, F_yT_N; muscle_force_vector_N/_geom_N, force_force_channel_N,
+# force_yTorque_N) are NOT reliably side- or angle-mirrored to begin with
+# (mostly positive with a real negative minority, concentrated in
+# isovelocity -- not explained by side or by concentric/eccentric position),
+# so there is no real ambiguity for a passive-relative rule to resolve, and
+# no separate L0 special case is needed either: these five quantities are
+# now reported in their RAW, AS-COMPUTED sign, with NO per-step sign
+# decision at all.
+#
+# The ONE quantity that DOES need a fixed correction is force_zTorque_N: the
+# same empirical check showed it cleanly MIRRORS by anatomical side (left
+# always one sign, right always the other) across all 3 fish, for a reason
+# unrelated to L0/concentric/eccentric -- exactly the SAME bend-direction
+# mirroring the legacy zTorque-only path already corrects for via
+# force_sign = rec_lidx * lidx_pos_motor (resolve_step_contraction(),
+# muscle_geometry.R). force_zTorque_N applies that identical, FIXED
+# per-side/per-trial correction (computed directly from `geom`'s
+# lidx_left/lidx_right/lidx_pos_motor, not from any step-level decision) --
+# see .mfv_finalize_step()'s zt_sign.
 #
 # FV SONO CONFIRMATION (PI-directed, 2026-07-18): the DS3 sono length (RIGHT
 # muscle only -- the sole wired channel) is low-pass filtered at 40 Hz and used
@@ -85,6 +98,13 @@ MFV_DEACTIVATION_WINDOW_S <- 0.5
 # (~247 Hz) yet preserves muscle-length dynamics -- the value validated as best
 # in diag_sono_smoothing.R (PI-directed, 2026-07-18).
 MFV_SONO_LP_HZ <- 40.0
+
+# ACTIVE-window scalar-force extraction (PI-directed, 2026-07-22, following
+# review of muscleforcemethodcompare.png/muscleforcemethodsensitivity.png):
+# narrow-window width (s) for "Method D" -- mean of RAW samples in a window
+# this wide, centered on the ACTIVE window's own smoothed-trace peak time.
+# See .mfv_window_peak_means().
+MFV_PEAK_WINDOW_S <- 0.15
 
 # Signed-velocity tolerance (deg/s) for matching an active isovelocity step to a
 # no-stim ramp of the same commanded velocity (within- or cross-trial).
@@ -225,17 +245,19 @@ uhat_geometric <- function(bend_angle_deg) {
 #'   F_yT_N = dTy / d and F_zT_N = -dTz / r_m (single-arm longitudinal-force
 #'   estimates, valid when u_hat ~ X).
 #'
-#' Sign: F_moment_N/F_force_N are in the RAW lab frame (they follow bend
-#' direction). Callers fold sides by multiplying with force_sign
-#' (resolve_step_contraction(), muscle_geometry.R), exactly as the existing
-#' muscle_force_Nm path does.
+#' Sign: all four are in the RAW lab frame (they follow bend direction) --
+#' see .mfv_finalize_step() for which of the four get a fixed correction
+#' before being written to the step summary (as of 2026-07-22: only F_zT_N,
+#' via the SAME force_sign = rec_lidx * lidx_pos_motor the legacy muscle_force_Nm
+#' path already uses; F_moment_N/F_force_N/F_yT_N are reported raw).
 #'
 #' @param dF,dTau length-3 active-minus-passive force (N) / torque (N*m) deltas.
 #' @return list(F_moment_N, F_force_N, F_yT_N, F_zT_N, eff_arm_m, rxu). `rxu`
 #'   (the r x u_hat axis used for the moment projection) is returned so callers
-#'   can project OTHER torque vectors (e.g. the raw passive torque, for the
-#'   passive-relative sign convention in .mfv_finalize_step()) onto the exact
-#'   same axis/arm without recomputing it.
+#'   can project OTHER torque vectors (e.g. the raw passive torque, historically
+#'   used for a passive-relative sign convention -- see git history/module
+#'   header, superseded 2026-07-22) onto the exact same axis/arm without
+#'   recomputing it.
 solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
   r <- c(0.0, r_m_m, d_m)
   rxu <- .mfv_cross(r, uhat)
@@ -253,7 +275,9 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
 # Per-step vector force (isometric + isovelocity)
 # =============================================================================
 
-#' Mean of each of the 6 channels over a time window on one step.
+#' Mean of each of the 6 channels over a time window on one step. Used for
+#' the PASSIVE/baseline window (a steady reference has no "peak" to chase --
+#' see .mfv_window_peak_means() for the ACTIVE window instead).
 .mfv_window_means <- function(td6, step_rows, win_mask) {
   sel <- step_rows & win_mask
   get_mean <- function(base) {
@@ -263,6 +287,67 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
   list(
     F = c(get_mean("xforce"),  get_mean("yforce"),  get_mean("zforce")),
     T = c(get_mean("xtorque"), get_mean("ytorque"), get_mean("ztorque"))
+  )
+}
+
+#' "Method D" extraction for the ACTIVE window (PI-directed, 2026-07-22,
+#' replacing the plain full-window mean previously used here): for each of
+#' the 6 channels independently, find that channel's own smoothed-trace peak
+#' (via .smooth_trace_display_only(), plot_force_vs_time.R -- sourced before
+#' this file in every real pipeline entry point), searched ONLY within
+#' [stim_t0_s, stim_t1_s] (the true stim duration, EXCLUDING the post-stim
+#' deactivation tail -- searching into the tail let a settling/recovery
+#' transient there get mistaken for the peak, found empirically on the
+#' isometric panel of muscleforcemethodcompare.png), then take the mean of
+#' RAW (unsmoothed) samples in a window MFV_PEAK_WINDOW_S wide centered on
+#' that peak's time, clipped to `win_mask` (the full active+deactivation
+#' window actually available for this step). Validated 2026-07-22
+#' (muscleforcemethodsensitivity.png, 92 real isometric steps, 3 fish):
+#' tracks the plain full-window mean almost exactly for FLAT/sustained holds
+#' (isometric), where the plain mean was already fine, while correctly
+#' capturing genuine rise-then-decay TRANSIENTS (isovelocity's moving ramps)
+#' that a plain full-window mean dilutes.
+#' Falls back to the plain window mean whenever there are too few finite
+#' samples to smooth/search reliably, OR whenever the search window itself
+#' is SHORTER than `peak_window_s` (found empirically 2026-07-22 on the
+#' dynamic L0 bookends -- their stim bursts are only ~0.05s, so a smoothed
+#' trace still RISING at the search window's own edge gets its "peak" pinned
+#' to that edge; the narrow window then balloons ~3x past the search
+#' boundary into the deactivation tail, which can land on a large transient
+#' unrelated to the tiny bookend pulse itself -- observed >2N spurious
+#' outliers vs a real ~0.1-0.8N range on bass18's dynamic bookends). This
+#' guard is about DURATION, not sample count: a short, fast burst needs the
+#' plain mean; a long, sustained/ramping window is where Method D helps.
+#' @param search_win_mask The narrower [stim_t0_s, stim_t1_s]-only mask used
+#'   for the peak SEARCH; `win_mask` (full active+deactivation window) still
+#'   bounds the narrow averaging window and is what the plain-mean fallback
+#'   uses.
+.mfv_window_peak_means <- function(td6, step_rows, win_mask, search_win_mask,
+                                   peak_window_s = MFV_PEAK_WINDOW_S) {
+  sel <- step_rows & win_mask
+  search_sel <- step_rows & search_win_mask
+  t <- td6$t.s
+  get_peak_mean <- function(base) {
+    v <- .mfv_col(td6, base)
+    if (is.null(v)) return(NA_real_)
+    v_sel <- v[sel]
+    full_mean <- mean(v_sel, na.rm = TRUE)
+    if (sum(is.finite(v_sel)) < 3L) return(full_mean)
+    v_search <- v[search_sel]; t_search <- t[search_sel]
+    if (sum(is.finite(v_search)) < 3L) return(full_mean)
+    if (diff(range(t_search, na.rm = TRUE)) < peak_window_s) return(full_mean)
+    v_smooth <- .smooth_trace_display_only(v_search)
+    smax <- max(v_smooth, na.rm = TRUE); smin <- min(v_smooth, na.rm = TRUE)
+    if (!is.finite(smax) || !is.finite(smin)) return(full_mean)
+    use_max <- abs(smax - full_mean) >= abs(smin - full_mean)
+    t_peak <- t_search[if (use_max) which.max(v_smooth) else which.min(v_smooth)]
+    narrow <- sel & t >= (t_peak - peak_window_s / 2) & t <= (t_peak + peak_window_s / 2)
+    if (sum(is.finite(v[narrow])) < 1L) return(full_mean)
+    mean(v[narrow], na.rm = TRUE)
+  }
+  list(
+    F = c(get_peak_mean("xforce"),  get_peak_mean("yforce"),  get_peak_mean("zforce")),
+    T = c(get_peak_mean("xtorque"), get_peak_mean("ytorque"), get_peak_mean("ztorque"))
   )
 }
 
@@ -384,10 +469,15 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
 #' force physics + sign convention live in ONE place.
 #'
 #' @param act,pass list(F=3, T=3) active / passive channel means (N, N*m).
+#' @param geom File geometry from .mfv_read_geom(filename) -- needs
+#'   lidx_left/lidx_right/lidx_pos_motor for force_zTorque_N's side
+#'   correction (see zt_sign below). Same object attach_vector_muscle_force()/
+#'   compute_isovelocity_vector_batch() already read for `arms`; passed
+#'   through here rather than re-read.
 #' @param sono_ctx optional list(mm, L0_mm) for FV L0 crossing (right only).
 #' @return list(row = named vector of step columns, ts = force-vs-time tibble or
 #'   NULL, fv_l0 = one-row tibble or NULL).
-.mfv_finalize_step <- function(act, pass, noise, category, s, td6, step_rows, arms,
+.mfv_finalize_step <- function(act, pass, noise, category, s, td6, step_rows, arms, geom,
                                trial_id, snr_min, deactivation_window_s,
                                baseline_pad_s, relaxation_s, sono_ctx = NULL) {
   dF <- act$F - pass$F
@@ -412,67 +502,30 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
   fr_ref <- solve_muscle_force_from_wrench(dF, dT, uhat_ref, arms$r_m_m, arms$d_m)
 
   # ==========================================================================
-  # SIGN-CONVENTION STANDARDIZATION (left muscle == right muscle) -- PI-directed
-  # 2026-07-18, REVISED 2026-07-18 per PI biomechanical correction (superseding
-  # the earlier "always positive" draft below the line). The legacy z-torque
-  # path folds sides with force_sign = rec_lidx * lidx_pos_motor, correct for
-  # the BEND-DIRECTION-dependent z (lateral) torque; this 6-axis vector force
-  # is dominated by the y (dorsoventral-offset) torque instead, whose polarity
-  # from muscle tension alone is the SAME for both muscles (both pull their
-  # posterior attachment anteriorly) -- applying the bend-direction force_sign
-  # here would MIRROR-FLIP one side, leaving left/right with opposite signs.
+  # SIGN CONVENTION (PI-directed, 2026-07-22 -- see module header for the full
+  # empirical rationale). Two DIFFERENT rules for two DIFFERENT quantities:
   #
-  # PI's correction: concentric contraction is NOT "more extreme" in an
-  # absolute sense and eccentric "less extreme" -- concentric is more extreme
-  # IN THE DIRECTION THE PASSIVE BASELINE TORQUE ALREADY POINTS at that angle
-  # (the muscle's own pull REINFORCES the passive bending moment there), while
-  # eccentric deviates OPPOSITE that passive direction (the muscle's pull
-  # OPPOSES/reduces it). The correct sign reference is therefore the PASSIVE
-  # torque's own direction at the matched angle/window -- not an arbitrary
-  # per-step "make this step's own value positive" rule.
+  # 1) muscle_force_vector_N / muscle_force_vector_geom_N / force_force_channel_N
+  #    / force_yTorque_N -- NO correction. Reported exactly as computed
+  #    (fr$F_moment_N etc., RAW lab-frame sign). Confirmed empirically (328
+  #    real steps, 3 fish, all 3 categories) NOT to be side- or L0-mirrored;
+  #    the real negative minority (concentrated in isovelocity) is genuine
+  #    signal, not a sign-convention artifact -- forcing it positive, or
+  #    flipping it via a passive-torque comparison, would erase real data.
   #
-  # tension_sign is fixed to sign(pass_moment) -- the sign of the RAW passive
-  # torque projected onto the SAME r x u_hat axis used for the active moment
-  # (fr$rxu / fr$eff_arm_m). Multiplying by that fixed reference means a step
-  # whose active deviation shares the passive torque's sign (reinforcing /
-  # concentric-consistent) comes out POSITIVE, and a step whose deviation
-  # opposes it (opposing / eccentric-consistent) comes out NEGATIVE or small --
-  # exactly the relative-to-passive relationship described by the PI, instead
-  # of erasing it. When the passive projected moment is too small to
-  # distinguish from baseline force noise (e.g. an isometric hold at ~0 deg,
-  # where the passive reference direction is itself ambiguous), fall back to
-  # the previous always-positive-per-step convention rather than manufacture a
-  # sign from noise. (`noise`, a FORCE-domain SD, is used as an approximate --
-  # FLAGGED -- floor for this force-equivalent moment quantity; it is not a
-  # torque-domain noise estimate.)
+  # 2) force_zTorque_N -- the ONE quantity confirmed to cleanly mirror by
+  #    anatomical side (left one sign, right the other, consistently, across
+  #    all 3 fish) -- gets the SAME fixed per-side correction the legacy
+  #    zTorque-only path already uses: force_sign = rec_lidx * lidx_pos_motor
+  #    (resolve_step_contraction(), muscle_geometry.R). Computed directly from
+  #    `geom` (file-level attrs, present for isometric/isovelocity/dynamic
+  #    alike) rather than depending on a step_summary column, so this works
+  #    identically for dynamic L0 bookends' synthetic step rows too.
   # ==========================================================================
-  pass_moment <- if (is.finite(fr$eff_arm_m) && fr$eff_arm_m > 0) {
-    sum(pass$T * fr$rxu) / (fr$eff_arm_m^2)
-  } else NA_real_
-  # L0 (operating_point == 0 / contraction_mode == "isometric_zero") has NO
-  # commanded bend direction at all -- pass_moment there is residual
-  # curvature/sensor noise, not a real passive-bending signal, so
-  # "reinforcing vs. opposing relative to passive" is physically undefined
-  # (PI-directed fix, 2026-07-21, following the fatigue-timeline plot
-  # showing a spurious +/- split among L0 points). Forcing the ambiguous
-  # path here (rather than relying on abs(pass_moment) <= noise to catch
-  # it) matters because a small but nonzero residual pass_moment can
-  # exceed the noise floor by chance at exactly 0 deg, letting the
-  # meaningless sign(pass_moment) branch below fire anyway. This ONLY
-  # forces ambiguous_fallback at L0 -- every nonzero operating_point keeps
-  # its ordinary noise-floor check and real reinforcing/opposing sign.
-  is_l0_step <- (is.finite(s$operating_point) && abs(s$operating_point) < 1e-9) ||
-    identical(s$contraction_mode, "isometric_zero")
-  pass_moment_ambiguous <- is_l0_step ||
-    !is.finite(pass_moment) || !is.finite(noise) || abs(pass_moment) <= noise
-  if (pass_moment_ambiguous) {
-    tension_sign <- if (is.finite(fr$F_moment_N) && fr$F_moment_N < 0) -1 else 1
-    tension_relative_to_passive <- "ambiguous_fallback"
-  } else {
-    tension_sign <- sign(pass_moment)
-    tension_relative_to_passive <- if (is.finite(fr$F_moment_N) && sign(fr$F_moment_N) == sign(pass_moment))
-      "reinforcing" else "opposing"
-  }
+  rec_lidx <- if (identical(s$muscle_side, "left")) geom$lidx_left
+             else if (identical(s$muscle_side, "right")) geom$lidx_right
+             else NA_real_
+  zt_sign <- rec_lidx * geom$lidx_pos_motor
 
   row <- list(
     step_number = s$step_number,
@@ -480,14 +533,12 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
     uhat_x = uhat[1L], uhat_y = uhat[2L], uhat_z = uhat[3L],
     uhat_angle_emp_deg = emp$angle_xy_deg, uhat_angle_geom_deg = geo$angle_xy_deg,
     activation_snr = snr, eff_arm_m = fr$eff_arm_m,
-    muscle_force_vector_N      = tension_sign * fr$F_moment_N,
-    muscle_force_vector_geom_N = tension_sign * fr_ref$F_moment_N,
-    force_force_channel_N      = tension_sign * fr$F_force_N,
-    force_yTorque_N            = tension_sign * fr$F_yT_N,
-    force_zTorque_N            = tension_sign * fr$F_zT_N,
-    uhat_source = uhat_source,
-    pass_moment_N = pass_moment,
-    tension_relative_to_passive = tension_relative_to_passive
+    muscle_force_vector_N      = fr$F_moment_N,
+    muscle_force_vector_geom_N = fr_ref$F_moment_N,
+    force_force_channel_N      = fr$F_force_N,
+    force_yTorque_N            = fr$F_yT_N,
+    force_zTorque_N            = zt_sign * fr$F_zT_N,
+    uhat_source = uhat_source
   )
 
   # -- continuous per-sample projected force (standardized), + FV L0 sample --
@@ -498,10 +549,13 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
     disp_win <- step_rows & td6$t.s >= (s$stim_t0_s - baseline_pad_s) &
       td6$t.s <= (s$stim_t1_s + relaxation_s)
     if (any(disp_win)) {
+      # Matches muscle_force_vector_N's own RAW-sign convention above (no
+      # per-step correction) -- this ts trace IS that same quantity's
+      # per-sample time series.
       Tx <- .mfv_col(td6, "xtorque"); Ty <- .mfv_col(td6, "ytorque"); Tz <- .mfv_col(td6, "ztorque")
-      f_t <- tension_sign * (((Tx[disp_win] - pass$T[1L]) * rxu[1L]) +
-                             ((Ty[disp_win] - pass$T[2L]) * rxu[2L]) +
-                             ((Tz[disp_win] - pass$T[3L]) * rxu[3L])) / (eff_arm^2)
+      f_t <- (((Tx[disp_win] - pass$T[1L]) * rxu[1L]) +
+             ((Ty[disp_win] - pass$T[2L]) * rxu[2L]) +
+             ((Tz[disp_win] - pass$T[3L]) * rxu[3L])) / (eff_arm^2)
       t_abs <- td6$t.s[disp_win]
       cmode_val <- if ("contraction_mode" %in% names(s)) s$contraction_mode else NA_character_
       ts <- tibble::tibble(
@@ -545,7 +599,6 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
     uhat_source = NA_character_, activation_snr = NA_real_, eff_arm_m = NA_real_,
     muscle_force_vector_N = NA_real_, muscle_force_vector_geom_N = NA_real_,
     force_force_channel_N = NA_real_, force_yTorque_N = NA_real_, force_zTorque_N = NA_real_,
-    pass_moment_N = NA_real_, tension_relative_to_passive = NA_character_,
     passive_source = NA_character_, angle_matched_ok = NA
   )
 }
@@ -556,11 +609,10 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
   for (nm in c("dFx","dFy","dFz","dTx","dTy","dTz","uhat_x","uhat_y","uhat_z",
                "uhat_angle_emp_deg","uhat_angle_geom_deg","activation_snr","eff_arm_m",
                "muscle_force_vector_N","muscle_force_vector_geom_N","force_force_channel_N",
-               "force_yTorque_N","force_zTorque_N","pass_moment_N")) {
+               "force_yTorque_N","force_zTorque_N")) {
     out_cols[[nm]][i] <- as.numeric(rw[[nm]])
   }
   out_cols$uhat_source[i]    <- rw[["uhat_source"]]
-  out_cols$tension_relative_to_passive[i] <- rw[["tension_relative_to_passive"]]
   out_cols$passive_source[i] <- passive_source
   out_cols$angle_matched_ok[i] <- angle_ok
   out_cols
@@ -600,10 +652,8 @@ attach_vector_muscle_force <- function(res, filename, category,
     cli::cli_warn("attach_vector_muscle_force: 6-axis wrench unavailable for {basename(filename)} -- vector path skipped")
     return(NULL)
   }
-  arms <- {
-    geom <- .mfv_read_geom(filename)
-    resolve_muscle_moment_arms(geom$width_mm, geom$depth_mm_raw, geom$dvert_mm)
-  }
+  geom <- .mfv_read_geom(filename)
+  arms <- resolve_muscle_moment_arms(geom$width_mm, geom$depth_mm_raw, geom$dvert_mm)
   ss <- res$step_summary
   trial_id <- if (is.null(res$trial_id)) NA_character_ else res$trial_id
   out_cols <- .mfv_empty_out_cols(ss$step_number)
@@ -615,14 +665,15 @@ attach_vector_muscle_force <- function(res, filename, category,
     if (!is.finite(s$stim_t0_s) || !is.finite(s$stim_t1_s)) next
     step_rows <- td6$step_number == s$step_number
     if (!any(step_rows)) next
-    act_win  <- td6$t.s >= s$stim_t0_s & td6$t.s <= (s$stim_t1_s + deactivation_window_s)
+    act_win    <- td6$t.s >= s$stim_t0_s & td6$t.s <= (s$stim_t1_s + deactivation_window_s)
+    stim_win   <- td6$t.s >= s$stim_t0_s & td6$t.s <= s$stim_t1_s
     base_win <- td6$t.s >= s$t_pre_baseline_start_s & td6$t.s <= s$t_pre_baseline_end_s
 
-    act  <- .mfv_window_means(td6, step_rows, act_win)
+    act  <- .mfv_window_peak_means(td6, step_rows, act_win, stim_win)
     pass <- .mfv_window_means(td6, step_rows, base_win)
     noise <- .mfv_baseline_force_noise(td6, step_rows, base_win)
 
-    fin <- .mfv_finalize_step(act, pass, noise, category, s, td6, step_rows, arms,
+    fin <- .mfv_finalize_step(act, pass, noise, category, s, td6, step_rows, arms, geom,
                               trial_id, snr_min, deactivation_window_s, baseline_pad_s, relaxation_s)
     out_cols <- .mfv_assign_row(out_cols, i, fin, "static_baseline", NA)
     if (!is.null(fin$ts)) ts_list[[length(ts_list) + 1L]] <- fin$ts
@@ -668,7 +719,7 @@ compute_isovelocity_vector_batch <- function(iso_inputs,
     geom <- .mfv_read_geom(inp$filename)
     arms <- resolve_muscle_moment_arms(geom$width_mm, geom$depth_mm_raw, geom$dvert_mm)
     sono <- tryCatch(mfv_load_sono_lp40(inp$filename, inp$res$td), error = function(e) NULL)
-    trials[[inp$trial_id]] <- list(trial_id = inp$trial_id, td6 = td6, arms = arms,
+    trials[[inp$trial_id]] <- list(trial_id = inp$trial_id, td6 = td6, arms = arms, geom = geom,
                                    sono = sono, ss = inp$res$step_summary)
   }
   if (length(trials) == 0L) return(NULL)
@@ -703,10 +754,11 @@ compute_isovelocity_vector_batch <- function(iso_inputs,
       step_rows <- td6$step_number == s$step_number
       if (!any(step_rows)) next
       act_win  <- td6$t.s >= s$stim_t0_s & td6$t.s <= (s$stim_t1_s + deactivation_window_s)
+      stim_win <- td6$t.s >= s$stim_t0_s & td6$t.s <= s$stim_t1_s
       base_win <- td6$t.s >= s$t_pre_baseline_start_s & td6$t.s <= s$t_pre_baseline_end_s
       ang_act  <- td6$enc.deg[step_rows & act_win]
 
-      act   <- .mfv_window_means(td6, step_rows, act_win)
+      act   <- .mfv_window_peak_means(td6, step_rows, act_win, stim_win)
       noise <- .mfv_baseline_force_noise(td6, step_rows, base_win)
 
       # passive: within-trial angle match -> cross-trial (same specimen) angle
@@ -732,7 +784,7 @@ compute_isovelocity_vector_batch <- function(iso_inputs,
       }
 
       sono_ctx <- if (!is.null(tr$sono)) tr$sono else NULL
-      fin <- .mfv_finalize_step(act, pass, noise, "isovelocity", s, td6, step_rows, arms,
+      fin <- .mfv_finalize_step(act, pass, noise, "isovelocity", s, td6, step_rows, arms, tr$geom,
                                 tr$trial_id, snr_min, deactivation_window_s,
                                 baseline_pad_s, relaxation_s, sono_ctx = sono_ctx)
       out_cols <- .mfv_assign_row(out_cols, i, fin, passive_source, angle_ok)
