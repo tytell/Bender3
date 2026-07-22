@@ -552,8 +552,34 @@ samples, subtracted POINTWISE then Method D.
   perturb the passive. (2) For the low-force fish (bass17) the true force is
   below the passive-drift floor -> its FL SHAPE is unresolvable and must be
   magnitude/SNR-gated, not reported as flat-or-bell. Production change (porting a
-  pointwise relaxation-aware passive into the vector path + a magnitude gate) is
-  NOT yet made -- PI decision pending on M2 vs M1 and the gating rule.
+pointwise relaxation-aware passive into the vector path + a magnitude gate) is
+NOT yet made -- PI decision pending on M2 vs M1 and the gating rule.
+
+**M2 IMPLEMENTED IN PRODUCTION 2026-07-22 (PI chose M2; gating deferred).**
+`.mfv_isometric_relaxation_passive()` (R/muscle_force_vector.R) replaces the
+static pre-stim window mean for the ISOMETRIC vector passive: per channel it fits
+the viscoelastic relaxation to the step's quiescent samples (pre-stim window ..
+stim onset, plus stim_t1+relaxation_s .. post-baseline end) and evaluates it
+inside the stim gap at EACH channel's own active-peak time (found the same way
+.mfv_window_peak_means() finds it), so the passive is subtracted at the instant
+the active value is sampled -- the scalar-per-channel equivalent of pointwise
+subtraction. Per-channel fallback to the old static mean when the fit is
+unreliable (<8 quiescent samples / search shorter than the peak window / loess
+failure). Only `attach_vector_muscle_force()`'s isometric loop + the new helper
+changed; `.mfv_finalize_step()` untouched, so isovelocity (angle-matched passive)
+is byte-for-byte unchanged. Verified on the production path (all 3 fish,
+isometric-only, every step used relaxation_fit, no fallbacks): cor(Fgeom,
+|strain|) bass16 +0.02, bass17 -0.01, bass18 +0.43 -- the strong isometric
+concave-up (bass17 was +0.93) is gone; bass18's genuine monotonic rise survives.
+(bass17's -0.01 vs the prototype's projected-g +0.25 is the expected per-channel-
+vs-projected difference for a near-noise-floor fish whose shape is unresolvable.)
+FL/FV superplots regenerated: the RAW isometric arms are removed and the
+NORMALIZED plot is flat ~1 -- EXCEPT one pathological bass17 strain-0 point
+(near-zero F0 -> F/F0 ~ -64) that drags the y-axis. That single outlier is the
+DEFERRED low-force gating decision, not a passive-subtraction failure. ts NOTE:
+the isometric force_ts display trace still subtracts the peak-time passive as a
+CONSTANT pointwise (finalize unchanged); the sampled SCALAR is the corrected
+quantity, the trace is display-only.
 
 ## Where things live (code map)
 - `muscle_force_vector.R` — core: baseline subtraction, û construction

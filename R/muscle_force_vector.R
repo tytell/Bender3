@@ -35,8 +35,12 @@
 #   A pure force-channel estimate (dF . u_hat) is reported alongside as an
 #   independent cross-check.
 #
-# All active-minus-passive: isometric uses the step's own pre-stim baseline
-# window; isovelocity uses an ANGLE-matched no-stim ramp (match by enc.deg,
+# All active-minus-passive: isometric uses a RELAXATION-AWARE passive baseline
+# (PI-directed 2026-07-22, "M2", .mfv_isometric_relaxation_passive()) -- the
+# step's own quiescent samples fit the viscoelastic relaxation curve, evaluated
+# inside the stim gap at each channel's active peak, replacing the stale static
+# pre-stim window mean (see that helper's header + R/diag_isometric_passive_
+# models.R). Isovelocity uses an ANGLE-matched no-stim ramp (match by enc.deg,
 # not time) so the 5-deg-vs-0-deg start offset washes out. When no same-trial
 # angle-overlapping passive exists, the ramp is borrowed CROSS-TRIAL but ONLY
 # from the SAME individual (same pipeline run = one specimen) at the same
@@ -348,6 +352,84 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
   list(
     F = c(get_peak_mean("xforce"),  get_peak_mean("yforce"),  get_peak_mean("zforce")),
     T = c(get_peak_mean("xtorque"), get_peak_mean("ytorque"), get_peak_mean("ztorque"))
+  )
+}
+
+#' ISOMETRIC relaxation-aware passive baseline (PI-directed, 2026-07-22, "M2";
+#' REPLACES the static pre-stim window mean previously used for the isometric
+#' passive). Prototype settled in R/diag_isometric_passive_models.R: the static
+#' pre-stim mean is sampled ~0.5-1 s BEFORE the active window on a still-relaxing
+#' passive, so it is STALE -- the leftover viscoelastic creep scales with |bend|
+#' and masquerades as the FL "arms" (a model-free zero-muscle control reproduced
+#' 121-169% of the bass16/17 |bend| slope with NO activation). This instead fits
+#' the passive's relaxation curve to the QUIESCENT (no-activation) samples --
+#' the pre-stim window .. stim onset, plus after-deactivation .. post-baseline
+#' end -- and evaluates it INSIDE the unobserved stim gap at EACH channel's own
+#' active peak time (found exactly as .mfv_window_peak_means() finds it, so the
+#' passive is subtracted at the same instant the active value is sampled). This
+#' is the scalar-per-channel equivalent of pointwise passive subtraction; on the
+#' validated fish it drops cor(F,|strain|) bass16 +0.19->+0.03, bass17
+#' +0.93->+0.25, bass18 +0.57->+0.42 (bass18's monotonic rise is genuine, not
+#' the artifact) WITHOUT inventing a spurious bell.
+#'
+#' Per channel it falls back to the plain static pre-stim mean (identical to the
+#' old .mfv_window_means() passive) whenever the relaxation fit is unreliable
+#' (fewer than 8 quiescent samples, search window shorter than the narrow peak
+#' window, or the loess fails). CAVEAT (FLAGGED): the fit INTERPOLATES the
+#' passive across the ~0.3 s stim gap it cannot observe, assuming the contraction
+#' does not discontinuously perturb the passive; low-force fish sit below this
+#' passive-drift floor and their FL SHAPE is not resolvable -- a magnitude/SNR
+#' gate on that is a SEPARATE, still-pending decision (not made here).
+#' @return list(F=3, T=3) passive channel values (N, N*m) + used_relaxation flag.
+.mfv_isometric_relaxation_passive <- function(td6, step_rows, s, win_mask, search_win_mask,
+                                              relaxation_s, base_mask,
+                                              peak_window_s = MFV_PEAK_WINDOW_S) {
+  t <- td6$t.s
+  sel <- step_rows & win_mask
+  search_sel <- step_rows & search_win_mask
+  base_sel <- step_rows & base_mask
+  quies <- step_rows & (
+    (t >= s$t_pre_baseline_start_s & t < s$stim_t0_s) |
+    (t >= (s$stim_t1_s + relaxation_s) & t <= s$t_post_baseline_end_s))
+  tq <- t[quies]
+  fit_passive_at <- function(v, at) {
+    vq <- v[quies]; ok <- is.finite(tq) & is.finite(vq)
+    if (sum(ok) < 8L) return(NA_real_)
+    tqi <- tq[ok]; vqi <- vq[ok]
+    idx <- seq(1L, length(tqi), by = max(1L, floor(length(tqi) / 400)))
+    df <- data.frame(t = tqi[idx], g = vqi[idx])
+    fit <- tryCatch(stats::loess(g ~ t, data = df, span = 0.6, degree = 2,
+                                 control = stats::loess.control(surface = "direct")),
+                    error = function(e) NULL)
+    if (is.null(fit)) return(NA_real_)
+    as.numeric(tryCatch(stats::predict(fit, newdata = data.frame(t = at)),
+                        error = function(e) NA_real_))[1L]
+  }
+  n_fit <- 0L
+  get_pass <- function(base) {
+    v <- .mfv_col(td6, base)
+    if (is.null(v)) return(NA_real_)
+    static_mean <- mean(v[base_sel], na.rm = TRUE)  # M0 fallback
+    v_sel <- v[sel]
+    if (sum(is.finite(v_sel)) < 3L) return(static_mean)
+    v_search <- v[search_sel]; t_search <- t[search_sel]
+    if (sum(is.finite(v_search)) < 3L) return(static_mean)
+    if (diff(range(t_search, na.rm = TRUE)) < peak_window_s) return(static_mean)
+    full_mean <- mean(v_sel, na.rm = TRUE)
+    v_smooth <- .smooth_trace_display_only(v_search)
+    smax <- max(v_smooth, na.rm = TRUE); smin <- min(v_smooth, na.rm = TRUE)
+    if (!is.finite(smax) || !is.finite(smin)) return(static_mean)
+    use_max <- abs(smax - full_mean) >= abs(smin - full_mean)
+    t_peak <- t_search[if (use_max) which.max(v_smooth) else which.min(v_smooth)]
+    pv <- fit_passive_at(v, t_peak)
+    if (!is.finite(pv)) return(static_mean)
+    n_fit <<- n_fit + 1L
+    pv
+  }
+  list(
+    F = c(get_pass("xforce"),  get_pass("yforce"),  get_pass("zforce")),
+    T = c(get_pass("xtorque"), get_pass("ytorque"), get_pass("ztorque")),
+    used_relaxation = n_fit > 0L
   )
 }
 
@@ -670,12 +752,20 @@ attach_vector_muscle_force <- function(res, filename, category,
     base_win <- td6$t.s >= s$t_pre_baseline_start_s & td6$t.s <= s$t_pre_baseline_end_s
 
     act  <- .mfv_window_peak_means(td6, step_rows, act_win, stim_win)
-    pass <- .mfv_window_means(td6, step_rows, base_win)
+    # Passive = relaxation-aware baseline evaluated at each channel's active peak
+    # (M2, PI-directed 2026-07-22), replacing the stale static pre-stim mean.
+    # NOTE: this fixes the SCALAR muscle_force_vector_N/_geom_N (what the FL/FV
+    # superplots sample). fin$ts below still subtracts pass$T as a CONSTANT
+    # pointwise, so the isometric force_ts trace is offset by the peak-time
+    # passive, not pointwise-relaxation-subtracted -- a display trace only; the
+    # sampled scalar is the corrected quantity.
+    pass <- .mfv_isometric_relaxation_passive(td6, step_rows, s, act_win, stim_win,
+                                              relaxation_s, base_win)
     noise <- .mfv_baseline_force_noise(td6, step_rows, base_win)
 
     fin <- .mfv_finalize_step(act, pass, noise, category, s, td6, step_rows, arms, geom,
                               trial_id, snr_min, deactivation_window_s, baseline_pad_s, relaxation_s)
-    out_cols <- .mfv_assign_row(out_cols, i, fin, "static_baseline", NA)
+    out_cols <- .mfv_assign_row(out_cols, i, fin, if (isTRUE(pass$used_relaxation)) "relaxation_fit" else "static_baseline", NA)
     if (!is.null(fin$ts)) ts_list[[length(ts_list) + 1L]] <- fin$ts
   }
 
