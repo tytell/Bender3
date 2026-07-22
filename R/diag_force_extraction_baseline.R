@@ -5,19 +5,23 @@
 # steps/loading code):
 #
 #   1) forceextractionmethod -- HOW a step's scalar active force gets read
-#      off its raw time series. AS-BUILT (2026-07-21) this plot shows the
-#      then-current method = MEAN over the active window
-#      [stim_t0, stim_t1 + deactivation_window]. SUPERSEDED 2026-07-22 (PI
-#      decision, following muscleforcemethodcompare.png/
-#      muscleforcemethodsensitivity.png below): production now uses
-#      "Method D" (narrow-window mean centered on the smoothed trace's own
-#      peak, duration-guarded) -- .mfv_window_peak_means() in
-#      muscle_force_vector.R, .legacy_peak_window_mean() in 03_analyze.R.
-#      This plot itself was NOT regenerated with the new method (it is a
-#      historical record of the comparison that motivated the switch, kept
-#      as-is); NOT max-in-window, NOT last-N-samples -- it shows what the
-#      OLD plain-mean choice cost by also marking where MAX-in-window would
-#      fall, and reports n_samples actually averaged.
+#      off its raw time series. AS-BUILT (2026-07-21) this plot showed the
+#      then-current method = MEAN over the full active window. REBUILT
+#      2026-07-22 to show what CURRENT production actually does: "Method D"
+#      (narrow-window mean of RAW samples centered on the active window's
+#      OWN smoothed-trace peak, peak search restricted to the stim duration,
+#      duration-guarded) -- .mfv_window_peak_means() in muscle_force_vector.R,
+#      .legacy_peak_window_mean() in 03_analyze.R (adopted PI decision
+#      2026-07-22). The panel now SHADES the actual averaging window (green,
+#      matching muscleforcemethodcompare.png's convention) so the samples
+#      Method D averages are visible as a region, not just a horizontal
+#      value; the old full-window MEAN is KEPT as a secondary (blue dashed)
+#      comparison line, deliberately -- Method D's duration guard FALLS BACK
+#      to that plain mean for short bursts (the ~0.05s dynamic L0 bookends),
+#      and showing both is exactly what makes that fallback legible in the
+#      dynamic panel. The superseded MAX/MIN "hypothetical alternative" line
+#      was dropped (it was never production and is covered by
+#      muscleforcemethodcompare.png).
 #   2) passivebaselinemethod -- HOW the passive reference subtracted from
 #      that active window is calculated, and how the mechanism differs by
 #      trial type:
@@ -154,42 +158,111 @@ cli::cli_alert_info("Isovelocity step {isov_step$step_number} ({basename(isov_f)
 
 
 # =============================================================================
-# 1) forceextractionmethod -- MEAN vs MAX in the active window, n_samples
+# 1) forceextractionmethod -- Method D (CURRENT production), showing WHERE the
+#    averaged samples are (shaded narrow window), plus the old full-window MEAN
+#    as a secondary comparison line
 # =============================================================================
 
-#' One panel: raw torque, active window shaded, MEAN (solid, current method)
-#' and MAX (dashed, hypothetical alternative) marked, n_samples annotated.
+# Method D's narrow averaging-window width (s) -- MUST equal the production
+# constant so this figure shows exactly what the pipeline does, not an
+# approximation (MFV_PEAK_WINDOW_S in muscle_force_vector.R).
+PEAK_WINDOW_S <- MFV_PEAK_WINDOW_S
+
+#' Faithful re-implementation of production Method D (.mfv_window_peak_means()
+#' in muscle_force_vector.R) on a single RAW torque trace, INCLUDING the
+#' 2026-07-22 duration guard: find the smoothed trace's peak within the STIM
+#' duration only [0, dur] (excluding the deactivation tail), then average RAW
+#' samples in a MFV_PEAK_WINDOW_S-wide window centered on that peak's time
+#' (clipped to the full active window). Falls back to the plain full-window
+#' mean (Method A) when the stim-duration search window is itself narrower
+#' than MFV_PEAK_WINDOW_S -- exactly the case for the ~0.05s dynamic L0
+#' bookend bursts, so this panel shows the REAL production behavior (Method D
+#' degrades to Method A there) rather than pretending a narrow window fits.
+.method_d_on_trace <- function(t_rel, torque_raw, dur, win_end, peak_window_s = PEAK_WINDOW_S) {
+  active <- t_rel >= 0 & t_rel <= win_end
+  search <- t_rel >= 0 & t_rel <= dur
+  full_mean <- mean(torque_raw[active], na.rm = TRUE)
+  n_samples <- sum(active, na.rm = TRUE)
+  t_search <- t_rel[search]; v_search <- torque_raw[search]
+  # duration guard (mirrors .mfv_window_peak_means): a search window shorter
+  # than the narrow averaging width can't confine the average to itself.
+  fell_back <- !(sum(is.finite(v_search)) >= 3L &&
+                   is.finite(diff(range(t_search, na.rm = TRUE))) &&
+                   diff(range(t_search, na.rm = TRUE)) >= peak_window_s)
+  if (fell_back) {
+    return(list(d_val = full_mean, mean_full = full_mean, t_peak_rel = NA_real_, peak_val = NA_real_,
+                narrow_lo = NA_real_, narrow_hi = NA_real_, fell_back = TRUE, n_samples = n_samples))
+  }
+  v_smooth <- .smooth_trace_display_only(v_search)
+  smax <- max(v_smooth, na.rm = TRUE); smin <- min(v_smooth, na.rm = TRUE)
+  use_max <- abs(smax - full_mean) >= abs(smin - full_mean)
+  peak_idx <- if (use_max) which.max(v_smooth) else which.min(v_smooth)
+  t_peak <- t_search[peak_idx]
+  peak_val <- v_smooth[peak_idx]  # value ON the smoothed trace at the detected peak (dot marker)
+  narrow <- active & t_rel >= (t_peak - peak_window_s / 2) & t_rel <= (t_peak + peak_window_s / 2)
+  d_val <- mean(torque_raw[narrow], na.rm = TRUE)
+  list(d_val = d_val, mean_full = full_mean, t_peak_rel = t_peak, peak_val = peak_val,
+       narrow_lo = t_peak - peak_window_s / 2, narrow_hi = t_peak + peak_window_s / 2,
+       fell_back = FALSE, n_samples = n_samples)
+}
+
+#' One panel: raw torque with the active window shaded (orange), Method D's
+#' narrow averaging window shaded (green) so the PI can SEE which samples are
+#' averaged, the Method D value as the PRIMARY (green solid) line, and the old
+#' full-window MEAN (Method A) as a SECONDARY (blue dashed) comparison line.
+#' The full-window mean is KEPT (not dropped) because Method D's duration
+#' guard FALLS BACK to it for short bursts (dynamic bookends), so showing both
+#' is what makes the fallback legible -- see this panel's dynamic row.
 .build_extraction_panel <- function(td, s, title, step_number = NULL) {
   dur <- s$stim_t1_s - s$stim_t0_s
   win_end <- dur + DEACTIVATION_WINDOW_S
   raw <- .raw_window(td, s$stim_t0_s - PLOT_PAD_S, s$stim_t1_s + DEACTIVATION_WINDOW_S + PLOT_PAD_S, s$stim_t0_s, step_number)
-  active <- raw$t_rel >= 0 & raw$t_rel <= win_end
-  n_samples <- sum(active, na.rm = TRUE)
-  mean_val <- mean(raw$torque_Nm[active], na.rm = TRUE)
-  max_val  <- max(raw$torque_Nm[active], na.rm = TRUE)
-  min_val  <- min(raw$torque_Nm[active], na.rm = TRUE)
-  # whichever of max/min is farther from the mean is the more relevant
-  # "extreme" comparison point (this force can be signed either way).
-  extreme_val <- if (abs(max_val - mean_val) >= abs(min_val - mean_val)) max_val else min_val
-  extreme_lab <- if (identical(extreme_val, max_val)) "MAX in window" else "MIN in window"
-  # MEAN/MAX/MIN annotations are always computed on RAW (unsmoothed) torque
-  # above, matching exactly what the pipeline itself averages -- this display
-  # smoothing (DISPLAY_SMOOTH_HZ low-pass, plot_force_vs_time.R) is ONLY to
-  # make the trace legible; it never feeds the annotated numbers.
+  # Method D and Method A are both computed on RAW (unsmoothed) torque,
+  # matching exactly what the pipeline averages -- the display smoothing
+  # (DISPLAY_SMOOTH_HZ low-pass) only makes the trace legible and only feeds
+  # Method D's PEAK-TIME search, never the averaged value itself.
+  m <- .method_d_on_trace(raw$t_rel, raw$torque_Nm, dur, win_end)
   raw$torque_smooth_Nm <- .smooth_trace_display_only(raw$torque_Nm)
 
-  ggplot(raw, aes(t_rel, torque_Nm)) +
-    annotate("rect", xmin = 0, xmax = win_end, ymin = -Inf, ymax = Inf, fill = "orange", alpha = 0.12) +
+  p <- ggplot(raw, aes(t_rel, torque_Nm)) +
+    annotate("rect", xmin = 0, xmax = win_end, ymin = -Inf, ymax = Inf, fill = "orange", alpha = 0.12)
+  if (!m$fell_back) {
+    p <- p + annotate("rect", xmin = m$narrow_lo, xmax = m$narrow_hi, ymin = -Inf, ymax = Inf,
+                      fill = "#059669", alpha = 0.22)
+  }
+  p <- p +
     geom_vline(xintercept = c(0, win_end), linetype = "dashed", color = "grey40", linewidth = 0.4) +
     geom_line(color = "grey75", linewidth = 0.3) +
     geom_line(aes(y = torque_smooth_Nm), color = "grey15", linewidth = 0.7) +
-    geom_hline(yintercept = mean_val, color = "#1d4ed8", linewidth = 1.0) +
-    geom_hline(yintercept = extreme_val, color = "#b91c1c", linewidth = 0.8, linetype = "dotted") +
-    labs(title = title,
-        subtitle = wrap_sub(sprintf("active window = %.2fs (n = %d samples) | pale = raw, dark = display-smoothed only | blue solid = MEAN of the ACTIVE window (%.4g, CURRENT method -- NOT a baseline; see bass16_passivebaselinemethod.png for the separate pre-stim baseline mean) | red dotted = %s (%.4g)",
-                           win_end, n_samples, mean_val, extreme_lab, extreme_val)),
+    geom_hline(aes(yintercept = m$mean_full, colour = "A: MEAN full window (old, secondary)"),
+               linewidth = 0.8, linetype = "dashed") +
+    geom_hline(aes(yintercept = m$d_val, colour = "D: narrow-window mean at smoothed peak (CURRENT)"),
+               linewidth = 1.1)
+  if (!m$fell_back) {
+    # dot on the smoothed trace at the DETECTED peak -- this is what anchors
+    # the green averaging window (peak SEARCH restricted to [0, stim duration]).
+    p <- p + annotate("point", x = m$t_peak_rel, y = m$peak_val, colour = "#059669",
+                      size = 2.6, shape = 18) +
+      annotate("segment", x = m$t_peak_rel, xend = m$t_peak_rel, y = -Inf, yend = m$peak_val,
+               colour = "#059669", linewidth = 0.4, linetype = "dotted")
+  }
+  p <- p +
+    scale_colour_manual(name = NULL, values = c(
+      "A: MEAN full window (old, secondary)" = "#1d4ed8",
+      "D: narrow-window mean at smoothed peak (CURRENT)" = "#059669"))
+  d_note <- if (m$fell_back) {
+    sprintf("stim duration %.2fs < %.2fs narrow window -> DURATION GUARD fires, Method D FALLS BACK to the full-window mean (D == A = %.4g); no green window drawn because none is used here",
+            dur, PEAK_WINDOW_S, m$d_val)
+  } else {
+    sprintf("green diamond = detected smoothed-trace peak (search restricted to [0, stim dur]) at t=%.2fs; green shade = Method D's %.2fs averaging window centered there (D = %.4g); blue dashed = old full-window MEAN (A = %.4g). Production runs this PER-CHANNEL on all 6 axes; this single torque trace is illustrative.",
+            m$t_peak_rel, PEAK_WINDOW_S, m$d_val, m$mean_full)
+  }
+  p + labs(title = title,
+        subtitle = wrap_sub(sprintf("active window = %.2fs (n = %d samples) | pale = raw, dark = display-smoothed only | %s | this active reading is NOT a baseline (see bass16_passivebaselinemethod.png)",
+                           win_end, m$n_samples, d_note)),
         x = "Time relative to stim onset (s)", y = "Inertia-corrected torque (N*m)") +
-    theme_bw(base_size = 10.5) + theme(plot.subtitle = element_text(size = 8))
+    theme_bw(base_size = 10.5) +
+    theme(plot.subtitle = element_text(size = 8), legend.position = "bottom")
 }
 
 p_ext_iso  <- .build_extraction_panel(iso_td,  iso_step,  sprintf("Isometric (angle %.1f deg)", iso_step$operating_point), step_number = iso_step$step_number)
@@ -210,8 +283,8 @@ p_ext_dyn <- if (have_dynamic) {
 
 p_extraction <- p_ext_iso / p_ext_isov / p_ext_dyn +
   patchwork::plot_annotation(
-    title = "Force extraction method: MEAN over the active window (current) vs. MAX/MIN (hypothetical alternative)",
-    subtitle = wrap_sub("bass16, one representative step per trial type | orange = active window [stim_t0, stim_t1 + deactivation_window] | this is what feeds every muscle_force_vector_N / muscle_force_Nm scalar in the pipeline", w = 110))
+    title = "Force extraction method (CURRENT = Method D): narrow-window mean at the smoothed peak",
+    subtitle = wrap_sub("bass16, one representative step per trial type | orange = active window [stim_t0, stim_t1 + deactivation_window]; green = the samples Method D actually averages | this is what feeds every muscle_force_vector_N / muscle_force_Nm scalar in the pipeline (2026-07-22 switch, replacing the old full-window mean shown in blue dashed for comparison)", w = 110))
 
 ggplot2::ggsave(file.path(OUT_DIR, "bass16_forceextractionmethod.png"), p_extraction,
                 width = 9, height = 11, dpi = 150)
@@ -223,10 +296,39 @@ cli::cli_alert_success("Wrote bass16_forceextractionmethod.png")
 #    runtime-shrunk (dynamic bookend) baseline window mechanics
 # =============================================================================
 
+#' A small zoomed inset over one baseline window [lo_rel, hi_rel] (relative to
+#' stim onset): the RAW samples that actually fall inside the window as points,
+#' plus the flat level (STATIC or POST mean) that the pipeline fits to them, so
+#' the PI can judge BY EYE whether that flat line is a good fit to the real
+#' passive scatter -- impossible to see on the full multi-second panel, where
+#' a ~0.2-0.4s window is a hairline. PI note: it is EXPECTED for the raw
+#' passive data to look scattered/fragmented here; that is the point, not a
+#' defect to smooth over.
+.baseline_window_inset <- function(raw, lo_rel, hi_rel, level_val, level_col, label) {
+  d <- raw[is.finite(raw$t_rel) & raw$t_rel >= lo_rel & raw$t_rel <= hi_rel, , drop = FALSE]
+  ggplot(d, aes(.data$t_rel, .data$torque_Nm)) +
+    geom_point(color = "grey30", size = 0.45, alpha = 0.7) +
+    geom_hline(yintercept = level_val, color = level_col, linewidth = 0.9) +
+    labs(title = label, x = NULL, y = NULL) +
+    theme_bw(base_size = 7) +
+    theme(plot.title = element_text(size = 7, face = "bold"),
+          axis.text = element_text(size = 6),
+          plot.background = element_rect(fill = "white", color = "grey55"),
+          panel.grid.minor = element_blank())
+}
+
 #' Segmented (isometric/isovelocity) panel: full trace from pre-baseline
 #' through post-baseline, both windows shaded, STATIC (flat, pre-only) and
 #' INTERPOLATED (pre->post linear, evaluated at the active-window midpoint)
 #' baseline levels both drawn for direct comparison.
+#'
+#' The raw samples INSIDE each baseline window are ALSO overlaid as bold,
+#' distinct-colored points (pre = dark red, post = purple) drawn ON TOP of the
+#' smoothed line, plus a zoomed inset per window -- so the fit of the flat
+#' baseline to the real passive scatter is judgeable regardless of the
+#' compressed x-scale (added 2026-07-22: the pale grey75 raw trace WAS already
+#' plotted underneath, but a ~0.2-0.4s window on a multi-second axis made the
+#' in-window scatter effectively invisible, masked by the smoothed line on top).
 .build_baseline_panel_segmented <- function(td, s, title, step_number) {
   dur <- s$stim_t1_s - s$stim_t0_s
   act_mid <- (s$stim_t0_s + (s$stim_t1_s + DEACTIVATION_WINDOW_S)) / 2
@@ -234,11 +336,17 @@ cli::cli_alert_success("Wrote bass16_forceextractionmethod.png")
   t_hi <- max(s$t_post_baseline_end_s, s$stim_t1_s + DEACTIVATION_WINDOW_S, na.rm = TRUE) + PLOT_PAD_S
   raw <- .raw_window(td, t_lo, t_hi, s$stim_t0_s, step_number)
 
-  pre_win  <- raw$t_rel >= (s$t_pre_baseline_start_s - s$stim_t0_s) & raw$t_rel <= (s$t_pre_baseline_end_s - s$stim_t0_s)
+  pre_lo_rel <- s$t_pre_baseline_start_s - s$stim_t0_s
+  pre_hi_rel <- s$t_pre_baseline_end_s - s$stim_t0_s
+  pre_win  <- raw$t_rel >= pre_lo_rel & raw$t_rel <= pre_hi_rel
   post_ok  <- is.finite(s$t_post_baseline_start_s) && is.finite(s$t_post_baseline_end_s)
   pre_mean  <- mean(raw$torque_Nm[pre_win], na.rm = TRUE)
+  post_lo_rel <- post_hi_rel <- NA_real_
+  post_win <- rep(FALSE, nrow(raw))
   post_mean <- if (post_ok) {
-    post_win <- raw$t_rel >= (s$t_post_baseline_start_s - s$stim_t0_s) & raw$t_rel <= (s$t_post_baseline_end_s - s$stim_t0_s)
+    post_lo_rel <- s$t_post_baseline_start_s - s$stim_t0_s
+    post_hi_rel <- s$t_post_baseline_end_s - s$stim_t0_s
+    post_win <- raw$t_rel >= post_lo_rel & raw$t_rel <= post_hi_rel
     mean(raw$torque_Nm[post_win], na.rm = TRUE)
   } else NA_real_
   t_pre_mid_rel  <- (s$t_pre_baseline_start_s + s$t_pre_baseline_end_s) / 2 - s$stim_t0_s
@@ -249,30 +357,49 @@ cli::cli_alert_success("Wrote bass16_forceextractionmethod.png")
   } else pre_mean
   raw$torque_smooth_Nm <- .smooth_trace_display_only(raw$torque_Nm)  # display only, see forceextractionmethod panel
 
+  pre_pts  <- raw[pre_win, , drop = FALSE]
+  post_pts <- raw[post_win, , drop = FALSE]
+
   p <- ggplot(raw, aes(t_rel, torque_Nm)) +
-    annotate("rect", xmin = s$t_pre_baseline_start_s - s$stim_t0_s, xmax = s$t_pre_baseline_end_s - s$stim_t0_s,
+    annotate("rect", xmin = pre_lo_rel, xmax = pre_hi_rel,
              ymin = -Inf, ymax = Inf, fill = "#1d4ed8", alpha = 0.12) +
     annotate("rect", xmin = 0, xmax = dur, ymin = -Inf, ymax = Inf, fill = "orange", alpha = 0.10) +
     geom_line(color = "grey75", linewidth = 0.3) +
     geom_line(aes(y = torque_smooth_Nm), color = "grey15", linewidth = 0.7) +
+    # bold raw samples INSIDE the pre-baseline window -- pop regardless of zoom
+    geom_point(data = pre_pts, aes(t_rel, torque_Nm), color = "#dc2626", size = 0.6, alpha = 0.75) +
     geom_hline(yintercept = pre_mean, color = "#1d4ed8", linewidth = 0.9) +
     geom_segment(x = t_pre_mid_rel, xend = act_mid_rel, y = pre_mean, yend = interp_at_act,
                 color = "#7c3aed", linewidth = 0.9, linetype = "dashed") +
     geom_point(x = act_mid_rel, y = interp_at_act, color = "#7c3aed", size = 2.2)
   if (post_ok) {
     p <- p +
-      annotate("rect", xmin = s$t_post_baseline_start_s - s$stim_t0_s, xmax = s$t_post_baseline_end_s - s$stim_t0_s,
+      annotate("rect", xmin = post_lo_rel, xmax = post_hi_rel,
                ymin = -Inf, ymax = Inf, fill = "#7c3aed", alpha = 0.12) +
+      geom_point(data = post_pts, aes(t_rel, torque_Nm), color = "#9333ea", size = 0.6, alpha = 0.75) +
       geom_hline(yintercept = post_mean, color = "#7c3aed", linewidth = 0.5, linetype = "dotted") +
       geom_segment(x = act_mid_rel, xend = t_post_mid_rel, y = interp_at_act, yend = post_mean,
                   color = "#7c3aed", linewidth = 0.9, linetype = "dashed")
   }
-  p + labs(title = title,
+  p <- p + labs(title = title,
           subtitle = wrap_sub(sprintf(
-            "pale = raw, dark = display-smoothed only | blue shade = PRE-baseline window (fixed, from protocol metadata) | purple shade = POST-baseline window | orange = stim | blue line = STATIC baseline (%.4g, pre-only) | purple dashed/dot = INTERPOLATED baseline at active-window midpoint (%.4g)%s",
+            "pale = raw, dark = display-smoothed | RED points = raw samples inside PRE window, PURPLE points = raw inside POST window (insets zoom each) | blue line = STATIC baseline (%.4g, pre-only) | purple dashed/dot = INTERPOLATED baseline at active midpoint (%.4g)%s",
             pre_mean, interp_at_act, if (!post_ok) " -- NO post-baseline available, interpolated == static here" else "")),
           x = "Time relative to stim onset (s)", y = "Inertia-corrected torque (N*m)") +
     theme_bw(base_size = 10.5) + theme(plot.subtitle = element_text(size = 7.5))
+
+  # Zoomed inset(s): raw scatter vs the fitted flat level, per baseline window.
+  pre_inset <- .baseline_window_inset(raw, pre_lo_rel, pre_hi_rel, pre_mean, "#1d4ed8",
+                                      "PRE window (raw vs STATIC)")
+  p <- p + patchwork::inset_element(pre_inset, left = 0.02, bottom = 0.62, right = 0.30, top = 0.99,
+                                    align_to = "panel")
+  if (post_ok) {
+    post_inset <- .baseline_window_inset(raw, post_lo_rel, post_hi_rel, post_mean, "#7c3aed",
+                                         "POST window (raw vs mean)")
+    p <- p + patchwork::inset_element(post_inset, left = 0.70, bottom = 0.62, right = 0.98, top = 0.99,
+                                      align_to = "panel")
+  }
+  p
 }
 
 p_base_iso  <- .build_baseline_panel_segmented(iso_td,  iso_step,  sprintf("Isometric (angle %.1f deg) -- FIXED metadata window", iso_step$operating_point), step_number = iso_step$step_number)
@@ -282,24 +409,40 @@ p_base_dyn <- if (have_dynamic) {
   # step_number = NULL: dyn_td is single_finite, see p_ext_dyn's matching comment above.
   raw <- .raw_window(dyn_td, dyn_step$t_pre_baseline_start_s - PLOT_PAD_S,
                      dyn_step$stim_t1_s + DEACTIVATION_WINDOW_S + PLOT_PAD_S, dyn_step$stim_t0_s, step_number = NULL)
+  pre_lo_rel <- dyn_step$t_pre_baseline_start_s - dyn_step$stim_t0_s
+  pre_hi_rel <- dyn_step$t_pre_baseline_end_s - dyn_step$stim_t0_s
   base_mean <- mean(dyn_td$torque_inertia_corrected_Nm[
     dyn_td$t.s >= dyn_step$t_pre_baseline_start_s & dyn_td$t.s <= dyn_step$t_pre_baseline_end_s], na.rm = TRUE)
   raw$torque_smooth_Nm <- .smooth_trace_display_only(raw$torque_Nm)  # display only, see forceextractionmethod panel
-  ggplot(raw, aes(t_rel, torque_Nm)) +
-    annotate("rect", xmin = dyn_step$t_pre_baseline_start_s - dyn_step$stim_t0_s,
-             xmax = dyn_step$t_pre_baseline_end_s - dyn_step$stim_t0_s,
+  pre_pts <- raw[is.finite(raw$t_rel) & raw$t_rel >= pre_lo_rel & raw$t_rel <= pre_hi_rel, , drop = FALSE]
+  # Explicit in-panel annotation of the REAL limitation (PI-directed, so it
+  # doesn't read as a rendering gap): dynamic single_finite files have no
+  # index_step_* table, so there is genuinely no post-stim baseline window to
+  # draw -- NOT fabricated to force symmetry with the segmented panels above.
+  y_anno <- max(raw$torque_smooth_Nm, na.rm = TRUE)
+  no_post_lab <- "NO post-baseline window exists for a dynamic bookend:\nsingle_finite files have no index_step_* table, so there is\nnothing to interpolate to. This is a real limitation, not a\nrendering gap -- a synthetic post-window is NOT fabricated."
+  p <- ggplot(raw, aes(t_rel, torque_Nm)) +
+    annotate("rect", xmin = pre_lo_rel, xmax = pre_hi_rel,
              ymin = -Inf, ymax = Inf, fill = "#1d4ed8", alpha = 0.12) +
     annotate("rect", xmin = 0, xmax = (dyn_step$stim_t1_s - dyn_step$stim_t0_s),
              ymin = -Inf, ymax = Inf, fill = "orange", alpha = 0.10) +
     geom_line(color = "grey75", linewidth = 0.3) +
     geom_line(aes(y = torque_smooth_Nm), color = "grey15", linewidth = 0.7) +
+    geom_point(data = pre_pts, aes(t_rel, torque_Nm), color = "#dc2626", size = 0.6, alpha = 0.75) +
     geom_hline(yintercept = base_mean, color = "#1d4ed8", linewidth = 0.9) +
-    labs(title = sprintf("Dynamic L0 bookend (%s) -- RUNTIME-SHRUNK window, no fixed metadata", dyn_step$muscle_side),
+    annotate("label", x = pre_hi_rel + (dyn_step$stim_t1_s - dyn_step$stim_t0_s) * 0.5, y = y_anno,
+             label = no_post_lab, hjust = 0, vjust = 1, size = 2.6,
+             color = "grey20", fill = "#fff7ed") +
+    labs(title = sprintf("Dynamic L0 bookend (%s) -- RUNTIME-SHRUNK window, NO post-baseline (see annotation)", dyn_step$muscle_side),
         subtitle = wrap_sub(sprintf(
-          "pale = raw, dark = display-smoothed only | blue shade = baseline window found by shrinking a candidate window until stim-free (extract_dynamic_l0_bookends.R) -- window width %.2fs (vs. isometric/isovelocity's FIXED metadata width above) | blue line = STATIC baseline (%.4g) -- NO post-baseline / interpolated counterpart exists for a dynamic bookend",
+          "pale = raw, dark = display-smoothed | RED points = raw samples inside the baseline window (inset zooms) | blue shade = baseline window found by shrinking a candidate window until stim-free (extract_dynamic_l0_bookends.R), width %.2fs (vs. isometric/isovelocity's FIXED metadata width above) | blue line = STATIC baseline (%.4g)",
           dyn_step$t_pre_baseline_end_s - dyn_step$t_pre_baseline_start_s, base_mean)),
         x = "Time relative to stim onset (s)", y = "Inertia-corrected torque (N*m)") +
     theme_bw(base_size = 10.5) + theme(plot.subtitle = element_text(size = 7.5))
+  dyn_inset <- .baseline_window_inset(raw, pre_lo_rel, pre_hi_rel, base_mean, "#1d4ed8",
+                                      "baseline window (raw vs STATIC)")
+  p + patchwork::inset_element(dyn_inset, left = 0.02, bottom = 0.62, right = 0.32, top = 0.99,
+                               align_to = "panel")
 } else {
   ggplot() + annotate("text", x = 0, y = 0, label = "No dynamic bookend detected in sampled files") + theme_void()
 }

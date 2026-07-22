@@ -422,6 +422,114 @@ spike is gone from `FLsuperplot`, and only Method A ever fires for dynamic
 bookends specifically -- isometric and isovelocity's genuinely long/
 sustained or ramping windows still get Method D as intended.
 
+**`FLsuperplot_..._normalized.png` is CONCAVE-UP (U-shaped) -- ROOT-CAUSED
+2026-07-22, NOT yet patched (prototype, PI decision pending).** PI question:
+why is the NORMALIZED FL superplot U-shaped (F/F0 high at both strain
+extremes, low near L0) -- inverted from the textbook bell curve? Investigated
+all four candidate causes with instrumented per-point data (dumped `pooled`
+to CSV, 241 points, 3 fish; also re-ran the whole superplot with a temporary
+`BENDER3_MFV_FORCE_PLAIN_MEAN` env toggle forcing Method A, since removed):
+- **RAW superplot is NOT U-shaped** (group-mean empirical force 0.08-0.44 N,
+  a gentle peak near L0), so the force estimates are not "wrong everywhere" --
+  the U is introduced by F/F0 NORMALIZATION only. This immediately rules out a
+  global extraction/baseline/sign problem.
+- **(d) Sign: RULED OUT.** Raw empirical force is 94-100% positive in EVERY
+  strain region (near-L0 <2.5%: 94.2% pos; mid: 100%; extreme >=15%: 100%) --
+  no concentric/eccentric sign cancellation near L0.
+- **(b) Passive baseline: RULED OUT** as the driver -- isometric's own-step
+  baselines yield all-positive, reasonable raw forces; the U is not in the raw
+  curve, so a strain-dependent baseline bias is not producing it.
+- **(c) F0 normalization + (a) Method D, INTERACTING: CONFIRMED cause.** The
+  extreme strain bins (|strain| >= 15%) are populated ONLY by isometric steps,
+  and at |strain| >= 20% almost entirely by ONE trial, `bass17_bender_15_
+  isometric` (bass17 = the documented ~2x-noise-floor fish). Its off-L0 forces
+  (~0.07-0.17 N) get divided by its own near-noise-floor L0 F0, giving F/F0 =
+  6-17x -> the U's arms. Near-L0 bins are dominated by dynamic bookend +
+  isovelocity-V0 points that self-normalize to ~1 by construction, pinning the
+  trough. The TRIGGER is the Method D switch: `bass17_bender_15`'s L0 reps have
+  `activation_snr` = 1.18/1.39/2.27/2.36 under Method A (all BELOW the 3.0 F0
+  gate -> F0 = NA -> bass17 dropped from the normalized plot) but 3.25/3.26/
+  5.09/5.36 under Method D (all ABOVE 3.0 -> admitted as F0, with force down to
+  0.0006 N geometric). Method D roughly DOUBLES the SNR of marginal low-SNR
+  flat holds because the peak-centered narrow window sits on the local noise
+  peak instead of averaging the whole window -- pushing bass17's L0 across the
+  gate. Extreme/trough ratio of the normalized empirical group mean: 4.8x
+  under Method D vs 1.6x under Method A (geometric: 11.5x vs 1.7x) -- i.e. the
+  U is overwhelmingly a Method-D-admitted-F0 artifact, not biology.
+- **Confirmed by direct comparison**, not inference: the raw plot (Method D)
+  is fine; the U appears only in the F/F0 companion; and forcing Method A
+  removes it by (correctly) excluding bass17's noise-floor L0 as F0.
+NOT patched: `FLsuperplot`/`FVsuperplot` are explicitly prototype. The clean
+fix is a threshold decision for the PI -- the `activation_snr >= 3` gate on F0
+measures activation-above-noise, not absolute force magnitude, so a near-zero-
+force L0 hold can still pass it and become a pathological denominator. Candidate
+fixes (propose one, PI to choose): (1) also gate F0 by absolute magnitude (F0
+must exceed the baseline force-noise floor, not just SNR); (2) require n_fish>1
+per strain bin before drawing a group-mean point (the extreme arms are
+single-trial bass17); (3) treat the RAW superplot as the trustworthy one and
+keep normalized as a flagged prototype. The RAW plot is unaffected and remains
+the reliable read for now.
+
+**REFINED / PARTLY REVISED 2026-07-22 (PI-requested decomposition + all-steps
+overlay tests).** The PI was skeptical of the "(b) passive baseline: RULED OUT"
+call above (baselines not settled). Two read-only tests were run:
+- **eff_arm-vs-angle: RULED OUT as a cause.** `eff_arm^2 = d^2 + r_m^2*cos^2(theta/2)`
+  is dominated by the dorsoventral offset `d` (~91-100 mm), so it barely moves
+  with bend (0.998-1.000x out to 37 deg; denominator inflation <=0.3%). The
+  geometric moment-arm does not create the concave-up.
+- **active/passive/residual decomposition (geometric u_hat, isometric, 92 steps,
+  `/tmp/diag_decomp.R`): the earlier "(b) ruled out" is TOO STRONG.** The
+  reported muscle force is a SMALL residual (3-13% of |passive|) sitting on a
+  large, bend-scaling, passive-dominated projection (active_proj ~= passive_proj,
+  both up to -4 to -5.7 N at extremes). For bass17 the residual is a NEAR-CONSTANT
+  ~3% of |passive| at every bend -> it tracks passive magnitude (subtraction
+  leakage), not independent activation. So a strain-dependent passive-subtraction
+  error DOES contribute to the raw concave-up; it is not purely an F/F0 artifact.
+- **all-steps force-vs-time overlays (`R/diag_forcedev_allsteps.R`,
+  `forcedevtiming_*_allsteps.png`) show WHY the residual is untrustworthy:**
+  bass17 isometric traces climb MONOTONICALLY for ~1 s AFTER stim-off (baseline
+  DRIFT / viscoelastic creep, not a 0.3 s twitch); every isovelocity step has a
+  large NON-ZERO pre-stim muscle force (+-3 N) because the windowed-MEAN passive
+  subtraction leaves the moving passive+inertia uncancelled pointwise.
+- **The concave-up is NOT universal across specimens** (per-fish quadratic +
+  magnitude/signed correlation on the isometric residual): **bass17** = clean
+  SYMMETRIC U (cor(F,|strain|)=+0.93, cor(F,signed)=+0.01; and it is drift-shaped
+  -> baseline artifact); **bass18** = MONOTONIC, force rises toward LENGTHENING
+  (cor(F,signed)=+0.78, L0 0.27 N -> +25% 0.56 N; passive-tension-on-stretch
+  signature, NOT a U); **bass16** = essentially FLAT (cor(F,|strain|)=+0.08). The
+  pooled FL U therefore emerges from heterogeneous per-fish shapes with the
+  extreme bins bass17-dominated, not a shared curve. Interpretation is blocked
+  until the isometric baseline drift and isovelocity pointwise subtraction are
+  fixed (item-2 work).
+
+**Isometric drift + FATIGUE + STIM tested 2026-07-22 (PI-requested).**
+- **Baseline drift (`R/diag_isometric_baseline_drift.R`,
+  `isometricbaselinedrift.png`):** the ~6 s isometric hold's raw torque creeps
+  monotonically (viscoelastic relaxation, amplitude ~|bend|); the static
+  pre-stim baseline leaves it in, so force drifts up for seconds after stim-off.
+  A pre->post INTERPOLATED baseline (existing `passive_force_Nm_interp` scheme)
+  removes it cleanly (post-baseline residual 0.005-0.010 -> 0.000). BUT it does
+  NOT flatten the in-stim PEAK the FL superplot samples (peak is early, where
+  static ~= interp), so the concave-up survives drift correction.
+- **Stim voltage: RULED OUT.** Every isometric step commands a CONSTANT 5.00 V
+  (recruitment blocks = left_unilateral/right_unilateral SIDE selection, NOT
+  amplitude recruitment). Force-per-volt normalization is a no-op (cor(F,|strain|)
+  unchanged to 2 dp for all fish). No per-step stim variation exists to correct.
+- **Fatigue: REAL but NOT the cause of the concave-up.** L0 force decays across
+  the session (bass17 L0 0.043->0.011 N, cor(F,step_order)=-0.66; bass18 -0.73).
+  DECISIVE test (`R/diag_concaveup_fatigue_stim.R`, `concaveupfatiguestim.png`):
+  WITHIN a single block (same fatigue state, same 5 V) force rises monotonically
+  with |bend| from that block's own fresh L0 (bass17 within-block cor(F,|strain|)
+  =+0.84/+0.91). Fatigue pushes the OPPOSITE way (each block starts at its fresh
+  L0), so it cannot create the arms; it only drags the pooled L0 reps down across
+  the session, mildly deepening the trough AND destabilizing F0 for the
+  normalized superplot. A fatigue correction (e.g. per-block fresh-L0 as F0)
+  addresses F0 stability, a SEPARATE problem, not the arms.
+- **Conclusion:** the residual concave-up = within-block force-proportional-to-
+  |bend| = the passive-subtraction residual (small difference of large passive),
+  confirmed independent of drift, fatigue, and stim. The real fix is accurate
+  (pointwise/interp) passive subtraction (item-2).
+
 ## Where things live (code map)
 - `muscle_force_vector.R` — core: baseline subtraction, û construction
   (empirical + geometric), wrench->force solve, sign standardization,
@@ -451,6 +559,18 @@ sustained or ramping windows still get Method D as intended.
   `muscleforcemethodsensitivity` diagnostics (2026-07-22, added):
   MEAN-vs-MAX-vs-smoothed-peak-vs-narrow-window extraction method
   comparison.
+- `diag_forcedev_allsteps.R` — `forcedevtiming_*_allsteps` diagnostics
+  (2026-07-22, added, PI-requested): cross-fish per-step vector-muscle-force
+  vs time overlays colored by strain / strain rate, to sanity-check the
+  active/passive/residual decomposition by eye (reveals bass17 isometric
+  baseline drift + isovelocity non-zero pre-stim offset).
+- `diag_isometric_baseline_drift.R` — `isometricbaselinedrift` diagnostic
+  (2026-07-22, added): static vs pre->post interpolated baseline per isometric
+  step, showing the ~6 s viscoelastic creep and that interp removes it but not
+  the sampled in-stim peak.
+- `diag_concaveup_fatigue_stim.R` — `concaveupfatiguestim` diagnostic
+  (2026-07-22, added): rules out stim-voltage (constant 5 V) and fatigue as the
+  concave-up cause via the within-block force-|bend| test.
 - `export_snr_summary_figures.R` — per-fish SNR-gated export pass into
   `figs_summary/`.
 - `muscle_force_vector_physics.md` — physics model + troubleshooting data

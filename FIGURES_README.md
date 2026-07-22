@@ -49,10 +49,16 @@ the point-selection design this feeds:
   (legacy zTorque-only vs. 6-axis vector force), `forceextractionmethod`
   (BUILT 2026-07-21, `bass16_forceextractionmethod.png`,
   `R/diag_force_extraction_baseline.R` -- one representative step per trial
-  type, showing the active window and marking that the CURRENT method is
-  MEAN-over-window, not max-in-window, with n_samples annotated; distinct
-  from `muscleforceestimate`, which is about WHICH axes/method, not which
-  time-window statistic.
+  type. REBUILT 2026-07-22 (was the old full-window MEAN as-of 2026-07-21):
+  now shows what CURRENT production does = Method D (narrow-window mean of
+  RAW samples centered on the active window's own smoothed-trace peak,
+  duration-guarded), SHADING the actual averaging window in green (matching
+  `muscleforcemethodcompare.png`) so the averaged samples are a visible
+  REGION, not just a horizontal reference value; the old full-window MEAN is
+  kept as a secondary blue-dashed comparison line specifically so the
+  dynamic-bookend panel's DURATION-GUARD fallback (Method D -> plain mean for
+  the ~0.05s bursts) is legible. Distinct from `muscleforceestimate`, which
+  is about WHICH axes/method, not which time-window statistic.
   BUG FIXED same day: `.raw_window()` filtered `td` (the WHOLE trial file,
   16 steps) by time-range alone, with no `step_number` filter -- but a
   segmented_finite file's `t.s` RESETS TO 0 AT THE START OF EVERY STEP
@@ -71,7 +77,15 @@ the point-selection design this feeds:
   (pre-/post-stim linear interpolation) side by side for isometric and
   isovelocity, PLUS the dynamic L0 bookend's fundamentally different
   runtime-shrunk-window mechanism with no post-baseline counterpart, all
-  three trial types in one figure), `torquesmoothingmethod`,
+  three trial types in one figure. ENHANCED 2026-07-22 so the flat baseline
+  line's FIT to the real passive data is judgeable by eye: the raw samples
+  INSIDE each baseline window are now overlaid as bold distinct-colored points
+  (pre = red, post = purple) on top of the smoothed trace, plus a zoomed inset
+  per window -- the pale raw trace was always plotted but a ~0.2-0.4s window on
+  a multi-second axis made its in-window scatter invisible. The dynamic panel
+  also carries an explicit in-panel annotation that NO post-baseline window
+  exists for single_finite files -- a real limitation, not a rendering gap, and
+  deliberately NOT fabricated for symmetry.), `torquesmoothingmethod`,
   `sonosmoothingmethod`, `sonotiminglag`, `forcedevtiming` (dual-tagged,
   see below), `fatiguetimeline` (dual-tagged), `snrfiltereffect`,
   `signconventioncheck` (added 2026-07-21, NOT YET BUILT -- confirms
@@ -122,6 +136,45 @@ the point-selection design this feeds:
   ~0.07s WHETHER OR NOT stim is present -- angle-matched passive subtraction
   reduces but does not fully cancel this, leaving a residual in
   `force_yTorque_N` for moving isovelocity steps.
+  `apparatusinertiafit` (BUILT 2026-07-22, `apparatusinertiafit.png`,
+  `R/diag_apparatus_inertia.R` -- PRE-WIRING evidence for generalizing the
+  inertial correction (uniaxial -> multi-axial) and for fixing Gap 1 (apparatus
+  MOI is a silent no-op: `calibration_inertia_apparatus_moi_gram_millimeter_
+  squared` is NaN in every real trial, so `02_deconvolve.R` drops the apparatus
+  term -- which is ~10x the specimen term at real geometries). On the 11-trial
+  empty-apparatus corpus: per-channel (all 6 F/T axes) empirical inertia I vs
+  angular acceleration (which axes actually carry an I*alpha term), how well
+  geometry (aor, width) explains each channel's I (F4 vs F5, PI decision 1), and
+  validation of the stored zTorque F4 fit. NOTE on PI decision 3: this corpus
+  excites only ONE rotational DOF (bending), so it can identify a per-channel
+  I-vs-alpha VECTOR, not a full cross-axis inertia tensor.) and
+  `multiaxialinertiacompare` (BUILT 2026-07-22, `multiaxialinertiacompare.png`,
+  same script -- on real specimen trials, per-axis raw torque vs
+  (raw - sign*I*alpha), with the correction sign auto-chosen on the most
+  inertia-dominated window (PI decision 2, since the JSON's stored sign was never
+  rig-verified), per-axis variance-reduction quantified, and the yTorque
+  residual re-examined against `ytorqueinertialtiming` (PI decision 4). Both are
+  PRE-WIRING diagnostics: they change nothing in the production correction path.)
+  `specimeninertiacompare` (BUILT 2026-07-22, `specimeninertiacompare.png`,
+  `R/diag_specimen_inertia.R` -- PI follow-up to `apparatusinertiafit`: "run a
+  similar analysis on specimen inertia using lxwxh frustum dimensions in metadata
+  and provided tissue density." Two estimates: (1) ANALYTIC -- solid elliptical
+  cylinder from `measurement_specimen_local_body_height/width_millimeter`,
+  `measurement_clamp_separation_millimeter`, and
+  `measurement_specimen_density_gram_per_cubic_millimeter`, full inertia tensor
+  about the sensor origin (bending term validated vs stored
+  `calibration_inertia_specimen_moi`; yTorque needs the product of inertia
+  I_yz = -m*y_cm*d, ZERO unless the specimen CoM is mediolaterally offset); (2)
+  EMPIRICAL -- on passive no-stim ramps, per-channel `channel ~ angle + alpha`
+  separates elastic (angle) from inertial (alpha). RESULT: yTorque's alpha
+  partial-R^2 on passive ramps is ~0.0003 (three fish) -- yTorque carries NO
+  meaningful I*alpha term from apparatus OR specimen, and the corrected traces sit
+  exactly on the raw (panel b). So the `ytorqueinertialtiming` residual is NOT an
+  inertial (I*alpha) effect; consistent with that diagnostic's own finding that
+  the Ty extremum tracks the VELOCITY feature, it is velocity-correlated
+  (viscous/damping or centrifugal ~omega^2), which a multi-axial I*alpha
+  correction will not fix. yForce/xTorque/zTorque DO carry real inertial terms
+  (alpha partial-R^2 0.15-0.25). PRE-WIRING; changes nothing in production.)
   `muscleforcemethodcompare` (BUILT 2026-07-22,
   `muscleforcemethodcompare.png`, `R/diag_force_extraction_methods_compare.R`
   -- PI follow-up on `forceextractionmethod`: "max in window is probably NOT
@@ -198,7 +251,39 @@ the point-selection design this feeds:
   step force development timing; near-L0 force vs. real elapsed session
   time), so they may appear in both places. `forcedevtiming` is
   OVERLAY-ONLY as of 2026-07-21 (PI feedback: the faceted per-step variant
-  wasn't useful and was dropped, code and files both).
+  wasn't useful and was dropped, code and files both). ADDED 2026-07-22
+  (PI-requested, to sanity-check the active/passive/residual decomposition
+  by eye):   `forcedevtiming_isometric_allsteps.png` /
+  `forcedevtiming_isovelocity_allsteps.png` (`R/diag_forcedev_allsteps.R`,
+  read-only) -- cross-fish (bass16/17/18 faceted), EVERY step drawn as its
+  own line colored by held strain (isometric) / strain rate (isovelocity),
+  y = PRODUCTION vector muscle force (`force_ts$muscle_force_vector_N`, RAW
+  sign), stim window shaded. These plot the exact quantity the FL/FV
+  superplots sample, so the concave-up and the baseline-drift / non-zero
+  pre-stim offset that drive it are directly visible per step.
+  `isometricbaselinedrift` (BUILT 2026-07-22, `isometricbaselinedrift.png`,
+  `R/diag_isometric_baseline_drift.R`, read-only, cross-fish) -- isometric
+  baseline-DRIFT test: per step, muscle force under the CURRENT static
+  pre-stim baseline (left) vs a pre->post INTERPOLATED baseline (right; same
+  linear scheme as `passive_force_Nm_interp`). Shows the ~6 s viscoelastic
+  creep the static baseline leaves in (force drifts up for seconds after
+  stim-off, scaling with |bend|) and that interpolation returns it to ~0
+  after the stim transient. Worked in the single-axis inertia-corrected
+  torque domain (carries pre/post windows), NOT the 6-axis vector the FL
+  superplot samples -- the drift MECHANISM is torque-level; the interp does
+  NOT flatten the in-stim PEAK the superplot samples (peak is early, where
+  static ~= interp).
+  `concaveupfatiguestim` (BUILT 2026-07-22, `concaveupfatiguestim.png`,
+  `R/diag_concaveup_fatigue_stim.R`, read-only, cross-fish) -- tests whether
+  the residual in-stim concave-up is FATIGUE or a per-step STIMULUS effect.
+  Both ruled out as the cause: stim is a CONSTANT 5.00 V on every step
+  (recruitment blocks vary SIDE, not amplitude -> force-per-volt is a no-op);
+  fatigue is REAL (L0 force decays across the session, bass17 cor(F,order)
+  =-0.66) but cannot produce the arms because WITHIN a single block (fixed
+  fatigue + fixed stim) force still rises with |bend| from that block's own
+  fresh L0 (bass17 within-block cor(F,|strain|)=+0.88). Each line = one block,
+  colored by session order. The arms are the within-block force-|bend|
+  residual (passive-subtraction problem), not fatigue/stim.
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),
