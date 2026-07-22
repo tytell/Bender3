@@ -62,7 +62,7 @@ p2 <- ggplot(wt_fv, aes(strain_rate_pct_s, force_geom_N,
   facet_wrap(~fish, scales = "free_y") +
   scale_color_manual(values = sides_pal, name = "muscle side") +
   labs(title = "Within-trial FV (isovelocity) -- each line = ONE trial's own velocity series, geometric u_hat, POINTWISE angle-matched passive",
-       subtitle = "+ = concentric/shortening, - = eccentric/lengthening. Negative excursions at high |rate| = residual inertial-transient over-subtraction (flagged 2nd-order limit).",
+       subtitle = "+ = concentric/shortening, - = eccentric/lengthening. All lines strictly angle-matched (exact or nearest same-sign-velocity stim-off ramp, see analysis log) -- no static-baseline-fallback rows.",
        x = "Muscle shortening strain rate (%/s, signed)", y = "Muscle force (N, geometric u_hat)") +
   theme_bw(10) + theme(plot.subtitle = element_text(size = 8))
 ggsave(file.path(OUT, "fvtiers_1_within_trial.png"), p2, width = 12, height = 4.5, dpi = 140)

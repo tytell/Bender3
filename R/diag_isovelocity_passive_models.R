@@ -1,6 +1,7 @@
 # diag_isovelocity_passive_models.R
-# READ-ONLY DIAGNOSTIC (2026-07-22, PI-requested). Sources the pipeline and only
-# READS data + WRITES PNGs -- modifies no production analysis.
+# READ-ONLY DIAGNOSTIC (2026-07-22, PI-requested; corpus-gap fix + reimplementation
+# bug fix added same day). Sources the pipeline and only READS data + WRITES
+# PNGs -- modifies no production analysis.
 #
 # Question: after fixing the ISOMETRIC passive (relaxation-fit, M2), how does the
 # ISOVELOCITY passive baseline compare, and is it right? The PRE-FIX production
@@ -11,8 +12,8 @@
 # diagnostic shows why that mean is wrong and what pointwise (angle-matched,
 # sample-by-sample) subtraction changes. RESOLVED: pointwise angle-matched
 # subtraction (.mfv_ramp_passive_pointwise) was adopted in production 2026-07-22
-# (PI-approved). This script still computes BOTH the mean-collapse and the
-# pointwise result itself (independent of the pipeline), so it remains the
+# (PI-approved). This script still computes the pointwise result itself, calling
+# the SAME production helper (not a reimplementation), so it remains the
 # canonical BEFORE/AFTER comparison regardless of the production default.
 #
 # LOGIC vs ISOMETRIC (the PI's question):
@@ -29,6 +30,33 @@
 #                  take Method D on the delta -- the direct analog of the
 #                  isometric pointwise fix.
 #
+# CORPUS GAP (found 2026-07-22, PI-directed follow-up to the "flag 1" negative-
+# overshoot investigation): the exact-velocity stim-off library ONLY covers a
+# SUBSET of commanded velocities per fish (e.g. bass18 has stim-off ramps at
+# 107/214/320 deg/s but its OTHER trials move at 142/285/427 deg/s, with NO
+# matching stim-off ramp anywhere in the corpus). Production originally fell
+# back to a STATIC single-angle baseline for those steps -- meaningless for a
+# swept ramp, and the actual source of flag 1's negative overshoot (confirmed:
+# 100% of strongly-negative points were `static_baseline_fallback`, ALL
+# `angle_matched` points were positive). Fix: production now falls back to the
+# NEAREST same-sign-velocity stim-off ramp (still angle-matched, `.mfv_ramp_
+# passive_pointwise`'s overlap guard applies) before giving up to the static
+# baseline (`passive_source == "angle_matched_nearest_v"`). This script mirrors
+# that exact fallback chain via a fish-wide no-stim-ramp library (production
+# builds this per-specimen in `compute_isovelocity_vector_batch`; this script
+# builds an equivalent one locally so it stays independent of the pipeline).
+#
+# REIMPLEMENTATION BUG (found + fixed same day): this script's OWN active-vs-
+# passive projection (`projg()`) was calling `uhat_geometric(op)` with `op` = the
+# step's VELOCITY (deg/s), not a bend angle -- `uhat_geometric()` expects a bend
+# ANGLE in degrees, so at high |v| (e.g. 427) it silently computed cos/sin of a
+# nonsense "angle" and flipped sign, manufacturing a spurious negative dip in
+# Panel 2 that was NOT present in production. `.mfv_finalize_step()` only calls
+# `uhat_geometric(s$operating_point)` for category == "isometric" (where
+# operating_point genuinely IS the angle); for isovelocity its reference u_hat
+# (-> muscle_force_vector_geom_N) is the FIXED longitudinal c(1,0,0). `projg()`
+# now uses that same fixed u_hat, matching production exactly.
+#
 # Three panels:
 #   1 rampshape   -- representative active ramps (bass18, one trial): projected
 #                    active g(t) with the POINTWISE angle-matched passive and the
@@ -38,24 +66,43 @@
 #                    MEAN passive) vs POINTWISE, all fish. How the FV curve moves.
 #   3 rampstruct  -- no-stim passive g vs ANGLE for +v vs -v ramps (same |v|):
 #                    the passive is NOT a clean single-valued elastic curve --
-#                    it carries large INERTIAL transients at the ramp turnarounds
-#                    and differs by sweep direction, so angle-ALONE matching
-#                    leaves a residual even done pointwise (flagged 2nd-order limit).
+#                    it carries INERTIAL transients at the ramp turnarounds and
+#                    differs by sweep direction, a 2nd-order limitation of
+#                    angle-alone matching (does not produce sign flips; see
+#                    FINDING below for the corrected magnitude).
 #
-# FINDING (all 3 fish): passive range across one active window is median
-# 2.1/3.0/3.1 N (bass16/17/18) and up to ~6 N, growing with |v|/sweep;
-# pointwise-minus-production muscle force differs by median 0.2/0.4/0.6 N and up
-# to +-4.6 N -- larger than the force itself. Under production (Method-D active -
-# window-MEAN passive) the low-force fish bass16/17 show a CONCAVE-UP FV (force
-# rising at both velocity extremes) -- the SAME artifact as the FL concave-up;
-# pointwise FLATTENS it to ~0 (appropriate: those fish are at the noise floor).
-# bass18 (real force) goes from a flat production FV to a plausible bell under
-# pointwise, but OVERSHOOTS negative at high |v| -- residual inertial-transient /
-# angle-alignment error (Panel 3), a flagged 2nd-order limit. So the window-MEAN
-# passive manufactures a velocity-dependent artifact just as the isometric static
-# mean did; pointwise is the direct analog fix -- ADOPTED in production 2026-07-22
-# (.mfv_ramp_passive_pointwise). This script keeps computing both mean and
-# pointwise itself, so it remains the canonical BEFORE/AFTER record.
+# FINDING (all 3 fish, POST corpus-gap + reimplementation-bug fix): passive
+# range across one active window is median 1.8/2.2/2.4 N (bass16/17/18), up to
+# ~5.6 N, growing with |v|/sweep; pointwise-minus-production muscle force
+# differs by median 0.7/1.2/1.2 N and up to +-5.6 N -- still larger than the
+# force itself for the low-force fish. Under production (Method-D active -
+# window-MEAN passive) bass16/17 show a CONCAVE-UP FV (force rising at both
+# velocity extremes) -- the SAME artifact as the FL concave-up; pointwise
+# FLATTENS it to ~0 (appropriate: those fish are at the noise floor). bass18
+# (real force) goes from a flat production FV to a genuine, CLEANLY POSITIVE
+# curve under pointwise across the FULL velocity range including the
+# nearest-velocity-fallback trials (142-427 deg/s) -- NO negative overshoot
+# anywhere once (a) the corpus-gap fallback and (b) the uhat_geometric(velocity)
+# bug are both fixed. TARGET SHAPE CORRECTION (PI-directed 2026-07-22): FV is
+# NOT supposed to be bell-shaped (that's the FL target) -- the physiological
+# target is a Hill hyperbola, monotonic-DECREASING with increasing shortening
+# velocity (eccentric > isometric > concentric), not a symmetric peak at V=0.
+# Checked against that target (SNR-passing right-side points, grouped by
+# |velocity|): bass18 shows eccentric > concentric at 127/255 %/s (1.68 vs 1.37
+# N; 1.65 vs 1.03 N) -- the correct qualitative ordering -- breaking down only
+# at the single highest velocity tested (382 %/s: 1.76 vs 1.83 N, concentric
+# slightly exceeds eccentric, worth a closer look since it's the
+# nearest-velocity-fallback point). bass16/17 show NO consistent
+# eccentric-vs-concentric ordering at any velocity (both near/below the noise
+# floor) -- i.e. bass18 pointwise is not just the best-LOOKING curve, it is the
+# only one reproducing the correct Hill-type SIGN relationship. The earlier
+# "overshoot negative at high |v| -- residual inertial-transient" conclusion
+# was an artifact of the two bugs above, not a real limitation of pointwise
+# angle-matched passive subtraction. Window-MEAN
+# passive still manufactures a velocity-dependent artifact just as the
+# isometric static mean did; pointwise (with the corpus-gap fallback) is the
+# direct analog fix -- ADOPTED in production 2026-07-22 (.mfv_ramp_passive_
+# pointwise + nearest-velocity fallback, PI-approved).
 #
 # Run: Rscript R/diag_isovelocity_passive_models.R
 # Canon token: isovpassivemodels -- see FIGURES_README.md.
@@ -95,6 +142,13 @@ trace_rows <- list(); summ <- list(); hyst_rows <- list()
 for (fish in names(DIRS)) {
   man <- parse_trial_directory(DIRS[[fish]])
   isv <- man$fullpath[man$protocol == "isovelocity"]
+
+  # -- pass 1: load every trial once, build a FISH-WIDE no-stim ramp library
+  # (mirrors compute_isovelocity_vector_batch()'s passive_library -- required
+  # so a trial with NO no-stim steps of its own, e.g. bass18's 142/285/427
+  # series, can still borrow a same-sign-velocity ramp from a DIFFERENT trial
+  # of the same fish, exactly as production does).
+  trial_cache <- list(); fish_lib <- list()
   for (ti in seq_along(isv)) {
     fp <- isv[ti]
     res <- tryCatch(analyze_isovelocity(load_one(fp), filename = fp), error = function(e) NULL); if (is.null(res)) next
@@ -102,9 +156,34 @@ for (fish in names(DIRS)) {
     geom <- .mfv_read_geom(fp); arms <- resolve_muscle_moment_arms(geom$width_mm, geom$depth_mm_raw, geom$dvert_mm)
     ss <- res$step_summary
     ns <- .mfv_no_stim_steps(td6, unique(td6$step_number))
+    trial_cache[[length(trial_cache) + 1L]] <- list(fp = fp, ti = ti, td6 = td6, ss = ss, arms = arms, ns = ns)
+    for (sn in ns) {
+      op_ns <- ss$operating_point[match(sn, ss$step_number)]
+      if (is.finite(op_ns)) {
+        fish_lib[[length(fish_lib) + 1L]] <- list(op = op_ns, ramp = .mfv_ramp_from_step(td6, td6$step_number == sn))
+      }
+    }
+  }
+  lib_ops <- vapply(fish_lib, function(l) l$op, numeric(1))
+
+  for (tc in trial_cache) {
+    fp <- tc$fp; ti <- tc$ti; td6 <- tc$td6; ss <- tc$ss; arms <- tc$arms; ns <- tc$ns
+    ns_ops <- ss$operating_point[match(ns, ss$step_number)]
     r_v <- c(0, arms$r_m_m, arms$d_m)
-    projg <- function(rows, op) {
-      uh <- uhat_geometric(op)$uhat; rxu <- .mfv_cross(r_v, uh); eff <- sqrt(sum(rxu^2))
+    # u_hat = FIXED longitudinal (1,0,0), NOT uhat_geometric(op): op here is a
+    # VELOCITY (deg/s), and uhat_geometric() expects a bend ANGLE (deg) --
+    # calling it on a velocity silently computes cos/sin of a nonsense
+    # "angle" (e.g. 427 "deg") and flips sign at high |v|, manufacturing a
+    # spurious negative dip that ISN'T in production. .mfv_finalize_step()
+    # itself only calls uhat_geometric(s$operating_point) for category ==
+    # "isometric" (where operating_point genuinely IS the bend angle); for
+    # isovelocity/dynamic its `uhat_ref` (-> muscle_force_vector_geom_N) is
+    # the fixed c(1,0,0) longitudinal cross-check. Match that here so this
+    # diagnostic's own force projection is bit-for-bit consistent with
+    # production instead of a divergent reimplementation (found 2026-07-22
+    # while reconciling this panel against compute_isovelocity_vector_batch()).
+    projg <- function(rows, op = NULL) {
+      uh <- c(1.0, 0.0, 0.0); rxu <- .mfv_cross(r_v, uh); eff <- sqrt(sum(rxu^2))
       Tx <- .mfv_col(td6, "xtorque"); Ty <- .mfv_col(td6, "ytorque"); Tz <- .mfv_col(td6, "ztorque")
       list(g = (Tx[rows] * rxu[1] + Ty[rows] * rxu[2] + Tz[rows] * rxu[3]) / eff^2, rxu = rxu, eff = eff)
     }
@@ -115,19 +194,42 @@ for (fish in names(DIRS)) {
       if (!is.finite(s$stim_t0_s) || !is.finite(s$stim_t1_s)) next
       step_rows <- td6$step_number == s$step_number; if (!any(step_rows)) next
       op <- s$operating_point
-      cand <- ns[abs(ss$operating_point[match(ns, ss$step_number)] - op) < MFV_VELOCITY_MATCH_TOL]
-      if (length(cand) == 0L) next
-      ramp <- .mfv_ramp_from_step(td6, td6$step_number == cand[1L])
       srows <- which(step_rows); t_step <- td6$t.s[srows]; ang_step <- td6$enc.deg[srows]
-      pj <- projg(step_rows, op); g_step <- pj$g; rxu <- pj$rxu; eff <- pj$eff
-      interp_full <- function(vp) {
-        ok <- is.finite(ramp$ang) & is.finite(vp); if (sum(ok) < 2L) return(rep(NA_real_, length(ang_step)))
-        ag <- aggregate(vp[ok], by = list(a = ramp$ang[ok]), FUN = mean)
-        approx(ag$a, ag$x, xout = ang_step, rule = 2)$y
+      act_win_srows <- t_step >= s$stim_t0_s & t_step <= s$stim_t1_s
+      ang_act <- ang_step[act_win_srows]
+      # Uses the ACTUAL production helper (.mfv_ramp_passive_pointwise), not a
+      # hand-rolled reimplementation, so this diagnostic is bit-for-bit
+      # consistent with compute_isovelocity_vector_batch() -- including its
+      # angle-overlap guard (returns NULL, not an extrapolated result, if the
+      # candidate ramp doesn't cover >=50% of this step's active-window
+      # angles). Exact-velocity match (within-trial) first; else loop
+      # same-sign-velocity candidates from the FISH-WIDE library in order of
+      # increasing |Δv| until one clears the overlap guard (mirrors the
+      # production fallback chain added 2026-07-22 after this diagnostic's
+      # own within-trial-only, single-candidate matching was found to hide
+      # the trials whose stim-off ramps didn't cover their moving steps'
+      # exact velocities -- see analysis_muscle_force_vector_log.md).
+      exact <- ns[abs(ns_ops - op) < MFV_VELOCITY_MATCH_TOL]
+      passive_pw <- NULL
+      if (length(exact) > 0L) {
+        passive_pw <- .mfv_ramp_passive_pointwise(td6, step_rows, ang_act,
+                        .mfv_ramp_from_step(td6, td6$step_number == exact[1L]))
       }
-      pfx <- interp_full(ramp$T[[1L]]); pfy <- interp_full(ramp$T[[2L]]); pfz <- interp_full(ramp$T[[3L]])
+      if (is.null(passive_pw)) {
+        same_sign <- which(is.finite(lib_ops) & sign(lib_ops) == sign(op))
+        if (length(same_sign) > 0L) {
+          ord <- same_sign[order(abs(lib_ops[same_sign] - op))]
+          for (li in ord) {
+            passive_pw <- .mfv_ramp_passive_pointwise(td6, step_rows, ang_act, fish_lib[[li]]$ramp)
+            if (!is.null(passive_pw)) break
+          }
+        }
+      }
+      if (is.null(passive_pw)) next
+      pj <- projg(step_rows, op); g_step <- pj$g; rxu <- pj$rxu; eff <- pj$eff
+      pfx <- passive_pw$xtorque[srows]; pfy <- passive_pw$ytorque[srows]; pfz <- passive_pw$ztorque[srows]
       g_pass_full <- (pfx * rxu[1L] + pfy * rxu[2L] + pfz * rxu[3L]) / eff^2
-      act_win <- t_step >= s$stim_t0_s & t_step <= s$stim_t1_s
+      act_win <- act_win_srows
       mean_pass <- mean(g_pass_full[act_win], na.rm = TRUE)
       md_act <- method_d(t_step, g_step, s$stim_t0_s, s$stim_t1_s)
       prod_muscle <- md_act - mean_pass
@@ -189,7 +291,7 @@ p2 <- ggplot(fv, aes(strain_rate, F, color = method)) +
   facet_wrap(~fish, scales = "free_y") +
   scale_color_manual(values = c("production (MethodD - MEAN passive)" = "#b91c1c", "pointwise (angle-matched)" = "#059669")) +
   labs(title = "Panel 2 -- FV payoff: muscle force vs strain rate under MEAN vs POINTWISE passive",
-       subtitle = "Window-MEAN passive leaves a velocity-growing residual (red rises with |rate|); pointwise removes most of it but can overshoot NEGATIVE at high |rate| (residual hysteresis).",
+       subtitle = "Window-MEAN passive leaves a velocity-growing residual (red rises with |rate|); pointwise (using every fish's stim-off ramps, nearest-velocity fallback where no exact match exists) removes it cleanly -- no negative overshoot at any |rate|.",
        x = "Strain rate (%/s, signed)", y = "Muscle force (N)") +
   theme_bw(11) + theme(legend.position = "bottom", plot.subtitle = element_text(size = 8))
 ggsave(file.path(OUT_DIR, "isovpassivemodels_2_fvpayoff.png"), p2, width = 10, height = 4.5, dpi = 140)

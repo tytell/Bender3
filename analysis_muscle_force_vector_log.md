@@ -699,6 +699,99 @@ across-protocol FLsuperplot; grand mean concave-down, peak near L0). Per-fish
 run_fv_fl_power_pipeline rebuilt for all 3 fish. NOT YET COMMITTED (continuing
 the leave-uncommitted instruction).
 
+**Post-commit flags investigated 2026-07-22 (PI-directed "commit and push, then
+address two flags").** Two residual concerns from the pointwise-passive rebuild:
+(1) a negative-overshoot at extreme eccentric velocity in the FV superplots,
+(2) the empirical-u_hat FV staying U-shaped. Initial pass (before the corpus-gap
+fix below) ruled out turnaround-transient and low-SNR-noise as the overshoot's
+cause (all strongly-negative points had HIGH SNR, median 11.8) and characterized
+the empirical-u_hat bias (`dF/||dF||` is always-positive-biased at extreme
+velocity, masking the true eccentric sign) -- concluding geometric/longitudinal
+u_hat should be the reported-primary FV method. This left flag 1 open pending a
+PI decision, since no simple fix (const-velocity restriction, SNR gate) resolved
+it.
+
+**Flag 1 ROOT-CAUSED + FIXED 2026-07-22 (PI-directed: "use the stim-off ramps to
+calculate position AND velocity-specific isovelocity baseline -- that's the KEY
+ingredient, cooked into the experimental design").** Verified the pointwise
+angle-matched subtraction (above) DOES do exactly that -- but only for an EXACT
+velocity match (tol 1.0 deg/s). Root cause: bass18's stim-off ("no-stim") ramps
+only cover a SUBSET of its commanded velocities (107/214/320 deg/s from
+`bender_03`); its OTHER 5 isovelocity trials move at a DIFFERENT, non-overlapping
+set (142/285/427 deg/s) with NO stim-off ramp anywhere in the corpus at those
+speeds. Those steps fell through to the STATIC single-angle pre-stim baseline --
+meaningless for a swept ramp -- which was confirmed to be the ENTIRE overshoot:
+`angle_matched` bass18 rows were 100% positive (median geom force +1.51 N, min
++0.77 N) while `static_baseline_fallback` rows were the overshoot itself (median
+-0.36 N, min -5.86 N). FIX (`R/muscle_force_vector.R`,
+`compute_isovelocity_vector_batch`): added a fallback tier between the exact
+match and the static baseline -- the NEAREST same-sign-velocity stim-off ramp
+(still angle-matched via `.mfv_ramp_passive_pointwise`, so its overlap guard
+still applies; loops through candidates in order of increasing |Δv| until one
+clears the guard). New `passive_source` value: `"angle_matched_nearest_v"`.
+Verified via the real `compute_isovelocity_vector_batch()` output: bass18's
+previously-fallback steps (142/285/427 deg/s) are now 100% positive too (median
+geom force +1.64 N, min +0.72 N, i.e. IN LINE with the 107/214/320 series, as
+physically expected) -- confirmed across the FULL corpus with `passive_source`
+breakdown, not spot-checked. Also fixed two bugs found while reconciling the
+`isovpassivemodels` diagnostic against this corrected production behavior: (a)
+the diagnostic built its no-stim library PER-TRIAL, not per-fish, so it couldn't
+even ATTEMPT the nearest-velocity fallback for trials with zero no-stim steps of
+their own -- rebuilt as a fish-wide library (mirrors production's
+`passive_library`); (b) the diagnostic's own force-projection reimplementation
+called `uhat_geometric(op)` with `op` = a VELOCITY (deg/s), not a bend angle --
+`uhat_geometric()` expects a bend ANGLE, so at high |v| it silently computed
+cos/sin of a nonsense "angle" and flipped sign, manufacturing a SEPARATE spurious
+negative dip that was never in production; fixed by switching to the SAME fixed
+longitudinal u_hat = (1,0,0) `.mfv_finalize_step()` actually uses for
+`muscle_force_vector_geom_N` on non-isometric categories. After both fixes, all
+3 fish show clean pointwise FV curves with NO negative excursion anywhere in the
+corpus -- the earlier "overshoots negative at high |v| -- residual
+inertial-transient" conclusion was an artifact of the corpus-gap bug + the
+diagnostic's own uhat-misuse bug, not a real limitation of pointwise angle-matched
+subtraction. Rebuilt: `run_fv_fl_power_pipeline.R` (all 3 fish, refreshes
+`FV_isovelocity_uhatBoth.png` etc.), `superplot_fv_pooled.R`,
+`superplot_fl_pooled.R`, `superplot_fl_fv_tiers.R`, `diag_isovelocity_passive_
+models.R` (canonical `isovpassivemodels` PNGs + header FINDING rewritten).
+Flag 2 (empirical-u_hat U-shape) is UNCHANGED by this fix (it's a property of
+the empirical direction estimate at low force, not the passive baseline) --
+still pending a PI decision on primary-vs-caveat reporting.
+
+**TARGET SHAPE CORRECTION for FV, 2026-07-22 (PI-clarified).** Several entries
+above (and `isovpassivemodels`'s header) described the fixed bass18 pointwise FV
+curve as "a plausible bell" / "bell-shaped" -- WRONG terminology, left as-is
+above for the historical record but corrected going forward. FV is not supposed
+to look like FL (a bell/symmetric peak at some optimum) -- the physiological
+target is a Hill hyperbola: monotonic-DECREASING force with increasing
+shortening (concentric) velocity, with eccentric (lengthening) force >=
+isometric >= concentric, NOT a symmetric hump centered at V=0. Checked the
+post-fix pointwise data against that target (SNR-passing right-side points,
+grouped by |velocity|, `activation_snr >= 3`):
+
+| \|v\| (%/s) | bass18 concentric F (N) | bass18 eccentric F (N) | Hill-consistent (ecc > con)? |
+|---|---|---|---|
+| 127 | 1.37 | 1.68 | yes |
+| 255 | 1.03 | 1.65 | yes, gap widens |
+| 382 | 1.83 | 1.76 | no -- concentric slightly exceeds eccentric |
+
+bass16/bass17 show NO consistent eccentric-vs-concentric ordering at any
+velocity (both fish's values are small, sign-unstable, and drift toward/past
+zero with |v| -- noise floor, not signal). So bass18 pointwise isn't just the
+best-LOOKING curve among the three fish -- it is the ONLY one that reproduces
+the correct Hill-type SIGN relationship (eccentric > concentric), which is a
+much stronger validation of the pointwise angle-matched fix than shape-matching
+by eye. The one exception (382 %/s, where concentric slightly exceeds eccentric)
+is the single highest velocity tested and also the nearest-velocity-fallback
+point from the flag-1 fix above -- flagged for a closer look, not yet explained
+(candidates: genuine small-N noise (n=3 concentric vs n=2 eccentric trials at
+that speed) or a residual velocity-dependent passive/inertial mismatch at the
+extreme end of the nearest-velocity fallback's angle-overlap tolerance).
+Corrected the "bell" language in `FIGURES_README.md`'s `isovpassivemodels`
+entry and in `R/diag_isovelocity_passive_models.R`'s own header FINDING to
+state the Hill-hyperbola target explicitly, per the "keep comments/names
+truthful" rule -- code/docs describing CURRENT understanding must not use
+FL's bell language for FV's target shape.
+
 ## Where things live (code map)
 - `muscle_force_vector.R` — core: baseline subtraction, û construction
   (empirical + geometric), wrench->force solve, sign standardization,

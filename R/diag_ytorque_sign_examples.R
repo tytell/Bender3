@@ -85,9 +85,12 @@ source(.defs_tmp)  # brings in its own full source() chain, incl. muscle_force_v
 .orig_finalize <- .mfv_finalize_step
 .mfv_finalize_step <- function(act, pass, noise, category, s, td6, step_rows, arms, geom,
                                trial_id, snr_min, deactivation_window_s,
-                               baseline_pad_s, relaxation_s, sono_ctx = NULL) {
+                               baseline_pad_s, relaxation_s, sono_ctx = NULL,
+                               passive_curve_fits = NULL, passive_pw_T = NULL) {
   fin <- .orig_finalize(act, pass, noise, category, s, td6, step_rows, arms, geom,
-                        trial_id, snr_min, deactivation_window_s, baseline_pad_s, relaxation_s, sono_ctx)
+                        trial_id, snr_min, deactivation_window_s, baseline_pad_s, relaxation_s,
+                        sono_ctx = sono_ctx, passive_curve_fits = passive_curve_fits,
+                        passive_pw_T = passive_pw_T)
   r <- fin$row
   denom <- if (is.finite(noise) && noise > 0) noise else NA_real_
   .capture[[length(.capture) + 1]] <<- tibble::tibble(

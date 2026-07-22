@@ -307,24 +307,47 @@ the point-selection design this feeds:
   ANGLE+signed-VELOCITY-matched no-stim ramp -- the right raw material -- but
   COLLAPSED it to a scalar window-MEAN, then subtracted that from the Method-D
   (peak) active. Because the active window SWEEPS through angle, the passive
-  varies a LOT across it (range median 2.1/3.0/3.1 N bass16/17/18, up to ~6 N),
+  varies a LOT across it (range median 1.8/2.2/2.4 N bass16/17/18, up to ~5.6 N),
   so the flat mean was a poor stand-in for the passive at the peak's own angle:
-  pointwise-minus-mean muscle force differs by up to +-4.6 N. Panel 2 (FV
+  pointwise-minus-mean muscle force differs by up to +-5.6 N. Panel 2 (FV
   payoff): the window-MEAN passive manufactured a CONCAVE-UP FV in low-force
   bass16/17 (same artifact as the FL concave-up), which POINTWISE angle-matched
-  subtraction FLATTENS to ~0; bass18 goes from a flat FV to a plausible bell but
-  OVERSHOOTS negative at high |v| -- residual inertial-transient/angle-alignment
-  error (Panel 3, a flagged 2nd-order limit). LOGIC vs isometric: isometric
+  subtraction FLATTENS to ~0; bass18 goes from a flat FV to a genuine, cleanly
+  POSITIVE curve across the FULL velocity range -- NO negative overshoot
+  anywhere (corrected 2026-07-22: the earlier "overshoots negative at high |v|"
+  finding was an artifact of (a) `velocity matching` originally only covering an
+  EXACT commanded velocity -- bass18's OTHER trials moved at velocities with NO
+  stim-off ramp anywhere in the corpus and fell to a meaningless static baseline,
+  since fixed with a nearest-same-sign-velocity fallback (`passive_source ==
+  "angle_matched_nearest_v"`, see analysis log), and (b) this diagnostic's own
+  reimplementation misusing `uhat_geometric(velocity)` -- now uses the fixed
+  longitudinal u_hat production actually uses for isovelocity, matching
+  `muscle_force_vector_geom_N` exactly). LOGIC vs isometric: isometric
   passive varies only in TIME (relaxation, 1 d.o.f., bracketed -> M2 time-fit);
   isovelocity varies in ANGLE (elastic, large) + velocity + direction, so the
   time-relaxation fit does NOT transfer -- the analog fix is POINTWISE
   angle-matched subtraction (subtract the ramp sample-by-sample by angle, then
   Method D on the delta). IMPLEMENTED IN PRODUCTION 2026-07-22 (PI-approved):
   .mfv_ramp_passive_pointwise() replaced the mean-collapse; velocity matching
-  unchanged. This diagnostic still computes BOTH mean and pointwise itself, so it
-  remains the canonical BEFORE/AFTER record. Rebuilt FVsuperplot geometric-u_hat
-  FV is now bell-shaped (concave-up gone); empirical-u_hat FV stays U-shaped
-  (empirical direction is unstable for these low-force moving steps).
+  falls back exact -> within-fish nearest-same-sign-velocity -> static (last
+  resort, added 2026-07-22 per PI direction to use the stim-off ramps as the
+  key ingredient "cooked into the experimental design"). This diagnostic calls
+  the SAME production helper (not a reimplementation) and builds an equivalent
+  fish-wide no-stim-ramp library, so it remains the canonical BEFORE/AFTER
+  record, bit-for-bit consistent with production. Rebuilt FVsuperplot
+  geometric-u_hat FV: concave-up artifact gone, all bass18 points positive.
+  TARGET SHAPE (PI-clarified 2026-07-22): FV should be a Hill hyperbola
+  (monotonic-decreasing with shortening velocity, eccentric > isometric >
+  concentric), NOT a bell/peak-at-V=0 -- that's the FL target, not FV's.
+  Checked against that target: bass18 SNR-passing points show eccentric >
+  concentric at 127/255 %/s (breaks down only at the single highest velocity
+  tested, 382 %/s, the nearest-velocity-fallback point -- flagged for a closer
+  look); bass16/17 show no consistent eccentric-vs-concentric ordering at any
+  velocity (noise floor). bass18 pointwise is the only curve reproducing the
+  correct Hill-type sign relationship, not merely the best-looking one.
+  empirical-u_hat FV stays U-shaped (empirical direction is unstable for these
+  low-force moving steps -- unrelated to the passive-baseline fix, still
+  pending a PI decision, see analysis log "flag 2").
   `fltiers` / `fvtiers` (BUILT 2026-07-22, `R/superplot_fl_fv_tiers.R`, read-only
   re-aggregation of the two pooled builders, 3 files
   `fltiers_1_within_trial.png`, `fvtiers_1_within_trial.png`,
@@ -402,9 +425,13 @@ names in use).
   as the anchor here instead of the whole dataset); the velocity-dependent
   part is isovelocity's actual moving (concentric/eccentric) ramps, via the
   REAL angle-matched batch (`compute_isovelocity_vector_batch()`,
-  angle_matched(/_cross_trial) sources ONLY -- see `ytorquesignexamples`'s
-  2026-07-22 correction for why static-baseline isovelocity rows are
-  excluded). F0 (normalized companion) falls back from trial+side to
+  angle_matched(/_cross_trial/_nearest_v) sources ONLY -- see
+  `ytorquesignexamples`'s 2026-07-22 correction for why static-baseline
+  isovelocity rows are excluded. `_nearest_v` (added 2026-07-22, see
+  `isovpassivemodels`) covers steps whose EXACT commanded velocity has no
+  stim-off ramp anywhere in the corpus -- confirmed to remove 100% of a
+  prior negative-overshoot artifact in bass18, see analysis log "flag 1
+  ROOT-CAUSED + FIXED"). F0 (normalized companion) falls back from trial+side to
   fish+side when a trial's own V=0 doesn't clear SNR_MIN (isovelocity's
   embedded V=0 holds are usually too low-SNR to self-normalize -- observed
   SNR ~0.1-1.9 vs. isometric's dedicated holds). LIMITATION (documented in

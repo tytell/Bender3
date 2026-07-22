@@ -986,6 +986,31 @@ compute_isovelocity_vector_batch <- function(iso_inputs,
           if (!is.null(cand)) { passive_pw <- cand; passive_source <- "angle_matched_cross_trial"; angle_ok <- TRUE; break }
         }
       }
+      if (is.null(passive_pw)) {
+        # NEAREST same-sign velocity stim-off ramp (PI-directed 2026-07-22): the
+        # experimental design provides stim-off ("passive") ramps only at a SUBSET
+        # of the commanded velocities; steps at the remaining velocities have NO
+        # exact-velocity ramp. Isovelocity ramps all sweep the SAME angle range
+        # (same amplitude, differing speed), so the closest same-DIRECTION stim-off
+        # ramp still traverses the matching angles and gives a position+velocity
+        # baseline vastly better than the old static single-angle fallback (which
+        # subtracted one pre-stim angle from a full swept ramp -> the large
+        # wrong-signed FV overshoot). Same-sign guard preserves sweep direction.
+        same_sign <- Filter(function(lib) is.finite(lib$operating_point) &&
+                              sign(s$operating_point) != 0 &&
+                              sign(lib$operating_point) == sign(s$operating_point),
+                            passive_library)
+        if (length(same_sign) > 0L) {
+          ord <- order(abs(vapply(same_sign, function(l) l$operating_point, 0.0) -
+                             s$operating_point))
+          for (li in ord) {
+            cand <- .mfv_ramp_passive_pointwise(td6, step_rows, ang_act, same_sign[[li]]$ramp)
+            if (!is.null(cand)) {
+              passive_pw <- cand; passive_source <- "angle_matched_nearest_v"; angle_ok <- TRUE; break
+            }
+          }
+        }
+      }
       if (!is.null(passive_pw)) {
         # delta = active - pointwise passive, THEN Method D (pass is zero: the
         # subtraction already happened per-sample inside .mfv_window_peak_means).

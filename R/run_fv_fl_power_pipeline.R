@@ -892,10 +892,11 @@ if (length(isovelocity_steps_vec_all) > 0L) {
   isv_vec <- dplyr::bind_rows(isovelocity_steps_vec_all)
   p_fv_vec <- build_summary_plot_FV_vector(isv_vec)
   if (!is.null(p_fv_vec)) ggplot2::ggsave(file.path(SUMMARY_PLOT_DIR, "FV_isovelocity_uhatBoth.png"), p_fv_vec, width = 12, height = 6, dpi = 150)
-  n_within <- sum(isv_vec$passive_source == "angle_matched", na.rm = TRUE)
-  n_cross  <- sum(isv_vec$passive_source == "angle_matched_cross_trial", na.rm = TRUE)
+  n_within   <- sum(isv_vec$passive_source == "angle_matched", na.rm = TRUE)
+  n_cross    <- sum(isv_vec$passive_source == "angle_matched_cross_trial", na.rm = TRUE)
+  n_nearestv <- sum(isv_vec$passive_source == "angle_matched_nearest_v", na.rm = TRUE)
   n_fallback <- sum(isv_vec$passive_source == "static_baseline_fallback", na.rm = TRUE)
-  cli::cli_alert_info("Isovelocity passive subtraction: {n_within} within-trial angle-matched, {n_cross} cross-trial (same individual) angle-matched, {n_fallback} static-baseline fallback")
+  cli::cli_alert_info("Isovelocity passive subtraction: {n_within} within-trial angle-matched, {n_cross} cross-trial (same individual) angle-matched, {n_nearestv} nearest-velocity angle-matched (no exact-velocity stim-off ramp available), {n_fallback} static-baseline fallback")
 
   # sono-confirmed FV at the L0 crossing (right muscle only)
   if (nrow(fv_l0_all) > 0L) {
