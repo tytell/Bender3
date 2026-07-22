@@ -792,6 +792,33 @@ state the Hill-hyperbola target explicitly, per the "keep comments/names
 truthful" rule -- code/docs describing CURRENT understanding must not use
 FL's bell language for FV's target shape.
 
+**CORRECTION to the above, same day (PI pushback: "I'm not seeing how bass18
+resembles the Hill-type relationship. Did you produce the plot yet?").** The
+table above compared concentric-vs-eccentric PAIRS at each |v| and never
+plotted/included the V=0 isometric anchor -- an incomplete test, and the PI
+was right to push back before accepting "Hill-consistent" on that basis alone.
+Built `R/diag_isovelocity_hillcheck.R` (canon token `isovhillcheck`, 1 PNG) to
+actually plot the full curve (isovelocity's own V=0 hold + moving ramps,
+SNR-passing summary line, all points shown). Result: bass18 right is NOT a
+clean monotonic Hill curve -- it's a "W": eccentric plateau (~1.65-1.76 N,
+-127 to -382 %/s) -> drops SHARPLY to 0.56 N at V=0 -> back up to 1.37 N (127)
+-> down to 1.03 N (255) -> back up to 1.83 N (382). Root cause of the V=0
+notch: its 3 SNR-passing contributors are all from the SAME weaker trial-set
+(bender_06/07/08/09/10) while the STRONGER trial (bender_03) has V=0 values
+(1.69/2.41 N) fully consistent with the eccentric plateau but FAILS the SNR
+gate (its V=0 hold is brief/embedded, not sustained) -- so pooling V=0 and
+moving points ACROSS trials mixes different fatigue states and manufactures
+the notch; it is not itself evidence against Hill, but it also means the
+pairwise eccentric>concentric comparison above was not a full/clean test
+either. bass16/17 show a PEAK AT V=0 with decline on both sides (a tent) --
+neither Hill's plateau-then-decline nor flat noise; unexplained, flagged.
+REVISED CONCLUSION: the eccentric>concentric ordering at 127/255 %/s remains
+directionally suggestive for bass18, but "bass18 pointwise reproduces the
+Hill relationship" was an OVERCLAIM -- the honest state is "directionally
+suggestive, confounded by cross-trial fatigue when V=0 is included, not yet
+settled." A proper test needs each trial's OWN V=0 vs its OWN moving steps
+(within-trial only), not pooled across trials -- not yet built.
+
 ## Where things live (code map)
 - `muscle_force_vector.R` — core: baseline subtraction, û construction
   (empirical + geometric), wrench->force solve, sign standardization,

@@ -338,16 +338,33 @@ the point-selection design this feeds:
   geometric-u_hat FV: concave-up artifact gone, all bass18 points positive.
   TARGET SHAPE (PI-clarified 2026-07-22): FV should be a Hill hyperbola
   (monotonic-decreasing with shortening velocity, eccentric > isometric >
-  concentric), NOT a bell/peak-at-V=0 -- that's the FL target, not FV's.
-  Checked against that target: bass18 SNR-passing points show eccentric >
-  concentric at 127/255 %/s (breaks down only at the single highest velocity
-  tested, 382 %/s, the nearest-velocity-fallback point -- flagged for a closer
-  look); bass16/17 show no consistent eccentric-vs-concentric ordering at any
-  velocity (noise floor). bass18 pointwise is the only curve reproducing the
-  correct Hill-type sign relationship, not merely the best-looking one.
-  empirical-u_hat FV stays U-shaped (empirical direction is unstable for these
-  low-force moving steps -- unrelated to the passive-baseline fix, still
-  pending a PI decision, see analysis log "flag 2").
+  concentric), NOT a bell/peak-at-V=0 -- that's the FL target, not FV's. A
+  pairwise eccentric-vs-concentric check (SNR-passing points, 127/255 %/s) is
+  directionally suggestive for bass18 -- SEE `isovhillcheck` BELOW: once the
+  V=0 isometric anchor is actually plotted, the full curve is NOT a clean
+  monotonic Hill curve (confounded by cross-trial fatigue) -- "bass18
+  reproduces the Hill relationship" was an overclaim, corrected in the
+  analysis log the same day. empirical-u_hat FV stays U-shaped (empirical
+  direction is unstable for these low-force moving steps -- unrelated to the
+  passive-baseline fix, still pending a PI decision, see analysis log "flag 2").
+  `isovhillcheck` (BUILT 2026-07-22, DIAGNOSTIC, `R/diag_isovelocity_hillcheck.R`,
+  read-only, cross-fish, 1 file `isovhillcheck.png`) -- PI-requested plot after
+  pushing back on a verbal Hill-consistency claim above ("I'm not seeing how
+  bass18 resembles the Hill-type relationship"). Plots isovelocity's own V=0
+  hold + moving ramps (pointwise angle-matched passive), all points shown
+  (SNR-failing alpha-flagged, never dropped), summary line = mean of
+  SNR-passing points per velocity. FINDING: bass18 right is a "W", not a Hill
+  hyperbola -- eccentric plateau (~1.65-1.76 N) drops sharply to 0.56 N at V=0,
+  then oscillates (1.37/1.03/1.83 N at 127/255/382). The V=0 notch traces to a
+  CROSS-TRIAL FATIGUE CONFOUND: its 3 SNR-passing contributors are all from one
+  (weaker) trial-set while the stronger trial's V=0 values (1.69/2.41 N, fully
+  consistent with the eccentric plateau) fail the SNR gate (brief/embedded
+  hold). bass16/17 show a PEAK AT V=0 with decline on both sides (a tent) --
+  neither Hill's plateau-then-decline nor flat noise; unexplained. Honest
+  state: the eccentric>concentric pairwise ordering remains directionally
+  suggestive for bass18 but is NOT a settled demonstration of the Hill
+  relationship -- a proper test needs each trial's OWN V=0 vs its OWN moving
+  steps (within-trial only), not pooled across trials -- not yet built.
   `fltiers` / `fvtiers` (BUILT 2026-07-22, `R/superplot_fl_fv_tiers.R`, read-only
   re-aggregation of the two pooled builders, 3 files
   `fltiers_1_within_trial.png`, `fvtiers_1_within_trial.png`,
