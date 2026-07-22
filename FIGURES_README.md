@@ -299,6 +299,44 @@ the point-selection design this feeds:
   passive across the unobservable ~0.3 s stim gap; low-force fish are below the
   passive-drift floor and must be magnitude/SNR-gated, not read as a shape. NOT
   a production change -- prototype pending PI decision.
+  `isovpassivemodels` (BUILT 2026-07-22, DIAGNOSTIC, `R/diag_isovelocity_passive_models.R`,
+  read-only, cross-fish, 3 files `isovpassivemodels_{1_rampshape,2_fvpayoff,
+  3_rampstruct}.png`) -- the ISOVELOCITY counterpart to `isopassivemodels`,
+  answering how the moving-trial passive logic compares to the isometric fix.
+  The PRE-FIX production (compute_isovelocity_vector_batch) subtracted an
+  ANGLE+signed-VELOCITY-matched no-stim ramp -- the right raw material -- but
+  COLLAPSED it to a scalar window-MEAN, then subtracted that from the Method-D
+  (peak) active. Because the active window SWEEPS through angle, the passive
+  varies a LOT across it (range median 2.1/3.0/3.1 N bass16/17/18, up to ~6 N),
+  so the flat mean was a poor stand-in for the passive at the peak's own angle:
+  pointwise-minus-mean muscle force differs by up to +-4.6 N. Panel 2 (FV
+  payoff): the window-MEAN passive manufactured a CONCAVE-UP FV in low-force
+  bass16/17 (same artifact as the FL concave-up), which POINTWISE angle-matched
+  subtraction FLATTENS to ~0; bass18 goes from a flat FV to a plausible bell but
+  OVERSHOOTS negative at high |v| -- residual inertial-transient/angle-alignment
+  error (Panel 3, a flagged 2nd-order limit). LOGIC vs isometric: isometric
+  passive varies only in TIME (relaxation, 1 d.o.f., bracketed -> M2 time-fit);
+  isovelocity varies in ANGLE (elastic, large) + velocity + direction, so the
+  time-relaxation fit does NOT transfer -- the analog fix is POINTWISE
+  angle-matched subtraction (subtract the ramp sample-by-sample by angle, then
+  Method D on the delta). IMPLEMENTED IN PRODUCTION 2026-07-22 (PI-approved):
+  .mfv_ramp_passive_pointwise() replaced the mean-collapse; velocity matching
+  unchanged. This diagnostic still computes BOTH mean and pointwise itself, so it
+  remains the canonical BEFORE/AFTER record. Rebuilt FVsuperplot geometric-u_hat
+  FV is now bell-shaped (concave-up gone); empirical-u_hat FV stays U-shaped
+  (empirical direction is unstable for these low-force moving steps).
+  `fltiers` / `fvtiers` (BUILT 2026-07-22, `R/superplot_fl_fv_tiers.R`, read-only
+  re-aggregation of the two pooled builders, 3 files
+  `fltiers_1_within_trial.png`, `fvtiers_1_within_trial.png`,
+  `fltiers_2_within_protocol_isometriconly.png`) -- FL/FV at the three POOLING
+  TIERS so every claim's pooling level is explicit. within-trial (each line =
+  one trial's own step series, RAW geometric force, NO cross-trial
+  normalization) is the cleanest shape view and exposes that bass17's isometric
+  forces are ~0.01 N (at the noise floor). within-protocol isometric-only pooled
+  FL is the un-mixed companion to the across-protocol FLsuperplot (grand mean is
+  concave-down, peak near L0). FV's within-protocol pool already IS the
+  FVsuperplot (isovelocity moving only); the across-protocol pool is the existing
+  FLsuperplot/FVsuperplot. Geometric u_hat throughout.
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),

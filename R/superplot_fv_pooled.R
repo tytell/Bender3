@@ -158,7 +158,8 @@ extract_isometric_l0_points <- function(fish, manifest) {
       dplyr::transmute(fish = fish, trial_id = tid, protocol = "isometric", muscle_side = .data$muscle_side,
                        strain_rate_pct_s = 0.0,
                        force_emp_N = .data$muscle_force_vector_N, force_geom_N = .data$muscle_force_vector_geom_N,
-                       activation_snr = .data$activation_snr)
+                       activation_snr = .data$activation_snr,
+                       baseline_force_noise_N = .data$baseline_force_noise_N)
   }
   if (length(out) == 0L) tibble::tibble() else dplyr::bind_rows(out)
 }
@@ -186,7 +187,8 @@ extract_isovelocity_v0_points <- function(fish, manifest) {
       dplyr::transmute(fish = fish, trial_id = tid, protocol = "isovelocity", muscle_side = .data$muscle_side,
                        strain_rate_pct_s = 0.0,
                        force_emp_N = .data$muscle_force_vector_N, force_geom_N = .data$muscle_force_vector_geom_N,
-                       activation_snr = .data$activation_snr)
+                       activation_snr = .data$activation_snr,
+                       baseline_force_noise_N = .data$baseline_force_noise_N)
   }
   if (length(out) == 0L) tibble::tibble() else dplyr::bind_rows(out)
 }
@@ -206,7 +208,8 @@ extract_dynamic_v0_points <- function(fish, manifest) {
       dplyr::transmute(fish = fish, trial_id = tid, protocol = "dynamic", muscle_side = .data$muscle_side,
                        strain_rate_pct_s = 0.0,
                        force_emp_N = .data$muscle_force_vector_N, force_geom_N = .data$muscle_force_vector_geom_N,
-                       activation_snr = .data$activation_snr)
+                       activation_snr = .data$activation_snr,
+                       baseline_force_noise_N = .data$baseline_force_noise_N)
   }
   if (length(out) == 0L) tibble::tibble() else dplyr::bind_rows(out)
 }
@@ -250,7 +253,8 @@ extract_isovelocity_moving_points <- function(fish, manifest) {
       dplyr::transmute(fish = fish, trial_id = tid, protocol = "isovelocity", muscle_side = .data$muscle_side,
                        strain_rate_pct_s = .data$shortening_strain_pct,
                        force_emp_N = .data$muscle_force_vector_N, force_geom_N = .data$muscle_force_vector_geom_N,
-                       activation_snr = .data$activation_snr)
+                       activation_snr = .data$activation_snr,
+                       baseline_force_noise_N = .data$baseline_force_noise_N)
   }
   if (length(out) == 0L) tibble::tibble() else dplyr::bind_rows(out)
 }
@@ -289,16 +293,20 @@ if (nrow(pooled) == 0L) cli::cli_abort("No pooled FV points extracted.")
 # source (isometric L0 reps, dynamic bookends -- i.e. borrowing the same
 # physiological reference point across trials of the SAME individual+side,
 # not inventing a new one) when the trial's own V=0 doesn't qualify.
+# SNR + MAGNITUDE gated (mfv_gate_f0, 2026-07-22): F0 must ALSO exceed its own
+# baseline force-noise floor, not just clear SNR (same fix as the FL superplot).
 f0_by_trial <- pooled |>
-  dplyr::filter(.data$strain_rate_pct_s == 0, is.finite(.data$activation_snr), .data$activation_snr >= SNR_MIN) |>
+  dplyr::filter(.data$strain_rate_pct_s == 0) |>
   dplyr::group_by(.data$trial_id, .data$muscle_side) |>
-  dplyr::summarise(f0_emp = mean(.data$force_emp_N, na.rm = TRUE),
-                   f0_geom = mean(.data$force_geom_N, na.rm = TRUE), .groups = "drop")
+  dplyr::summarise(f0_emp  = mfv_gate_f0(.data$force_emp_N,  .data$activation_snr, .data$baseline_force_noise_N),
+                   f0_geom = mfv_gate_f0(.data$force_geom_N, .data$activation_snr, .data$baseline_force_noise_N),
+                   .groups = "drop")
 f0_by_fish <- pooled |>
-  dplyr::filter(.data$strain_rate_pct_s == 0, is.finite(.data$activation_snr), .data$activation_snr >= SNR_MIN) |>
+  dplyr::filter(.data$strain_rate_pct_s == 0) |>
   dplyr::group_by(.data$fish, .data$muscle_side) |>
-  dplyr::summarise(f0_emp_fish = mean(.data$force_emp_N, na.rm = TRUE),
-                   f0_geom_fish = mean(.data$force_geom_N, na.rm = TRUE), .groups = "drop")
+  dplyr::summarise(f0_emp_fish  = mfv_gate_f0(.data$force_emp_N,  .data$activation_snr, .data$baseline_force_noise_N),
+                   f0_geom_fish = mfv_gate_f0(.data$force_geom_N, .data$activation_snr, .data$baseline_force_noise_N),
+                   .groups = "drop")
 pooled <- pooled |>
   dplyr::left_join(f0_by_trial, by = c("trial_id", "muscle_side")) |>
   dplyr::left_join(f0_by_fish, by = c("fish", "muscle_side")) |>

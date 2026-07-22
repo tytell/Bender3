@@ -170,13 +170,16 @@ extract_isometric_points <- function(fish, manifest) {
     # in this codebase for confidence, rather than inventing a new threshold.
     # A trial+side with no SNR-passing L0 rep gets F0 = NA (normalized points
     # NA, raw points unaffected) instead of a numerically-unstable ratio.
+    # SNR-gated AND magnitude-gated (mfv_gate_f0, 2026-07-22): F0 must ALSO
+    # exceed its own baseline force-noise floor, not just clear SNR -- see that
+    # helper's header for why SNR alone let a near-zero projected F0 through.
     f0 <- ss |>
-      dplyr::filter(abs(.data$shortening_strain_pct) < L0_STRAIN_EPSILON_PCT,
-                    is.finite(.data$activation_snr), .data$activation_snr >= SNR_MIN) |>
+      dplyr::filter(abs(.data$shortening_strain_pct) < L0_STRAIN_EPSILON_PCT) |>
       dplyr::group_by(.data$muscle_side) |>
-      dplyr::summarise(f0_emp  = mean(.data$muscle_force_vector_N, na.rm = TRUE),
-                       f0_geom = mean(.data$muscle_force_vector_geom_N, na.rm = TRUE),
-                       .groups = "drop")
+      dplyr::summarise(
+        f0_emp  = mfv_gate_f0(.data$muscle_force_vector_N,      .data$activation_snr, .data$baseline_force_noise_N),
+        f0_geom = mfv_gate_f0(.data$muscle_force_vector_geom_N, .data$activation_snr, .data$baseline_force_noise_N),
+        .groups = "drop")
 
     out[[tid]] <- ss |>
       dplyr::left_join(f0, by = "muscle_side") |>
@@ -222,12 +225,14 @@ extract_isovelocity_zero_points <- function(fish, manifest) {
 
     # F0 (this trial+side's own mean V=0 force, SNR-gated) -- same rationale
     # as extract_isometric_points()'s matching F0 block.
+    # SNR + magnitude gated (mfv_gate_f0, 2026-07-22) -- this V=0 block is
+    # exactly where the pathology lived (bass17 isovelocity V=0 F0 ~ 0 N).
     f0 <- ss0 |>
-      dplyr::filter(is.finite(.data$activation_snr), .data$activation_snr >= SNR_MIN) |>
       dplyr::group_by(.data$muscle_side) |>
-      dplyr::summarise(f0_emp  = mean(.data$muscle_force_vector_N, na.rm = TRUE),
-                       f0_geom = mean(.data$muscle_force_vector_geom_N, na.rm = TRUE),
-                       .groups = "drop")
+      dplyr::summarise(
+        f0_emp  = mfv_gate_f0(.data$muscle_force_vector_N,      .data$activation_snr, .data$baseline_force_noise_N),
+        f0_geom = mfv_gate_f0(.data$muscle_force_vector_geom_N, .data$activation_snr, .data$baseline_force_noise_N),
+        .groups = "drop")
 
     out[[tid]] <- ss0 |>
       dplyr::left_join(f0, by = "muscle_side") |>
@@ -309,12 +314,13 @@ extract_dynamic_l0_points <- function(fish, manifest) {
                      error = function(e) { cli::cli_warn("dyn load {tid}: {conditionMessage(e)}"); NULL })
     if (is.null(rows) || nrow(rows) == 0L) next
 
+    # SNR + magnitude gated (mfv_gate_f0, 2026-07-22).
     f0 <- rows |>
-      dplyr::filter(is.finite(.data$activation_snr), .data$activation_snr >= SNR_MIN) |>
       dplyr::group_by(.data$muscle_side) |>
-      dplyr::summarise(f0_emp  = mean(.data$muscle_force_vector_N, na.rm = TRUE),
-                       f0_geom = mean(.data$muscle_force_vector_geom_N, na.rm = TRUE),
-                       .groups = "drop")
+      dplyr::summarise(
+        f0_emp  = mfv_gate_f0(.data$muscle_force_vector_N,      .data$activation_snr, .data$baseline_force_noise_N),
+        f0_geom = mfv_gate_f0(.data$muscle_force_vector_geom_N, .data$activation_snr, .data$baseline_force_noise_N),
+        .groups = "drop")
 
     out[[tid]] <- rows |>
       dplyr::left_join(f0, by = "muscle_side") |>

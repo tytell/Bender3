@@ -93,6 +93,31 @@ suppressPackageStartupMessages({
 # direction instead and the step is flagged. Visible + vetoable per PI A6.
 MFV_UHAT_SNR_MIN <- 3.0
 
+#' SNR + MAGNITUDE gated F0 (F/F0 denominator) from a set of L0 / V=0 rep rows.
+#'
+#' PI-directed 2026-07-22 (magnitude floor). The activation-SNR gate alone
+#' (activation_snr >= snr_min) measures the force VECTOR's amplitude above the
+#' baseline noise, but the F0 VALUE used as the F/F0 denominator is the
+#' PROJECTED muscle_force_vector_N -- a rep can clear the SNR gate yet still
+#' project to a near-zero, sign-unstable force (the bass17 isovelocity-V=0
+#' case: activation_snr 3.3-5.5 but muscle_force_vector_geom_N ~ +-0.0005 N),
+#' which detonates F/F0 (one point hit ~ -64). This ADDITIONALLY requires each
+#' surviving rep's |force| to exceed its OWN baseline force-noise floor
+#' (baseline_force_noise_N, the pre-stim ||force-channel|| SD), i.e. the L0
+#' tension estimate must itself be above the noise it is measured against, not
+#' merely be the projection of an above-noise vector. Reps failing EITHER gate
+#' are dropped; F0 is the mean of survivors, or NA (normalized points become
+#' NA, RAW points are untouched) when none qualify.
+#' @param force,snr,noise equal-length rep vectors (the F0 quantity being
+#'   normalized, its activation_snr, and its baseline_force_noise_N).
+#' @return scalar gated F0 (mean of survivors) or NA_real_.
+mfv_gate_f0 <- function(force, snr, noise, snr_min = MFV_UHAT_SNR_MIN) {
+  keep <- is.finite(force) & is.finite(snr) & snr >= snr_min &
+          is.finite(noise) & abs(force) >= noise
+  if (!any(keep)) return(NA_real_)
+  mean(force[keep], na.rm = TRUE)
+}
+
 # Deactivation tail (s) appended to the active window, matching the rest of
 # the pipeline's DEACTIVATION_WINDOW_S.
 MFV_DEACTIVATION_WINDOW_S <- 0.5
@@ -326,14 +351,22 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
 #'   for the peak SEARCH; `win_mask` (full active+deactivation window) still
 #'   bounds the narrow averaging window and is what the plain-mean fallback
 #'   uses.
+#' @param passive_pw Optional named list of full-length td6 POINTWISE passive
+#'   vectors (keyed by .mfv_col() base, from .mfv_ramp_passive_pointwise()). When
+#'   supplied for a channel, it is subtracted from that channel BEFORE peak
+#'   finding + averaging, so the returned value is Method D of the
+#'   ACTIVE-minus-passive DELTA (used by the isovelocity pointwise passive). NULL
+#'   (default) preserves the raw-active behavior used everywhere else.
 .mfv_window_peak_means <- function(td6, step_rows, win_mask, search_win_mask,
-                                   peak_window_s = MFV_PEAK_WINDOW_S) {
+                                   peak_window_s = MFV_PEAK_WINDOW_S,
+                                   passive_pw = NULL) {
   sel <- step_rows & win_mask
   search_sel <- step_rows & search_win_mask
   t <- td6$t.s
   get_peak_mean <- function(base) {
     v <- .mfv_col(td6, base)
     if (is.null(v)) return(NA_real_)
+    if (!is.null(passive_pw) && !is.null(passive_pw[[base]])) v <- v - passive_pw[[base]]
     v_sel <- v[sel]
     full_mean <- mean(v_sel, na.rm = TRUE)
     if (sum(is.finite(v_sel)) < 3L) return(full_mean)
@@ -380,7 +413,14 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
 #' does not discontinuously perturb the passive; low-force fish sit below this
 #' passive-drift floor and their FL SHAPE is not resolvable -- a magnitude/SNR
 #' gate on that is a SEPARATE, still-pending decision (not made here).
-#' @return list(F=3, T=3) passive channel values (N, N*m) + used_relaxation flag.
+#' `fits_T` (list of 3 fitted loess models, x/y/z torque order, NULL per
+#' channel wherever that channel fell back to the static mean) is returned so
+#' the continuous force-vs-time DISPLAY trace (.mfv_finalize_step()'s `ts`,
+#' ported 2026-07-22) can subtract this SAME fitted relaxation curve
+#' POINTWISE at every sample instead of the scalar peak-time value used for
+#' the row -- one fit per channel, not refit twice.
+#' @return list(F=3, T=3) passive channel values (N, N*m) at each channel's own
+#'   active-peak time, used_relaxation flag, and fits_T (see above).
 .mfv_isometric_relaxation_passive <- function(td6, step_rows, s, win_mask, search_win_mask,
                                               relaxation_s, base_mask,
                                               peak_window_s = MFV_PEAK_WINDOW_S) {
@@ -392,21 +432,24 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
     (t >= s$t_pre_baseline_start_s & t < s$stim_t0_s) |
     (t >= (s$stim_t1_s + relaxation_s) & t <= s$t_post_baseline_end_s))
   tq <- t[quies]
-  fit_passive_at <- function(v, at) {
+  fit_relaxation <- function(v) {
     vq <- v[quies]; ok <- is.finite(tq) & is.finite(vq)
-    if (sum(ok) < 8L) return(NA_real_)
+    if (sum(ok) < 8L) return(NULL)
     tqi <- tq[ok]; vqi <- vq[ok]
     idx <- seq(1L, length(tqi), by = max(1L, floor(length(tqi) / 400)))
     df <- data.frame(t = tqi[idx], g = vqi[idx])
-    fit <- tryCatch(stats::loess(g ~ t, data = df, span = 0.6, degree = 2,
-                                 control = stats::loess.control(surface = "direct")),
-                    error = function(e) NULL)
+    tryCatch(stats::loess(g ~ t, data = df, span = 0.6, degree = 2,
+                          control = stats::loess.control(surface = "direct")),
+             error = function(e) NULL)
+  }
+  predict_at <- function(fit, at) {
     if (is.null(fit)) return(NA_real_)
     as.numeric(tryCatch(stats::predict(fit, newdata = data.frame(t = at)),
                         error = function(e) NA_real_))[1L]
   }
   n_fit <- 0L
-  get_pass <- function(base) {
+  fits_T <- list(x = NULL, y = NULL, z = NULL)
+  get_pass <- function(base, torque_slot = NA_character_) {
     v <- .mfv_col(td6, base)
     if (is.null(v)) return(NA_real_)
     static_mean <- mean(v[base_sel], na.rm = TRUE)  # M0 fallback
@@ -421,15 +464,18 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
     if (!is.finite(smax) || !is.finite(smin)) return(static_mean)
     use_max <- abs(smax - full_mean) >= abs(smin - full_mean)
     t_peak <- t_search[if (use_max) which.max(v_smooth) else which.min(v_smooth)]
-    pv <- fit_passive_at(v, t_peak)
+    fit <- fit_relaxation(v)
+    pv <- predict_at(fit, t_peak)
     if (!is.finite(pv)) return(static_mean)
     n_fit <<- n_fit + 1L
+    if (!is.na(torque_slot)) fits_T[[torque_slot]] <<- fit
     pv
   }
   list(
     F = c(get_pass("xforce"),  get_pass("yforce"),  get_pass("zforce")),
-    T = c(get_pass("xtorque"), get_pass("ytorque"), get_pass("ztorque")),
-    used_relaxation = n_fit > 0L
+    T = c(get_pass("xtorque", "x"), get_pass("ytorque", "y"), get_pass("ztorque", "z")),
+    used_relaxation = n_fit > 0L,
+    fits_T = fits_T
   )
 }
 
@@ -463,29 +509,47 @@ solve_muscle_force_from_wrench <- function(dF, dTau, uhat, r_m_m, d_m) {
        T = list(gc6("xtorque"), gc6("ytorque"), gc6("ztorque")))
 }
 
-#' Interpolate a passive ramp's 6 channels onto an active window's angles
-#' (match by ANGLE, so a 5-deg vs 0-deg start offset washes out). Requires
-#' >= 50% angle overlap, else returns NULL (interpolation would be pure
-#' extrapolation). Works identically for within- and cross-trial ramps.
-#' @return list(F=3, T=3) angle-matched passive means, or NULL.
-.mfv_interp_ramp_onto <- function(ang_act, ramp) {
+#' POINTWISE angle-matched passive (PI-directed 2026-07-22; REPLACES the old
+#' window-MEAN .mfv_interp_ramp_onto). Interpolate a velocity-matched no-stim
+#' ramp's 6 channels onto EACH of a step's own samples BY ANGLE -- not collapsed
+#' to a scalar window mean -- returning FULL-LENGTH td6 vectors (0 off-step),
+#' keyed by the .mfv_col() base names ("xforce".."ztorque"). The caller then
+#' subtracts these POINTWISE and runs Method D on the delta, so the passive is
+#' removed at each sample's own angle (the isovelocity analog of the isometric
+#' relaxation-fit-in-time). Because the active window SWEEPS through angle, the
+#' passive varies by up to ~6 N across it; a single mean is a poor stand-in for
+#' the passive at the Method-D peak's own angle (diag_isovelocity_passive_models).
+#' Matches by ANGLE (a 5-deg vs 0-deg start offset washes out); requires >= 50%
+#' of the ACTIVE-window angles to fall within the ramp's angle range, else NULL
+#' (interpolation would be pure extrapolation) so the caller falls back. Works
+#' identically for within- and cross-trial ramps (angle is comparable across the
+#' same specimen's trials).
+#' @return named list of 6 full-length td6 passive vectors, or NULL.
+.mfv_ramp_passive_pointwise <- function(td6, step_rows, ang_act, ramp) {
   if (length(ang_act) == 0L || all(!is.finite(ang_act))) return(NULL)
   ang_p <- ramp$ang
   if (sum(is.finite(ang_p)) < 2L) return(NULL)
   rng <- range(ang_p, na.rm = TRUE)
   if (mean(ang_act >= rng[1L] & ang_act <= rng[2L], na.rm = TRUE) < 0.5) return(NULL)
-  interp1 <- function(vp) {
+  idx <- which(step_rows)
+  ang_step <- td6$enc.deg[idx]
+  n <- nrow(td6)
+  bases <- c("xforce", "yforce", "zforce", "xtorque", "ytorque", "ztorque")
+  chans <- c(ramp$F, ramp$T)  # same base order as `bases`
+  out <- list()
+  for (k in seq_along(bases)) {
+    vp <- chans[[k]]
     ok <- is.finite(ang_p) & is.finite(vp)
-    if (sum(ok) < 2L) return(NA_real_)
+    if (sum(ok) < 2L) return(NULL)
     agg <- stats::aggregate(vp[ok], by = list(a = ang_p[ok]), FUN = mean)
-    if (nrow(agg) < 2L || sum(is.finite(agg$a) & is.finite(agg$x)) < 2L) return(NA_real_)
-    yi <- tryCatch(stats::approx(agg$a, agg$x, xout = ang_act, rule = 2)$y,
-                   error = function(e) rep(NA_real_, length(ang_act)))
-    mean(yi, na.rm = TRUE)
+    if (nrow(agg) < 2L) return(NULL)
+    yi <- tryCatch(stats::approx(agg$a, agg$x, xout = ang_step, rule = 2)$y,
+                   error = function(e) NULL)
+    if (is.null(yi) || any(!is.finite(yi))) return(NULL)
+    full <- numeric(n); full[idx] <- yi
+    out[[bases[k]]] <- full
   }
-  am <- list(F = vapply(ramp$F, interp1, numeric(1L)), T = vapply(ramp$T, interp1, numeric(1L)))
-  if (!all(is.finite(c(am$F, am$T)))) return(NULL)
-  am
+  out
 }
 
 
@@ -557,11 +621,30 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
 #'   compute_isovelocity_vector_batch() already read for `arms`; passed
 #'   through here rather than re-read.
 #' @param sono_ctx optional list(mm, L0_mm) for FV L0 crossing (right only).
+#' @param passive_curve_fits optional list(x, y, z) fitted loess relaxation
+#'   models (from .mfv_isometric_relaxation_passive()$fits_T), used to
+#'   subtract the passive POINTWISE (at each ts sample's own time) in the
+#'   continuous force-vs-time trace below, instead of the single constant
+#'   `pass$T[i]` used everywhere else. NULL (the default, and what
+#'   isovelocity/dynamic callers pass implicitly by omission) preserves the
+#'   original constant-passive ts behavior exactly. Per-channel NULL entries
+#'   (e.g. a channel that fell back to the static mean) fall back to that
+#'   channel's constant `pass$T[i]` too -- ts is never left with a channel-
+#'   dropout gap.
+#' @param passive_pw_T optional named list of full-length td6 POINTWISE passive
+#'   torque vectors (keyed "xtorque"/"ytorque"/"ztorque", from
+#'   .mfv_ramp_passive_pointwise()), used by the ISOVELOCITY path to subtract the
+#'   angle-matched passive at each ts sample's own ANGLE. When supplied, the
+#'   isovelocity caller also pre-subtracts it into `act` (so `pass` is zero and
+#'   the scalar row is Method D of the delta), keeping the ts trace and the
+#'   scalar row on the identical pointwise baseline. Takes precedence over
+#'   `passive_curve_fits`; NULL (default) preserves prior behavior.
 #' @return list(row = named vector of step columns, ts = force-vs-time tibble or
 #'   NULL, fv_l0 = one-row tibble or NULL).
 .mfv_finalize_step <- function(act, pass, noise, category, s, td6, step_rows, arms, geom,
                                trial_id, snr_min, deactivation_window_s,
-                               baseline_pad_s, relaxation_s, sono_ctx = NULL) {
+                               baseline_pad_s, relaxation_s, sono_ctx = NULL,
+                               passive_curve_fits = NULL, passive_pw_T = NULL) {
   dF <- act$F - pass$F
   dT <- act$T - pass$T
 
@@ -620,6 +703,7 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
     force_force_channel_N      = fr$F_force_N,
     force_yTorque_N            = fr$F_yT_N,
     force_zTorque_N            = zt_sign * fr$F_zT_N,
+    baseline_force_noise_N     = noise,
     uhat_source = uhat_source
   )
 
@@ -635,10 +719,33 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
       # per-step correction) -- this ts trace IS that same quantity's
       # per-sample time series.
       Tx <- .mfv_col(td6, "xtorque"); Ty <- .mfv_col(td6, "ytorque"); Tz <- .mfv_col(td6, "ztorque")
-      f_t <- (((Tx[disp_win] - pass$T[1L]) * rxu[1L]) +
-             ((Ty[disp_win] - pass$T[2L]) * rxu[2L]) +
-             ((Tz[disp_win] - pass$T[3L]) * rxu[3L])) / (eff_arm^2)
       t_abs <- td6$t.s[disp_win]
+      # POINTWISE passive (PI-directed, 2026-07-22): subtract the moving passive
+      # at EVERY sample so this display trace matches the corrected SCALAR
+      # muscle_force_vector_N/_geom_N computed above. Two pointwise sources:
+      #   ISOMETRIC -- per-channel relaxation loess fit (passive_curve_fits),
+      #                evaluated at each sample's own TIME.
+      #   ISOVELOCITY -- per-td6-row angle-matched ramp (passive_pw_T), indexed
+      #                by disp_win (subtracted at each sample's own ANGLE).
+      # Falls back to the constant pass$T[i] per channel (unchanged
+      # dynamic/static-fallback behavior) when neither is supplied or a value is
+      # non-finite -- ts is never left with a channel-dropout gap.
+      passive_at <- function(slot, base, idx) {
+        if (!is.null(passive_pw_T) && !is.null(passive_pw_T[[base]])) {
+          pv <- passive_pw_T[[base]][disp_win]
+          return(ifelse(is.finite(pv), pv, pass$T[idx]))
+        }
+        fit <- if (!is.null(passive_curve_fits)) passive_curve_fits[[slot]] else NULL
+        if (is.null(fit)) return(rep(pass$T[idx], length(t_abs)))
+        pv <- tryCatch(as.numeric(stats::predict(fit, newdata = data.frame(t = t_abs))),
+                      error = function(e) rep(NA_real_, length(t_abs)))
+        ifelse(is.finite(pv), pv, pass$T[idx])
+      }
+      passTx <- passive_at("x", "xtorque", 1L); passTy <- passive_at("y", "ytorque", 2L)
+      passTz <- passive_at("z", "ztorque", 3L)
+      f_t <- (((Tx[disp_win] - passTx) * rxu[1L]) +
+             ((Ty[disp_win] - passTy) * rxu[2L]) +
+             ((Tz[disp_win] - passTz) * rxu[3L])) / (eff_arm^2)
       cmode_val <- if ("contraction_mode" %in% names(s)) s$contraction_mode else NA_character_
       ts <- tibble::tibble(
         trial_id = trial_id, unit_id = paste0("step", s$step_number),
@@ -681,6 +788,7 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
     uhat_source = NA_character_, activation_snr = NA_real_, eff_arm_m = NA_real_,
     muscle_force_vector_N = NA_real_, muscle_force_vector_geom_N = NA_real_,
     force_force_channel_N = NA_real_, force_yTorque_N = NA_real_, force_zTorque_N = NA_real_,
+    baseline_force_noise_N = NA_real_,
     passive_source = NA_character_, angle_matched_ok = NA
   )
 }
@@ -691,7 +799,7 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
   for (nm in c("dFx","dFy","dFz","dTx","dTy","dTz","uhat_x","uhat_y","uhat_z",
                "uhat_angle_emp_deg","uhat_angle_geom_deg","activation_snr","eff_arm_m",
                "muscle_force_vector_N","muscle_force_vector_geom_N","force_force_channel_N",
-               "force_yTorque_N","force_zTorque_N")) {
+               "force_yTorque_N","force_zTorque_N","baseline_force_noise_N")) {
     out_cols[[nm]][i] <- as.numeric(rw[[nm]])
   }
   out_cols$uhat_source[i]    <- rw[["uhat_source"]]
@@ -754,17 +862,19 @@ attach_vector_muscle_force <- function(res, filename, category,
     act  <- .mfv_window_peak_means(td6, step_rows, act_win, stim_win)
     # Passive = relaxation-aware baseline evaluated at each channel's active peak
     # (M2, PI-directed 2026-07-22), replacing the stale static pre-stim mean.
-    # NOTE: this fixes the SCALAR muscle_force_vector_N/_geom_N (what the FL/FV
-    # superplots sample). fin$ts below still subtracts pass$T as a CONSTANT
-    # pointwise, so the isometric force_ts trace is offset by the peak-time
-    # passive, not pointwise-relaxation-subtracted -- a display trace only; the
-    # sampled scalar is the corrected quantity.
+    # Fixes the SCALAR muscle_force_vector_N/_geom_N (what the FL/FV superplots
+    # sample) AND, via pass$fits_T passed to .mfv_finalize_step() below (ported
+    # 2026-07-22), the continuous force_ts DISPLAY trace, which now subtracts
+    # this same fitted relaxation curve POINTWISE at every sample instead of a
+    # single constant -- both use the identical M2 baseline, no display/scalar
+    # mismatch.
     pass <- .mfv_isometric_relaxation_passive(td6, step_rows, s, act_win, stim_win,
                                               relaxation_s, base_win)
     noise <- .mfv_baseline_force_noise(td6, step_rows, base_win)
 
     fin <- .mfv_finalize_step(act, pass, noise, category, s, td6, step_rows, arms, geom,
-                              trial_id, snr_min, deactivation_window_s, baseline_pad_s, relaxation_s)
+                              trial_id, snr_min, deactivation_window_s, baseline_pad_s, relaxation_s,
+                              passive_curve_fits = pass$fits_T)
     out_cols <- .mfv_assign_row(out_cols, i, fin, if (isTRUE(pass$used_relaxation)) "relaxation_fit" else "static_baseline", NA)
     if (!is.null(fin$ts)) ts_list[[length(ts_list) + 1L]] <- fin$ts
   }
@@ -848,35 +958,52 @@ compute_isovelocity_vector_batch <- function(iso_inputs,
       base_win <- td6$t.s >= s$t_pre_baseline_start_s & td6$t.s <= s$t_pre_baseline_end_s
       ang_act  <- td6$enc.deg[step_rows & act_win]
 
-      act   <- .mfv_window_peak_means(td6, step_rows, act_win, stim_win)
       noise <- .mfv_baseline_force_noise(td6, step_rows, base_win)
 
-      # passive: within-trial angle match -> cross-trial (same specimen) angle
-      # match at same signed velocity -> static pre-stim baseline fallback.
-      passive_source <- NA_character_; angle_ok <- NA; pass <- NULL
+      # passive: POINTWISE angle+velocity match (PI-directed 2026-07-22) --
+      # within-trial -> cross-trial (same specimen) at the same SIGNED velocity
+      # (operating_point, so same |v| AND direction = same angle range swept the
+      # same way) -> static pre-stim baseline fallback. The matched no-stim ramp
+      # is interpolated onto THIS step's samples BY ANGLE and subtracted
+      # POINTWISE; Method D then runs on the ACTIVE-minus-passive delta. Replaces
+      # the old window-MEAN collapse, which subtracted one scalar from the
+      # Method-D peak while the passive swept up to ~6 N across the window (a
+      # velocity-growing residual -- diag_isovelocity_passive_models). Velocity
+      # matching itself is unchanged; only the mean-collapse became pointwise.
+      passive_source <- NA_character_; angle_ok <- NA; passive_pw <- NULL
       within_ns <- no_stim_steps[abs(
         ss$operating_point[match(no_stim_steps, ss$step_number)] - s$operating_point) < velocity_tol]
       if (length(within_ns) > 0L) {
-        pass <- .mfv_interp_ramp_onto(ang_act, .mfv_ramp_from_step(td6, td6$step_number == within_ns[1L]))
-        if (!is.null(pass)) { passive_source <- "angle_matched"; angle_ok <- TRUE }
+        passive_pw <- .mfv_ramp_passive_pointwise(td6, step_rows, ang_act,
+                        .mfv_ramp_from_step(td6, td6$step_number == within_ns[1L]))
+        if (!is.null(passive_pw)) { passive_source <- "angle_matched"; angle_ok <- TRUE }
       }
-      if (is.null(pass)) {
+      if (is.null(passive_pw)) {
         for (lib in passive_library) {
           if (identical(lib$trial_id, tr$trial_id)) next  # already tried within-trial
           if (abs(lib$operating_point - s$operating_point) >= velocity_tol) next
-          cand <- .mfv_interp_ramp_onto(ang_act, lib$ramp)
-          if (!is.null(cand)) { pass <- cand; passive_source <- "angle_matched_cross_trial"; angle_ok <- TRUE; break }
+          cand <- .mfv_ramp_passive_pointwise(td6, step_rows, ang_act, lib$ramp)
+          if (!is.null(cand)) { passive_pw <- cand; passive_source <- "angle_matched_cross_trial"; angle_ok <- TRUE; break }
         }
       }
-      if (is.null(pass)) {
+      if (!is.null(passive_pw)) {
+        # delta = active - pointwise passive, THEN Method D (pass is zero: the
+        # subtraction already happened per-sample inside .mfv_window_peak_means).
+        act  <- .mfv_window_peak_means(td6, step_rows, act_win, stim_win, passive_pw = passive_pw)
+        pass <- list(F = c(0.0, 0.0, 0.0), T = c(0.0, 0.0, 0.0))
+        passive_pw_T <- passive_pw[c("xtorque", "ytorque", "ztorque")]
+      } else {
+        act  <- .mfv_window_peak_means(td6, step_rows, act_win, stim_win)
         pass <- .mfv_window_means(td6, step_rows, base_win)
         passive_source <- "static_baseline_fallback"; angle_ok <- FALSE
+        passive_pw_T <- NULL
       }
 
       sono_ctx <- if (!is.null(tr$sono)) tr$sono else NULL
       fin <- .mfv_finalize_step(act, pass, noise, "isovelocity", s, td6, step_rows, arms, tr$geom,
                                 tr$trial_id, snr_min, deactivation_window_s,
-                                baseline_pad_s, relaxation_s, sono_ctx = sono_ctx)
+                                baseline_pad_s, relaxation_s, sono_ctx = sono_ctx,
+                                passive_pw_T = passive_pw_T)
       out_cols <- .mfv_assign_row(out_cols, i, fin, passive_source, angle_ok)
       if (!is.null(fin$ts))    ts_list[[length(ts_list) + 1L]] <- fin$ts
       if (!is.null(fin$fv_l0)) fv_list[[length(fv_list) + 1L]] <- fin$fv_l0

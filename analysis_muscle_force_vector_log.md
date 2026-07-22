@@ -581,6 +581,124 @@ the isometric force_ts display trace still subtracts the peak-time passive as a
 CONSTANT pointwise (finalize unchanged); the sampled SCALAR is the corrected
 quantity, the trace is display-only.
 
+**Negative-force question answered + ts trace ported to pointwise 2026-07-22
+(UNCOMMITTED, R/muscle_force_vector.R).** PI asked whether negative force
+values represent muscle "pushing away" physiologically. Traced the specific
+pathological point (bass17's normalized-plot outlier): it is NOT from the
+isometric protocol (all isometric L0 reps positive, 0.003-0.04 N) -- it is from
+`bass17_bender_16_isovelocity`'s own embedded V=0 holds (last isovelocity trial,
+heavily fatigued), where force_geom_N = -0.0005/+0.0007 N (left) and
++0.0012/-0.0033 N (right), all at the fish's documented noise floor, held at
+V=0/L0 (not at a lengthening/shortening extreme where an eccentric-resistance
+story could apply). Skeletal muscle cannot physically push (only generate
+tension); a real physiological "push" is not possible here. Conclusion: the
+sign is measurement noise on a near-zero, fatigued-out contraction, NOT a
+biomechanical push -- consistent with the module header's existing finding that
+the negative minority is "not explained by ... concentric/eccentric position."
+The fix is the already-deferred MAGNITUDE-based F0 floor (reject F0 built from
+near-noise-floor reps), not a sign-based rule -- still deferred per PI ("decide
+later").
+
+Separately, PORTED the M2 pointwise passive into the `ts` (force_ts) DISPLAY
+trace, closing the gap flagged above: `.mfv_isometric_relaxation_passive()` now
+also returns `fits_T` (the per-channel loess fit objects for xtorque/ytorque/
+ztorque, reused not refit), which `.mfv_finalize_step()` accepts as an optional
+`passive_curve_fits` argument and evaluates POINTWISE at every ts sample's own
+time (falling back to the constant `pass$T[i]` per channel when no fit is
+available). Isovelocity/dynamic callers omit the argument (defaults to NULL),
+so their behavior is byte-for-byte unchanged. Verified: (1) scalar cor(Fgeom,
+|strain|) unchanged from the M2 scalar commit (bass16 +0.02, bass17 -0.01,
+bass18 +0.43) -- the ts port touches ONLY the display trace, not the sampled
+scalar; (2) the fitted curve is confirmed genuinely time-varying, not frozen at
+the constant (one bass17 step: range [-0.051793,-0.051541] vs constant
+-0.051730, a real ~2.3e-4 N*m drift across the window); (3) regenerated
+`forcedevtiming_isometric_allsteps.png` -- bass17's traces now decay back to
+~0 within ~0.5-0.7 s of stim-off instead of climbing for ~1 s (the drift
+artifact documented above is now visibly gone from the DISPLAY trace too, not
+just the scalar). NOT YET COMMITTED per PI instruction.
+
+**Magnitude-based F0 floor IMPLEMENTED 2026-07-22 (PI-approved; the deferred
+low-force gate, now decided).** Root-caused the surviving normalized-FL outlier
+(F/F0 ~ -64): NOT the isometric protocol (all its L0 reps 0.003-0.04 N) but
+`bass17_bender_16_isovelocity`'s own embedded V=0 holds (last, fatigued
+isovelocity trial), force_geom_N ~ +-0.0005-0.003 N at the noise floor, held at
+V=0/L0 (NOT a lengthening extreme, so not an eccentric "push"). Skeletal muscle
+cannot push; the negative sign there is noise on a near-zero fatigued
+contraction, not physiology -- so the fix is a MAGNITUDE floor, not a sign rule.
+New helper `mfv_gate_f0()` (R/muscle_force_vector.R) keeps an L0/V=0 rep as an
+F0 contributor only if it passes BOTH activation_snr >= MFV_UHAT_SNR_MIN AND
+|force| >= its own baseline_force_noise_N (the pre-stim ||force-channel|| SD,
+now surfaced as a step_summary column). Rationale: the SNR gate qualifies the
+force VECTOR's amplitude, but the F/F0 DENOMINATOR is the PROJECTED
+muscle_force_vector_N, which can be near-zero even at high SNR -> a magnitude
+floor on the denominator itself is required. Wired into all F0 blocks: 3 in
+superplot_fl_pooled.R (isometric L0, isovelocity V=0, dynamic bookend), 2 in
+superplot_fv_pooled.R (trial- and fish-level); the SNR-passing FL companion
+inherits it by sourcing. Result: FL normalized F0 available for 42/46 trials (4
+near-noise-floor trials correctly dropped); the -64 outlier is GONE, the plot
+now reads as a sane peak-near-L0 curve (~0.3-1.5 F/F0). RAW plots unaffected
+(F0 gate only touches normalized). Plumbing touched: .mfv_finalize_step row,
+.mfv_empty_out_cols, .mfv_assign_row (add baseline_force_noise_N); FV extractors
+carry the column through their transmute. NOT YET COMMITTED (continuing the
+prior leave-uncommitted instruction).
+
+**Isovelocity passive baseline DIAGNOSED 2026-07-22 (PI-requested "how does the
+logic compare to isometric").** New READ-ONLY diagnostic
+`R/diag_isovelocity_passive_models.R` (canon token `isovpassivemodels`, 3 PNGs).
+Current production (compute_isovelocity_vector_batch -> .mfv_interp_ramp_onto)
+subtracts an ANGLE-matched no-stim ramp at the same signed velocity -- the
+correct raw material (it carries angle-elastic + velocity-viscous + inertial in
+one) -- but COLLAPSES it to a scalar window-MEAN and subtracts that from the
+Method-D (peak) active. Because the active window SWEEPS through angle, the
+passive varies enormously across it (range median 2.1/3.0/3.1 N bass16/17/18,
+up to ~6 N), so a single mean is a poor stand-in for the passive at the peak's
+own angle: pointwise-vs-production muscle force differs by up to +-4.6 N. FV
+payoff: the window-MEAN passive manufactures a CONCAVE-UP FV in low-force
+bass16/17 (the SAME artifact class as the FL concave-up); pointwise angle-matched
+subtraction flattens it to ~0 (those fish sit at the noise floor); bass18 (real
+force) goes from a flat production FV to a plausible bell but overshoots negative
+at high |v| -- residual inertial-transient / angle-alignment error (a flagged
+2nd-order limit). COMPARISON TO ISOMETRIC: isometric passive varies only in TIME
+(viscoelastic relaxation, 1 d.o.f., bracketed by quiescent pre/post samples ->
+the M2 time-fit solved it cleanly); isovelocity passive varies in ANGLE (elastic,
+large) + velocity (viscous) + direction (hysteresis/transients), so the
+time-relaxation fit does NOT transfer. The direct analog of the isometric
+pointwise fix is to subtract the angle-matched ramp POINTWISE (sample-by-sample
+by angle), then take Method D on the delta -- same family of fix (kill a
+stale/averaged baseline that fakes a velocity/strain-correlated shape), one extra
+complication (motion transients) that isometric doesn't have. NO production change
+yet -- diagnostic + comparison pending PI decision on whether to port the
+pointwise angle-matched subtraction into compute_isovelocity_vector_batch.
+
+**Isovelocity POINTWISE passive IMPLEMENTED + 3-tier FL/FV plots BUILT
+2026-07-22 (PI-approved "proceed" on the proposed order).** (1) Production change
+in compute_isovelocity_vector_batch: the mean-collapsing .mfv_interp_ramp_onto
+was replaced by .mfv_ramp_passive_pointwise, which interpolates the
+velocity+signed-direction-matched no-stim ramp onto EACH of the step's own
+samples by ANGLE (full-length td6 vectors). .mfv_window_peak_means gained an
+optional passive_pw arg (subtract the pointwise passive per-channel BEFORE peak
+finding -> Method D runs on the ACTIVE-minus-passive delta; pass is then zero).
+.mfv_finalize_step gained passive_pw_T so the force_ts display trace subtracts
+the SAME pointwise passive per sample (scalar + display on one baseline).
+Velocity matching, the within->cross-trial->static fallback, and the isometric
+path are all UNCHANGED (attach_vector_muscle_force still uses the M2 relaxation
+fit -- correct: it only handles isovelocity V=0 holds, which are non-moving).
+Verified on bass18: runs clean, angle_matched steps now pointwise; the
+static_baseline_fallback rate is inherited from the pre-existing matching logic
+(unchanged), not introduced. (2) Rebuilt FVsuperplot: the GEOMETRIC-u_hat FV is
+now a bell (concave-up GONE, peak near V=0), matching the diagnostic's
+prediction; the empirical-u_hat FV stays U-shaped (empirical direction is
+unstable for these low-force moving steps -- a separate known limitation), and a
+negative overshoot persists at high |eccentric v| (the flagged inertial-transient
+residual). FL superplot unchanged (its isovelocity points are V=0 holds, off the
+moving path). (3) New canonical tiers script R/superplot_fl_fv_tiers.R (tokens
+fltiers/fvtiers): within-trial FL+FV (each line one trial, RAW geom force, no
+normalization -- exposes bass17 isometric forces ~0.01 N at the noise floor) and
+within-protocol isometric-only pooled FL (un-mixed companion to the
+across-protocol FLsuperplot; grand mean concave-down, peak near L0). Per-fish
+run_fv_fl_power_pipeline rebuilt for all 3 fish. NOT YET COMMITTED (continuing
+the leave-uncommitted instruction).
+
 ## Where things live (code map)
 - `muscle_force_vector.R` — core: baseline subtraction, û construction
   (empirical + geometric), wrench->force solve, sign standardization,
