@@ -449,7 +449,22 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
   pass_moment <- if (is.finite(fr$eff_arm_m) && fr$eff_arm_m > 0) {
     sum(pass$T * fr$rxu) / (fr$eff_arm_m^2)
   } else NA_real_
-  pass_moment_ambiguous <- !is.finite(pass_moment) || !is.finite(noise) || abs(pass_moment) <= noise
+  # L0 (operating_point == 0 / contraction_mode == "isometric_zero") has NO
+  # commanded bend direction at all -- pass_moment there is residual
+  # curvature/sensor noise, not a real passive-bending signal, so
+  # "reinforcing vs. opposing relative to passive" is physically undefined
+  # (PI-directed fix, 2026-07-21, following the fatigue-timeline plot
+  # showing a spurious +/- split among L0 points). Forcing the ambiguous
+  # path here (rather than relying on abs(pass_moment) <= noise to catch
+  # it) matters because a small but nonzero residual pass_moment can
+  # exceed the noise floor by chance at exactly 0 deg, letting the
+  # meaningless sign(pass_moment) branch below fire anyway. This ONLY
+  # forces ambiguous_fallback at L0 -- every nonzero operating_point keeps
+  # its ordinary noise-floor check and real reinforcing/opposing sign.
+  is_l0_step <- (is.finite(s$operating_point) && abs(s$operating_point) < 1e-9) ||
+    identical(s$contraction_mode, "isometric_zero")
+  pass_moment_ambiguous <- is_l0_step ||
+    !is.finite(pass_moment) || !is.finite(noise) || abs(pass_moment) <= noise
   if (pass_moment_ambiguous) {
     tension_sign <- if (is.finite(fr$F_moment_N) && fr$F_moment_N < 0) -1 else 1
     tension_relative_to_passive <- "ambiguous_fallback"
