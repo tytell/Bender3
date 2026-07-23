@@ -191,7 +191,8 @@ extract_isometric_points <- function(fish, manifest) {
         force_geom_N = .data$muscle_force_vector_geom_N,
         force_emp_norm  = .data$muscle_force_vector_N / .data$f0_emp,
         force_geom_norm = .data$muscle_force_vector_geom_N / .data$f0_geom,
-        activation_snr = .data$activation_snr)
+        activation_snr = .data$activation_snr,
+        baseline_force_noise_N = .data$baseline_force_noise_N)
   }
   if (length(out) == 0L) tibble::tibble() else dplyr::bind_rows(out)
 }
@@ -244,7 +245,8 @@ extract_isovelocity_zero_points <- function(fish, manifest) {
         force_geom_N = .data$muscle_force_vector_geom_N,
         force_emp_norm  = .data$muscle_force_vector_N / .data$f0_emp,
         force_geom_norm = .data$muscle_force_vector_geom_N / .data$f0_geom,
-        activation_snr = .data$activation_snr)
+        activation_snr = .data$activation_snr,
+        baseline_force_noise_N = .data$baseline_force_noise_N)
   }
   if (length(out) == 0L) tibble::tibble() else dplyr::bind_rows(out)
 }
@@ -332,7 +334,8 @@ extract_dynamic_l0_points <- function(fish, manifest) {
         force_geom_N = .data$muscle_force_vector_geom_N,
         force_emp_norm  = .data$muscle_force_vector_N / .data$f0_emp,
         force_geom_norm = .data$muscle_force_vector_geom_N / .data$f0_geom,
-        activation_snr = .data$activation_snr)
+        activation_snr = .data$activation_snr,
+        baseline_force_noise_N = .data$baseline_force_noise_N)
   }
   if (length(out) == 0L) tibble::tibble() else dplyr::bind_rows(out)
 }

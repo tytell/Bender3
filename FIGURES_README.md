@@ -85,7 +85,10 @@ the point-selection design this feeds:
   a multi-second axis made its in-window scatter invisible. The dynamic panel
   also carries an explicit in-panel annotation that NO post-baseline window
   exists for single_finite files -- a real limitation, not a rendering gap, and
-  deliberately NOT fabricated for symmetry.), `torquesmoothingmethod`,
+  deliberately NOT fabricated for symmetry.), `torquesmoothingmethod`
+  (this planned item is now covered by `torquesmoothing`, BUILT -- see the
+  Diagnostic tier entry below; the two names differ because this list
+  predates that entry and was never reconciled),
   `sonosmoothingmethod`, `sonotiminglag`, `forcedevtiming` (dual-tagged,
   see below), `fatiguetimeline` (dual-tagged), `snrfiltereffect`,
   `signconventioncheck` (added 2026-07-21, NOT YET BUILT -- confirms
@@ -351,20 +354,93 @@ the point-selection design this feeds:
   read-only, cross-fish, 1 file `isovhillcheck.png`) -- PI-requested plot after
   pushing back on a verbal Hill-consistency claim above ("I'm not seeing how
   bass18 resembles the Hill-type relationship"). Plots isovelocity's own V=0
-  hold + moving ramps (pointwise angle-matched passive), all points shown
-  (SNR-failing alpha-flagged, never dropped), summary line = mean of
-  SNR-passing points per velocity. FINDING: bass18 right is a "W", not a Hill
-  hyperbola -- eccentric plateau (~1.65-1.76 N) drops sharply to 0.56 N at V=0,
-  then oscillates (1.37/1.03/1.83 N at 127/255/382). The V=0 notch traces to a
-  CROSS-TRIAL FATIGUE CONFOUND: its 3 SNR-passing contributors are all from one
-  (weaker) trial-set while the stronger trial's V=0 values (1.69/2.41 N, fully
-  consistent with the eccentric plateau) fail the SNR gate (brief/embedded
-  hold). bass16/17 show a PEAK AT V=0 with decline on both sides (a tent) --
-  neither Hill's plateau-then-decline nor flat noise; unexplained. Honest
-  state: the eccentric>concentric pairwise ordering remains directionally
-  suggestive for bass18 but is NOT a settled demonstration of the Hill
-  relationship -- a proper test needs each trial's OWN V=0 vs its OWN moving
-  steps (within-trial only), not pooled across trials -- not yet built.
+  hold + moving ramps (pointwise angle-matched passive), all points shown,
+  alpha-flagged by 4-tier confidence (never dropped), summary line = mean of
+  confident + confidently_small points per velocity. ORIGINAL FINDING
+  (ratio-only gate): bass18 right is a "W", not a Hill hyperbola -- eccentric
+  plateau (~1.65-1.76 N) drops sharply to 0.56 N at V=0, then oscillates
+  (1.37/1.03/1.83 N at 127/255/382). REVISED 2026-07-22 (SNR-magnitude
+  conflation audit IMPLEMENTED, see `snrmagnitudeaudit` below): the V=0 mean
+  is now 0.94 N (n=7, up from n=3) once the stronger trial's confidently-small
+  V=0 reps are correctly included instead of dropped as noise -- CONFIRMING
+  those reps are real, but only PARTIALLY resolving the notch (0.94 N is
+  still below the eccentric plateau and most concentric points). bass16/17
+  show a PEAK AT V=0 with decline on both sides (a tent) -- neither Hill's
+  plateau-then-decline nor flat noise; unexplained. Honest state: the
+  eccentric>concentric pairwise ordering remains directionally suggestive for
+  bass18 but is NOT a settled demonstration of the Hill relationship, even
+  under the magnitude-aware gate -- a proper test needs each trial's OWN V=0
+  vs its OWN moving steps (within-trial only), not pooled across trials --
+  not yet built.
+  `snrmagnitudeaudit` (BUILT 2026-07-22, DIAGNOSTIC, `R/diag_snr_magnitude_audit.R`,
+  read-only, cross-fish, 3 files `snrmagnitudeaudit_{1_forceVsNoiseFloor,
+  2_quadrantCounts,3_isovelocityV0notch}.png`) -- PI-requested audit of whether
+  the ratio-only `activation_snr >= MFV_UHAT_SNR_MIN` gate (used throughout the
+  pipeline -- see analysis_muscle_force_vector_log.md's 2026-07-22 "SNR-based
+  confidence gating audit" entry for the full site-by-site writeup) conflates
+  "elevated noise floor" with "genuinely small real force." Classifies every
+  finalized step/hold/ramp (full 3-fish corpus, isometric + isovelocity V=0 +
+  isovelocity moving + dynamic bookend) into 4 quadrants by crossing SNR-pass
+  (`activation_snr >= snr_min`) with magnitude-pass (`|force_geom_N| >=
+  baseline_force_noise_N`, the SAME two-condition test `mfv_gate_f0()` already
+  uses for the F0 denominator) -- "confident" (both pass), "confidently small"
+  (SNR fails, magnitude passes -- the conflation case), "unstable magnitude"
+  (SNR passes, magnitude fails -- what `mfv_gate_f0` was built to catch), and
+  "unconfirmable" (both fail). Plot 1: force vs noise floor directly, log-log,
+  quadrant-colored, by category. Plot 2: quadrant counts by category (42
+  "confidently small" points and 13 "unstable magnitude" points exist across
+  the corpus outside the F0-denominator context `mfv_gate_f0` already
+  protects). Plot 3: re-examines the `isovhillcheck` V=0 notch directly --
+  bass18's isovelocity V=0 holds are 8/9 "confidently small" + 1/9 "confident",
+  ZERO "unconfirmable" (including the strong trial's 1.99/1.31 N reps the
+  ratio-only gate used to exclude, which are consistent with its eccentric
+  plateau) -- under a magnitude-aware scheme none of bass18's V=0 data is
+  noise-indistinguishable, unlike bass16/17 which each have some genuinely
+  unconfirmable V=0 reps. This diagnostic itself remains READ-ONLY and
+  unchanged; the 4-tier scheme it motivated was IMPLEMENTED in production
+  2026-07-22 (see `analysis_muscle_force_vector_log.md`'s "implementation"
+  entry the same day for the full site list -- `mfv_confidence_tier()` /
+  `MFV_CONFIDENCE_ALPHA` in `muscle_force_vector.R`, consumed by
+  `plot_muscle_force_vector.R`, `superplot_fl_pooled_snr_passing.R`,
+  `export_snr_summary_figures.R`, `diag_isovelocity_hillcheck.R`,
+  `plot_fatigue_timeline.R`, and `superplot_fl_fv_tiers.R`).
+  `torquesmoothing` (BUILT earlier, EXTENDED 2026-07-22 (twice, same day),
+  DIAGNOSTIC, `R/diag_torque_smoothing.R`, read-only, now runs per-specimen
+  via `BENDER3_BASS_ID` env var (bass16/17/18 all run -- was bass16-only,
+  "a few examples," before the second extension), 3 files per specimen
+  `diag_torque_smoothing_{timedomain,spectrum,examples}.png`) -- PI question,
+  prompted by dissatisfaction with the FL/FV pattern strength: "we might need
+  to adjust [the smoothing cutoff] per experiment type or angular
+  acceleration." Compares raw calibrated torque vs. inertia-corrected vs.
+  30/15/8 Hz low-pass options, per step, plus a pooled power spectrum of the
+  unsmoothed corrected signal, BY PROTOCOL (isometric = static hold, no
+  commanded motion, so any high-frequency content there is unambiguously
+  noise; isovelocity = actively moving the whole window, so the same content
+  could ALSO be genuine motion-coupled signal).
+  FINDING, now confirmed on ALL 3 fish (was bass16-only): isovelocity's
+  active-window power spectrum is elevated across the ENTIRE 0-100 Hz band --
+  **QUANTIFIED median isovelocity/isometric power ratio: bass16 9783x,
+  bass17 3909x, bass18 3947x** (~3.5-4 orders of magnitude, broadband, not
+  one narrow spike) -- NOT the same noise floor scaled up, and consistent
+  across specimens. Peak frequency also consistent: isometric 18-20 Hz,
+  isovelocity 12 Hz, all 3 fish. New `_examples.png` (2 isometric + 2
+  isovelocity median-power steps per specimen, legible large panels) shows
+  WHY directly: for isometric, all filter options (raw through 8 Hz) are
+  visually indistinguishable except for shaving a single-sample outlier
+  spike -- the smoothing choice barely matters. For isovelocity, the filter
+  choice changes the trace SHAPE dramatically -- large (order ~0.3-0.8 N*m),
+  several-cycle oscillations right at motion onset that 8/15 Hz collapse
+  into a smooth curve while 30 Hz/unsmoothed preserve the ringing -- whether
+  that ringing is real mechanical response or an artifact to remove is
+  exactly the open question a single pipeline-wide cutoff can't resolve for
+  both protocols at once. Does NOT yet test the "angular acceleration" half
+  of the question directly (would need the commanded/encoder bend-angle 2nd
+  derivative correlated against the torque residual, per step) -- flagged as
+  a follow-up, not done here. PRE-DECISION diagnostic: does not change
+  `NOISE_FILTER_HZ` / `DISPLAY_SMOOTH_HZ` or any other production filter
+  setting; a per-protocol (or per-motion-state) cutoff is now evidenced as
+  plausibly necessary, confirmed across all 3 fish, but not yet decided or
+  implemented.
   `fltiers` / `fvtiers` (BUILT 2026-07-22, `R/superplot_fl_fv_tiers.R`, read-only
   re-aggregation of the two pooled builders, 3 files
   `fltiers_1_within_trial.png`, `fvtiers_1_within_trial.png`,
@@ -376,7 +452,10 @@ the point-selection design this feeds:
   FL is the un-mixed companion to the across-protocol FLsuperplot (grand mean is
   concave-down, peak near L0). FV's within-protocol pool already IS the
   FVsuperplot (isovelocity moving only); the across-protocol pool is the existing
-  FLsuperplot/FVsuperplot. Geometric u_hat throughout.
+  FLsuperplot/FVsuperplot. Geometric u_hat throughout. Points alpha-flagged by
+  4-tier confidence (added 2026-07-22, SNR-magnitude conflation audit -- this
+  file previously had NO confidence flagging at all; lines stay at fixed
+  alpha, only points are tiered).
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),
@@ -481,10 +560,18 @@ names in use).
   - `uhatEmp` / `uhatGeom` = 6-axis vector force via empirical /
     geometric line-of-action
   - `uhatBoth` = both û methods faceted side by side in one file
-- **filter**: `snrPass` = regenerated with sub-threshold
-  (`activation_snr < 3`) points/steps dropped entirely. Omitted = unfiltered
-  (low-confidence points are still alpha-flagged in-plot where applicable,
-  not dropped).
+- **filter**: `snrPass` = regenerated with low-confidence points/steps
+  dropped entirely. REVISED 2026-07-22 (SNR-magnitude conflation audit,
+  `analysis_muscle_force_vector_log.md`) -- the drop criterion is now the
+  4-tier confidence factor (`mfv_confidence_tier()`, `muscle_force_vector.R`),
+  NOT a bare `activation_snr < 3` ratio: a row is kept if its confidence tier
+  is `confident` OR `confidently_small` (i.e. its own force clears its own
+  `baseline_force_noise_N` even when the SNR ratio doesn't), and dropped only
+  if `unstable_magnitude` or `unconfirmable`. The one exception is
+  `uhatCompare_empVsGeom_snrPass` (a u_hat DIRECTION/angle comparison, which
+  has no force magnitude to test) -- that one file is still ratio-only by
+  design. Omitted = unfiltered (all 4 tiers are still alpha-flagged in-plot
+  where applicable, never dropped).
 
 ## Old name -> new name
 Historical migration record (2026-07-19 renaming pass) -- the `trial_plots/`/

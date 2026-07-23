@@ -91,7 +91,15 @@ suppressPackageStartupMessages({
 #'   floating-point noise from the gear-ratio/encoder scaling chain, not
 #'   genuine angle uncertainty. Default (0.5 deg) is far below the smallest
 #'   nonzero step spacing seen across bass16/17/18 (>= ~2.1 deg).
-#' @param snr_min Activation-SNR pass threshold (alpha-flag only, never drops).
+#' @param snr_min Activation-SNR component of the 4-tier confidence
+#'   classification (mfv_confidence_tier(), muscle_force_vector.R). REVISED
+#'   2026-07-22 (SNR-magnitude conflation audit): points are ALWAYS shown
+#'   (alpha-flag only, never dropped, per-point) but the black trend line is
+#'   now computed from confident+confidently_small points only (excludes
+#'   unstable_magnitude/unconfirmable) -- previously the trend pooled EVERY
+#'   point with equal weight regardless of SNR, the opposite inconsistency
+#'   from diag_isovelocity_hillcheck.R's summary line (which used to exclude
+#'   everything below the ratio, including confidently-small real points).
 #' @return list(plot = <ggplot, always non-NULL>, is_placeholder = <logical>,
 #'   l0_angle_deg, n_near_l0, session_start) -- the scalars are reported so
 #'   the PI can see exactly what was plotted, not just the picture.
@@ -125,7 +133,8 @@ build_fatigue_timeline_plot <- function(step_summary_vec,
     dplyr::mutate(
       wall_clock_start_posix = suppressWarnings(as.POSIXct(.data$wall_clock_start, format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC")),
       elapsed_min = as.numeric(difftime(.data$wall_clock_start_posix, session_start, units = "mins")),
-      snr_pass = is.finite(.data$activation_snr) & .data$activation_snr >= snr_min
+      confidence_tier = mfv_confidence_tier(.data$muscle_force_vector_N, .data$activation_snr,
+                                            .data$baseline_force_noise_N, snr_min = snr_min)
     ) |>
     dplyr::filter(is.finite(.data$elapsed_min))
 
@@ -145,17 +154,19 @@ build_fatigue_timeline_plot <- function(step_summary_vec,
                 l0_angle_deg = l0_angle_deg, n_near_l0 = 0L, session_start = session_start))
   }
 
+  trend_data <- dplyr::filter(near_l0, .data$confidence_tier %in% c("confident", "confidently_small"))
   p <- ggplot(near_l0, aes(x = .data$elapsed_min, y = .data$muscle_force_vector_N,
-                           color = .data$trial_id, alpha = .data$snr_pass)) +
+                           color = .data$trial_id, alpha = .data$confidence_tier)) +
     geom_point(size = 2.4) +
-    geom_smooth(aes(group = 1), method = "loess", formula = y ~ x, se = FALSE,
-               color = "black", linewidth = 0.6, span = 0.9, na.rm = TRUE) +
-    scale_alpha_manual(values = c(`TRUE` = 1.0, `FALSE` = 0.3), name = paste0("SNR >= ", snr_min),
-                       labels = c(`TRUE` = "pass", `FALSE` = "fail (shown, not dropped)")) +
+    { if (nrow(trend_data) >= 4L)
+        geom_smooth(data = trend_data, aes(x = .data$elapsed_min, y = .data$muscle_force_vector_N, group = 1),
+                   method = "loess", formula = y ~ x, se = FALSE,
+                   color = "black", alpha = 1, linewidth = 0.6, span = 0.9, na.rm = TRUE, inherit.aes = FALSE) } +
+    scale_alpha_manual(values = MFV_CONFIDENCE_ALPHA, name = "confidence tier (SNR x magnitude)", drop = FALSE) +
     labs(title = title,
         subtitle = sprintf(
-          "L0 = 0 deg (commanded neutral bend, repeated pre-/post-stim per protocol block); n = %d contraction(s)",
-          nrow(near_l0)),
+          "L0 = 0 deg (commanded neutral bend, repeated pre-/post-stim per protocol block); n = %d contraction(s); trend line = loess over confident+confidently_small points only (%d/%d) -- REVISED 2026-07-22, see analysis log",
+          nrow(near_l0), nrow(trend_data), nrow(near_l0)),
         x = "Elapsed session time (min, since first stimulated step)",
         y = "Muscle force along u_hat (N)", color = "Trial") +
     theme_bw(base_size = 11) +

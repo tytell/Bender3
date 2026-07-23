@@ -41,51 +41,83 @@ source(file.path(.pipeline_root, "run_fv_fl_power_pipeline.R"))  # regenerates f
 # own folder (figs_{bassID}/, per the 2026-07-21 flatten) -- every ggsave
 # below writes there, NOT to figs_summary/.
 
-cli::cli_h1("Regenerating SNR-passing figures for {BASS_ID} -> {SUMMARY_PLOT_DIR}")
+cli::cli_h1("Regenerating SNR/magnitude-passing figures for {BASS_ID} -> {SUMMARY_PLOT_DIR}")
 
+# REVISED 2026-07-22 (PI-directed "SNR-based confidence gating audit" --
+# implements analysis_muscle_force_vector_log.md's 2026-07-22 proposal). Two
+# filters now, not one:
+#   snr_filter()  -- UNCHANGED, ratio-only. Kept for uhat_tbl_all specifically:
+#                    that table compares DIRECTIONS (angles), which have no
+#                    magnitude to test against, and u_hat source selection is
+#                    intentionally ratio-only by design (a low-SNR point's
+#                    DIRECTION really is less reliable regardless of whether
+#                    its force magnitude is real -- see
+#                    muscle_force_vector.R's .mfv_finalize_step() use_emp
+#                    logic / the audit's item 1 finding).
+#   tier_filter()  -- NEW. For every OTHER "_snrPass" family (force/time-
+#                    series data, which DOES have a magnitude to test): keeps
+#                    a row if AT LEAST ONE of the supplied force columns'
+#                    confidence tier (mfv_confidence_tier(), muscle_force_
+#                    vector.R) is "confident" OR "confidently_small" --
+#                    i.e. no longer drops a genuinely-small-but-real point
+#                    (SNR < 3 but |force| >= its own noise floor) identically
+#                    to pure noise, which the pure ratio test used to do.
 snr_filter <- function(df) {
   if (is.null(df) || nrow(df) == 0L) return(df)
   dplyr::filter(df, is.finite(.data$activation_snr), .data$activation_snr >= MFV_UHAT_SNR_MIN)
 }
 
-# ---- SNR-aware summary plots: regenerate from the SNR-passing subset ----
+tier_filter <- function(df, force_cols) {
+  if (is.null(df) || nrow(df) == 0L) return(df)
+  keep <- rep(FALSE, nrow(df))
+  for (fc in force_cols) {
+    if (!fc %in% names(df)) next
+    tier <- mfv_confidence_tier(df[[fc]], df$activation_snr, df$baseline_force_noise_N)
+    keep <- keep | tier %in% c("confident", "confidently_small")
+  }
+  dplyr::filter(df, keep)
+}
+
+# ---- SNR/magnitude-aware summary plots: regenerate from the passing subset ----
 # No BASS_ID prefix needed (2026-07-21, was prefixed when these went into
 # the shared figs_summary/ -- now saved into this specimen's OWN folder,
 # where the "_snrPass" suffix alone already distinguishes them from the
 # unfiltered/alpha-flagged uhatBoth versions, e.g. FL_isometric_uhatBoth.png
 # vs. FL_isometric_uhatBoth_snrPass.png -- no collision).
 if (exists("iso_vec") && nrow(iso_vec) > 0L) {
-  iso_vec_pass <- snr_filter(iso_vec)
+  iso_vec_pass <- tier_filter(iso_vec, c("muscle_force_vector_N", "muscle_force_vector_geom_N"))
   p <- if (!is.null(iso_vec_pass) && nrow(iso_vec_pass) > 0L) build_summary_plot_FL_vector(iso_vec_pass) else NULL
   if (!is.null(p)) {
     outp <- file.path(SUMMARY_PLOT_DIR, "FL_isometric_uhatBoth_snrPass.png")
     ggplot2::ggsave(outp, p, width = 12, height = 6, dpi = 150)
     cli::cli_alert_success("{basename(outp)}: {nrow(iso_vec_pass)}/{nrow(iso_vec)} points pass")
-  } else cli::cli_alert_warning("No SNR-passing isometric vector points for {BASS_ID}")
+  } else cli::cli_alert_warning("No confidence-tier-passing isometric vector points for {BASS_ID}")
 }
 
 if (exists("isv_vec") && nrow(isv_vec) > 0L) {
-  isv_vec_pass <- snr_filter(isv_vec)
+  isv_vec_pass <- tier_filter(isv_vec, c("muscle_force_vector_N", "muscle_force_vector_geom_N"))
   p <- if (!is.null(isv_vec_pass) && nrow(isv_vec_pass) > 0L) build_summary_plot_FV_vector(isv_vec_pass) else NULL
   if (!is.null(p)) {
     outp <- file.path(SUMMARY_PLOT_DIR, "FV_isovelocity_uhatBoth_snrPass.png")
     ggplot2::ggsave(outp, p, width = 12, height = 6, dpi = 150)
     cli::cli_alert_success("{basename(outp)}: {nrow(isv_vec_pass)}/{nrow(isv_vec)} points pass")
-  } else cli::cli_alert_warning("No SNR-passing isovelocity vector points for {BASS_ID}")
+  } else cli::cli_alert_warning("No confidence-tier-passing isovelocity vector points for {BASS_ID}")
 }
 
 if (exists("fv_l0_all") && nrow(fv_l0_all) > 0L) {
-  fv_l0_pass <- snr_filter(fv_l0_all)
+  fv_l0_pass <- tier_filter(fv_l0_all, "force_at_L0_N")
   p <- if (!is.null(fv_l0_pass) && nrow(fv_l0_pass) > 0L) build_summary_plot_FV_L0_vector(fv_l0_pass) else NULL
   if (!is.null(p)) {
     outp <- file.path(SUMMARY_PLOT_DIR, "FVl0_isovelocity_uhatBoth_snrPass.png")
     ggplot2::ggsave(outp, p, width = 9, height = 6, dpi = 150)
     cli::cli_alert_success("{basename(outp)}: {nrow(fv_l0_pass)}/{nrow(fv_l0_all)} points pass")
-  } else cli::cli_alert_warning("No SNR-passing FV L0 (sono) points for {BASS_ID}")
+  } else cli::cli_alert_warning("No confidence-tier-passing FV L0 (sono) points for {BASS_ID}")
 }
 
 if (exists("uhat_tbl_all") && length(uhat_tbl_all) > 0L) {
   uhat_all <- dplyr::bind_rows(uhat_tbl_all)
+  # ratio-only by design -- see snr_filter()'s header comment (u_hat DIRECTION
+  # confidence has no magnitude counterpart to test against).
   uhat_pass <- snr_filter(uhat_all)
   p <- if (!is.null(uhat_pass) && nrow(uhat_pass) > 0L) build_uhat_comparison_plot(uhat_pass) else NULL
   if (!is.null(p)) {
@@ -99,14 +131,14 @@ for (fam in names(force_ts_vec_all)) {
   ts_list <- force_ts_vec_all[[fam]]
   if (length(ts_list) == 0L) next
   ts_df <- dplyr::bind_rows(ts_list)
-  ts_df_pass <- snr_filter(ts_df)
+  ts_df_pass <- tier_filter(ts_df, "muscle_force_vector_N")
   if (is.null(ts_df_pass) || nrow(ts_df_pass) == 0L) {
-    cli::cli_alert_warning("No SNR-passing {fam} force-vs-time rows for {BASS_ID}")
+    cli::cli_alert_warning("No confidence-tier-passing {fam} force-vs-time rows for {BASS_ID}")
     next
   }
   facet_var <- if (fam == "isovelocity") "contraction_mode" else NULL
   p <- build_force_vs_time_vector_plot(
-    ts_df_pass, title = sprintf("Muscle force along u_hat vs time (%s, SNR-passing only)", fam),
+    ts_df_pass, title = sprintf("Muscle force along u_hat vs time (%s, confident + confidently-small only)", fam),
     facet_var = facet_var)
   if (!is.null(p)) {
     outp <- file.path(SUMMARY_PLOT_DIR, sprintf("forceTime_%s_uhatBoth_snrPass.png", fam))

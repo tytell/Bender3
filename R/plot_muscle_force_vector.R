@@ -13,25 +13,28 @@ suppressPackageStartupMessages({ library(dplyr); library(ggplot2) })
 
 MFV_SIDE_COLORS <- c(left = "#1d4ed8", right = "#b91c1c")
 
-# Point transparency for the activation-confidence flag (PI-directed,
-# 2026-07-18) -- steps whose activation_snr falls below the SAME threshold
-# muscle_force_vector.R uses to trust the empirical u_hat (MFV_UHAT_SNR_MIN,
-# default 3.0) are rendered faint/low-confidence rather than hidden, so a low-
-# signal trial (e.g. bass17 isometric trial 15, max SNR 2.36) reads visually
-# as unreliable instead of looking identical to a high-SNR trial (e.g. bass18,
-# median SNR ~7).
-MFV_CONFIDENCE_ALPHA <- c("low confidence (SNR < threshold)" = 0.20,
-                          "confident (SNR >= threshold)"    = 0.75)
+# MFV_CONFIDENCE_ALPHA (4-tier: confident/confidently_small/unstable_magnitude/
+# unconfirmable) and mfv_confidence_tier() now live in muscle_force_vector.R
+# (sourced before this file everywhere) -- REPLACES the 2-level ratio-only
+# version previously defined here (PI-directed 2026-07-22, "SNR-based
+# confidence gating audit"): a ratio-only "low confidence" bucket conflated a
+# genuinely-small-but-real point (e.g. a weak/fatigued muscle, a brief V=0
+# hold) with a point that is indistinguishable from pure noise. See
+# analysis_muscle_force_vector_log.md for the full rationale/evidence.
 
 # Method labels for the empirical-vs-reference u_hat "both ways" comparison
 # (PI A5, 2026-07-18) -- ordered so empirical (primary) is the left/first panel.
 MFV_METHOD_LEVELS <- c("empirical u_hat", "geometric/longitudinal u_hat")
 
 #' Stack the two force columns (empirical + reference u_hat) into one long
-#' tibble with a `method` factor, for side-by-side faceting.
+#' tibble with a `method` factor, for side-by-side faceting. Carries
+#' baseline_force_noise_N through (added 2026-07-22, SNR-magnitude audit) so
+#' the per-point confidence tier can be computed downstream -- a ratio
+#' (activation_snr) alone cannot tell "elevated noise" apart from "genuinely
+#' small real force," see mfv_confidence_tier() (muscle_force_vector.R).
 .mfv_long_methods <- function(step_summary_vec) {
   base_cols <- intersect(c("trial_id", "muscle_side", "contraction_mode", "shortening_strain_pct",
-                           "activation_snr"),
+                           "activation_snr", "baseline_force_noise_N"),
                          names(step_summary_vec))
   emp <- step_summary_vec |>
     dplyr::transmute(dplyr::across(dplyr::all_of(base_cols)),
@@ -44,33 +47,35 @@ MFV_METHOD_LEVELS <- c("empirical u_hat", "geometric/longitudinal u_hat")
   out
 }
 
-#' Bin an activation_snr column into the two-level confidence factor used for
-#' the low-confidence visual flag (PI-directed, 2026-07-18) -- see
-#' MFV_CONFIDENCE_ALPHA. NA/non-finite SNR (e.g. u_hat fell back to
-#' longitudinal, no SNR computed) is treated as low-confidence, not dropped.
-.mfv_confidence_factor <- function(activation_snr, snr_min) {
-  lvls <- names(MFV_CONFIDENCE_ALPHA)
-  factor(dplyr::if_else(is.finite(activation_snr) & activation_snr >= snr_min, lvls[2L], lvls[1L]),
-        levels = lvls)
+#' 4-tier confidence flag for a point (PI-directed, 2026-07-18, REVISED
+#' 2026-07-22 to be magnitude-aware -- see mfv_confidence_tier()
+#' (muscle_force_vector.R) and MFV_CONFIDENCE_ALPHA above). Thin wrapper kept
+#' for this file's call sites; NA/non-finite force or noise (e.g. u_hat fell
+#' back to longitudinal, no baseline_force_noise_N available) is treated as
+#' "unconfirmable" by mfv_confidence_tier() itself, never dropped.
+.mfv_confidence_factor <- function(force, activation_snr, baseline_force_noise_N, snr_min) {
+  mfv_confidence_tier(force, activation_snr, baseline_force_noise_N, snr_min = snr_min)
 }
 
 #' Shared builder for the FL / FV vector summaries -- both are
 #' force-vs-shortening(-rate), connect-the-mean per side (NO model fit), and
 #' faceted by method (empirical vs geometric/longitudinal u_hat) so the two
-#' force estimates sit side by side. Points below `snr_min` (the SAME
-#' activation-SNR threshold muscle_force_vector.R uses, MFV_UHAT_SNR_MIN) are
-#' rendered faint (see MFV_CONFIDENCE_ALPHA) -- a LOW-confidence flag, not a
-#' filter: low-SNR trials (e.g. bass17 isometric, max SNR 2.36, see
-#' diag_drift_check notes) stay visible but visually read as unreliable next
-#' to high-SNR ones (e.g. bass18, median SNR ~7), instead of looking identical.
+#' force estimates sit side by side. Points are flagged with the 4-tier
+#' confidence factor (REVISED 2026-07-22, see mfv_confidence_tier() /
+#' MFV_CONFIDENCE_ALPHA, muscle_force_vector.R) -- a LOW-ratio flag alone,
+#' as used before this revision, conflated "elevated noise" with "genuinely
+#' small real force" (e.g. bass17 isometric, max SNR 2.36, might be a weak-
+#' but-real signal rather than noise -- the ratio alone can't say which). All
+#' 4 tiers stay visible (never a filter); only their alpha differs.
 .build_vector_xy_summary <- function(step_summary_vec, x_col, x_lab, title, shape_col,
                                      snr_min = MFV_UHAT_SNR_MIN) {
   long <- .mfv_long_methods(step_summary_vec)
   pts <- dplyr::filter(long, .data$muscle_side %in% c("left", "right"),
                        is.finite(.data$force_N), is.finite(.data[[x_col]]))
   if (nrow(pts) == 0L) return(NULL)
-  pts$confidence <- .mfv_confidence_factor(pts$activation_snr, snr_min)
-  n_low <- sum(pts$confidence == names(MFV_CONFIDENCE_ALPHA)[1L])
+  pts$confidence <- .mfv_confidence_factor(pts$force_N, pts$activation_snr,
+                                           pts$baseline_force_noise_N, snr_min)
+  tier_n <- table(pts$confidence)
 
   trend <- purrr::map_dfr(levels(pts$method), function(m) {
     sub <- dplyr::filter(pts, .data$method == m)
@@ -93,11 +98,13 @@ MFV_METHOD_LEVELS <- c("empirical u_hat", "geometric/longitudinal u_hat")
     facet_wrap(~method) +
     scale_color_manual(values = MFV_SIDE_COLORS, name = "Muscle side") +
     scale_fill_manual(values = MFV_SIDE_COLORS, guide = "none") +
-    scale_alpha_manual(values = MFV_CONFIDENCE_ALPHA, name = "Activation confidence", drop = FALSE) +
+    scale_alpha_manual(values = MFV_CONFIDENCE_ALPHA, name = "Confidence tier (SNR x magnitude)", drop = FALSE) +
     labs(title = title,
-         subtitle = sprintf("n = %d points across %d trial(s), %d low-confidence (activation SNR < %.1f); force = projected active moment / |r x u_hat|, computed BOTH ways; solid = mean per bin (NO model fit, includes low-confidence points), band = +/-SE",
+         subtitle = sprintf("n = %d points across %d trial(s); confidence tier counts: confident=%d, confidently_small=%d, unstable_magnitude=%d, unconfirmable=%d (SNR>=%.1f AND/OR |force|>=own noise floor, see mfv_confidence_tier()); force = projected active moment / |r x u_hat|, computed BOTH ways; solid = mean per bin (NO model fit, includes ALL tiers), band = +/-SE",
                             dplyr::n_distinct(paste(pts$trial_id, pts$muscle_side, pts[[x_col]])),
-                            dplyr::n_distinct(pts$trial_id), n_low, snr_min),
+                            dplyr::n_distinct(pts$trial_id),
+                            tier_n[["confident"]], tier_n[["confidently_small"]],
+                            tier_n[["unstable_magnitude"]], tier_n[["unconfirmable"]], snr_min),
          x = x_lab, y = "Muscle force along u_hat (N)", shape = shape_col) +
     theme_bw(base_size = 12)
 }
@@ -123,16 +130,18 @@ build_summary_plot_FV_vector <- function(step_summary_vec,
 #' isovelocity ramp the muscle force is sampled at the instant its (40 Hz
 #' low-pass) sono length crosses L0, so all FV points share a common length.
 #' Connect-the-mean, no Hill fit unless explicitly requested.
-#' Points below `snr_min` are flagged low-confidence the same way as
-#' .build_vector_xy_summary() (PI-directed, 2026-07-18) -- see MFV_CONFIDENCE_ALPHA.
+#' Points are flagged with the 4-tier confidence factor the same way as
+#' .build_vector_xy_summary() (REVISED 2026-07-22 -- see MFV_CONFIDENCE_ALPHA /
+#' mfv_confidence_tier(), muscle_force_vector.R).
 build_summary_plot_FV_L0_vector <- function(fv_l0_df,
                                             title = "Isovelocity FV [6-axis LOA vector, N] -- sono-confirmed at L0 crossing (right muscle)",
                                             snr_min = MFV_UHAT_SNR_MIN) {
   df <- dplyr::filter(fv_l0_df, is.finite(.data$force_at_L0_N), is.finite(.data$shortening_strain_pct),
                       .data$muscle_side == "right")
   if (nrow(df) == 0L) return(NULL)
-  df$confidence <- .mfv_confidence_factor(df$activation_snr, snr_min)
-  n_low <- sum(df$confidence == names(MFV_CONFIDENCE_ALPHA)[1L])
+  df$confidence <- .mfv_confidence_factor(df$force_at_L0_N, df$activation_snr,
+                                          df$baseline_force_noise_N, snr_min)
+  tier_n <- table(df$confidence)
   trend <- .mean_line_by_side(df, "shortening_strain_pct", "force_at_L0_N")
 
   ggplot(df, aes(x = .data$shortening_strain_pct, y = .data$force_at_L0_N)) +
@@ -145,10 +154,12 @@ build_summary_plot_FV_L0_vector <- function(fv_l0_df,
     { if (nrow(trend) > 0L)
         geom_line(data = trend, aes(x = .data$x_mid, y = .data$y_mean),
                   inherit.aes = FALSE, color = MFV_SIDE_COLORS[["right"]], linewidth = 1.0) } +
-    scale_alpha_manual(values = MFV_CONFIDENCE_ALPHA, name = "Activation confidence", drop = FALSE) +
+    scale_alpha_manual(values = MFV_CONFIDENCE_ALPHA, name = "Confidence tier (SNR x magnitude)", drop = FALSE) +
     labs(title = title,
-         subtitle = sprintf("n = %d sono-confirmed L0 crossing(s) across %d trial(s), %d low-confidence (activation SNR < %.1f); force sampled where sono length = L0; solid = mean per bin (NO model fit, includes low-confidence points), band = +/-SE",
-                            nrow(df), dplyr::n_distinct(df$trial_id), n_low, snr_min),
+         subtitle = sprintf("n = %d sono-confirmed L0 crossing(s) across %d trial(s); confidence tier counts: confident=%d, confidently_small=%d, unstable_magnitude=%d, unconfirmable=%d; force sampled where sono length = L0; solid = mean per bin (NO model fit, includes ALL tiers), band = +/-SE",
+                            nrow(df), dplyr::n_distinct(df$trial_id),
+                            tier_n[["confident"]], tier_n[["confidently_small"]],
+                            tier_n[["unstable_magnitude"]], tier_n[["unconfirmable"]]),
          x = "Muscle shortening strain-rate (%/s; concentric > 0)",
          y = "Muscle force along u_hat at L0 (N)", shape = "Contraction mode") +
     theme_bw(base_size = 12)

@@ -118,6 +118,64 @@ mfv_gate_f0 <- function(force, snr, noise, snr_min = MFV_UHAT_SNR_MIN) {
   mean(force[keep], na.rm = TRUE)
 }
 
+# Ordered tier levels for mfv_confidence_tier() below -- the single shared
+# vocabulary every SNR-gating site in the codebase should reuse (PI-directed
+# 2026-07-22, "SNR-based confidence gating audit",
+# analysis_muscle_force_vector_log.md). Never reorder without checking every
+# consumer's factor level assumptions (alpha scales, filter %in% lists).
+MFV_CONFIDENCE_TIERS <- c("confident", "confidently_small", "unstable_magnitude", "unconfirmable")
+
+# Point transparency for the 4-tier confidence flag (REPLACES the old 2-level
+# MFV_CONFIDENCE_ALPHA, which conflated "confidently small" with
+# "unconfirmable" -- see mfv_confidence_tier()). Shared by every plot that
+# alpha-flags points instead of dropping them (plot_muscle_force_vector.R,
+# diag_isovelocity_hillcheck.R, plot_fatigue_timeline.R) so a real-but-small
+# point reads visibly differently from a point that could be pure noise.
+MFV_CONFIDENCE_ALPHA <- c(confident = 0.85, confidently_small = 0.55,
+                          unstable_magnitude = 0.35, unconfirmable = 0.15)
+names(MFV_CONFIDENCE_ALPHA) <- MFV_CONFIDENCE_TIERS
+
+#' 4-level SNR x magnitude confidence tier (PI-directed 2026-07-22 audit --
+#' generalizes mfv_gate_f0()'s two-condition test, which is ALREADY correct
+#' for the F0 denominator, into a labeled factor every OTHER SNR-gating site
+#' in the codebase can share). A ratio-only SNR gate (`snr >= snr_min`) cannot
+#' distinguish "the noise floor is elevated" from "the true force is
+#' genuinely small" -- both produce a low ratio. Crossing SNR-pass with an
+#' ABSOLUTE magnitude-pass (the SAME `abs(force) >= k * noise` test
+#' mfv_gate_f0 already uses) resolves the ambiguity:
+#'   confident           snr_pass  & mag_pass  -- as trustworthy as before.
+#'   confidently_small    !snr_pass & mag_pass  -- REAL, just quiet; a
+#'                         ratio-only gate would misfile this as noise (the
+#'                         conflation this function exists to fix).
+#'   unstable_magnitude   snr_pass  & !mag_pass -- high activation on the
+#'                         ||dF|| VECTOR, near-zero on the PROJECTED scalar
+#'                         `force` -- the case mfv_gate_f0 was built to catch
+#'                         for F0; this generalizes the same caution to any
+#'                         OTHER site that reads a projected force.
+#'   unconfirmable        !snr_pass & !mag_pass -- indistinguishable from
+#'                         pure noise on EITHER test; keep the pipeline's
+#'                         existing never-drop, alpha-flag-faintest policy.
+#' Evidence: R/diag_snr_magnitude_audit.R + analysis_muscle_force_vector_log.md
+#' (2026-07-22 entry) -- 42 real "confidently_small" points and 13
+#' "unstable_magnitude" points exist across the 3-fish corpus outside the
+#' F0-denominator context mfv_gate_f0 already protects.
+#' @param force,snr,noise equal-length vectors (the force being judged, its
+#'   activation_snr, and its baseline_force_noise_N).
+#' @return factor, levels = MFV_CONFIDENCE_TIERS. Non-finite input on EITHER
+#'   test -> "unconfirmable" (the most conservative label, never NA -- a
+#'   point with missing SNR/noise data is not silently dropped from the
+#'   classification, it is treated as not-yet-trustworthy).
+mfv_confidence_tier <- function(force, snr, noise, snr_min = MFV_UHAT_SNR_MIN, k = 1.0) {
+  snr_pass <- is.finite(snr) & snr >= snr_min
+  mag_pass <- is.finite(force) & is.finite(noise) & abs(force) >= k * noise
+  lvl <- dplyr::case_when(
+    snr_pass  & mag_pass  ~ MFV_CONFIDENCE_TIERS[1L],
+    !snr_pass & mag_pass  ~ MFV_CONFIDENCE_TIERS[2L],
+    snr_pass  & !mag_pass ~ MFV_CONFIDENCE_TIERS[3L],
+    .default = MFV_CONFIDENCE_TIERS[4L])
+  factor(lvl, levels = MFV_CONFIDENCE_TIERS)
+}
+
 # Deactivation tail (s) appended to the active window, matching the rest of
 # the pipeline's DEACTIVATION_WINDOW_S.
 MFV_DEACTIVATION_WINDOW_S <- 0.5
@@ -752,7 +810,7 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
         muscle_side = s$muscle_side, contraction_mode = cmode_val,
         t_rel = t_abs - s$stim_t0_s, muscle_force_vector_N = f_t,
         stim_duration_s = s$stim_t1_s - s$stim_t0_s,
-        activation_snr = snr
+        activation_snr = snr, baseline_force_noise_N = noise
       )
       # FV L0 crossing (right muscle only -- sono is right-only). Sample force
       # where the sono length crosses L0 within the active ramp window.
@@ -769,7 +827,7 @@ mfv_load_sono_lp40 <- function(filename, ref_td, cutoff_hz = MFV_SONO_LP_HZ) {
             contraction_mode = cmode_val,
             force_at_L0_N = cr$force_at_L0_N, L0_mm = sono_ctx$L0_mm,
             crossing_t_rel_s = cr$crossing_t_abs - s$stim_t0_s, sono_confirmed = TRUE,
-            activation_snr = snr)
+            activation_snr = snr, baseline_force_noise_N = noise)
         }
       }
     }
@@ -1056,11 +1114,23 @@ compute_isovelocity_vector_batch <- function(iso_inputs,
 #' Rank isometric steps by activation magnitude (||active-minus-passive force
 #' vector||) and SNR, so the operator can eyeball/veto which steps are "clearly
 #' active" before curves/u_hat are trusted. Prints an ASCII table.
+#'
+#' `confidence_tier` (REPLACES the old ratio-only `clearly_active` boolean,
+#' 2026-07-22 SNR-magnitude audit -- see mfv_confidence_tier()) shows the
+#' human reviewer the magnitude distinction too: a step can be
+#' "confidently_small" (SNR below threshold, but its projected force is
+#' independently above its own noise floor -- a real, quiet contraction, not
+#' obviously noise) rather than reading identically to "unconfirmable" the way
+#' a bare SNR<3 boolean did.
 rank_isometric_steps_by_activation <- function(step_summary_vec, trial_id = NA_character_,
                                                snr_min = MFV_UHAT_SNR_MIN) {
   r <- step_summary_vec |>
     dplyr::filter(.data$muscle_side %in% c("left", "right")) |>
-    dplyr::mutate(force_delta_mag_N = sqrt(.data$dFx^2 + .data$dFy^2 + .data$dFz^2)) |>
+    dplyr::mutate(force_delta_mag_N = sqrt(.data$dFx^2 + .data$dFy^2 + .data$dFz^2),
+                  confidence_tier = mfv_confidence_tier(.data$muscle_force_vector_N,
+                                                        .data$activation_snr,
+                                                        .data$baseline_force_noise_N,
+                                                        snr_min = snr_min)) |>
     dplyr::arrange(dplyr::desc(.data$activation_snr)) |>
     dplyr::transmute(.data$step_number, .data$muscle_side,
                      bend_angle_deg = round(.data$operating_point, 2),
@@ -1068,8 +1138,8 @@ rank_isometric_steps_by_activation <- function(step_summary_vec, trial_id = NA_c
                      activation_snr = round(.data$activation_snr, 2),
                      muscle_force_vector_N = signif(.data$muscle_force_vector_N, 3),
                      uhat_source = .data$uhat_source,
-                     clearly_active = .data$activation_snr >= snr_min)
-  cli::cli_h3("Activation ranking{if (!is.na(trial_id)) paste0(' [', trial_id, ']') else ''} (SNR >= {snr_min} = clearly active; eyeball/veto per PI A6)")
+                     confidence_tier = .data$confidence_tier)
+  cli::cli_h3("Activation ranking{if (!is.na(trial_id)) paste0(' [', trial_id, ']') else ''} (confidence tier = SNR x magnitude, see mfv_confidence_tier(); confident/confidently_small = magnitude-real; eyeball/veto per PI A6)")
   print(as.data.frame(r), row.names = FALSE)
   invisible(r)
 }
