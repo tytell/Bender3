@@ -57,3 +57,21 @@ classify_dynamic_precondition <- function(specimen, trial_num) {
   )
   factor(out, levels = DYNAMIC_PRECONDITION_LEVELS)
 }
+
+#' Same lookup/cutoff as classify_dynamic_precondition(), applied PROTOCOL-
+#' AGNOSTICALLY (isometric/isovelocity/frequency_sweep trials included, not
+#' just dynamic). This is deliberate, not a bug: trial_num is a per-specimen
+#' SESSION-chronology counter that increments across every protocol type, and
+#' the cutoff was derived (via dynamic-trial sono data) to mark a one-time
+#' tissue-preconditioning/settling effect over the specimen's session -- a
+#' property of the specimen's cumulative handling/loading history, not of the
+#' dynamic protocol specifically. This is supported by the log's cross-
+#' protocol observation (2026-07-22): isometric/isovelocity trials that
+#' happen to run EARLY in a session (e.g. bass18 trial 3) show the SAME
+#' degradation, and are clean when run later. Use this alias (rather than
+#' calling classify_dynamic_precondition() directly) anywhere the exclusion
+#' is being applied outside the dynamic protocol, so the intent is visible at
+#' the call site.
+classify_session_precondition <- function(specimen, trial_num) {
+  classify_dynamic_precondition(specimen, trial_num)
+}

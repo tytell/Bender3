@@ -31,8 +31,27 @@
 # plot_strain_validation.R) before writing this script -- this is a
 # deliberate simplification, not an oversight.
 #
-# Output: figs_summary/pooled_strainValidSonoEnc_<protocol_family>.png,
-# one file per family that has any valid sono data across the corpus.
+# Sono oversampling fix (2026-07-22): the DS3's true internal update rate is
+# ~241-247 Hz (daq_sono_internal_sample_rate_hertz) but its analog output is
+# digitized on the 1 kHz AI clock, so every real sono reading was previously
+# counted (and plotted) ~4x. .process_trial() now decimates to one sample
+# per true DS3 update interval (round(1000 Hz / ds3_rate_hz) -- NOT an
+# exact-value-repeat dedup; checked empirically that the raw signal doesn't
+# hold a flat step between updates, see .process_trial()'s own comment),
+# applied AFTER stim-state labeling so no stim pulse is missed.
+#
+# Output:
+#   figs_summary/pooled_strainValidSonoEnc_<protocol_family>.png -- one file
+#     per family that has any valid sono data across the corpus (ALL trials).
+#   figs_summary/pooled_strainValidSonoEnc_dynamic_later.png -- dynamic only,
+#     restricted to each specimen's "later (stable)" trials (excludes early
+#     tissue-preconditioning trials, dynamic_trial_precondition.R).
+#   figs_summary/pooled_strainValidSonoEnc_allProtocols_later.png -- ONE
+#     multi-panel figure, ALL FOUR protocol families x active/passive,
+#     restricted to "later (stable)" trials for every family (the session-
+#     chronology cutoff applied protocol-agnostically via
+#     classify_session_precondition() -- see that function's docstring for
+#     why this is a deliberate extension, not dynamic-only).
 #
 # Run with:  Rscript R/plot_sono_strain_validation_pooled.R
 
@@ -84,9 +103,12 @@ ACTIVE_PASSIVE_LEVELS <- c("passive (no/left stim)", "active (right stim)")
     width_mm       = dbl1("measurement_specimen_local_body_width_millimeter"),
     depth_mm       = dbl1("measurement_target_muscle_depth_millimeter"),
     lidx_pos_motor = dbl1("daq_specimen_lateral_index_on_positive_motor_side"),
-    lidx_right     = dbl1("daq_specimen_side_index_right")
+    lidx_right     = dbl1("daq_specimen_side_index_right"),
+    ds3_rate_hz    = dbl1("daq_sono_internal_sample_rate_hertz", default = 247.0)
   )
 }
+
+AI_SAMPLE_RATE_HZ <- 1000.0  # daq_ai_sample_rate_hz, all rig configs (see .cursorrules)
 
 # =============================================================================
 # Per-trial sono-check extraction (mirrors run_fv_fl_power_pipeline.R's
@@ -117,7 +139,29 @@ ACTIVE_PASSIVE_LEVELS <- c("passive (no/left stim)", "active (right stim)")
     strain_sono_pct               = td$strain_sono_pct,
     stim_state                    = stim_state
   )
-  cli::cli_alert_success("{basename(h5path)} ({category}): {sum(is.finite(out$strain_pred_encoder_right_pct) & is.finite(out$strain_sono_pct))} valid sono samples")
+
+  # De-duplicate sono oversampling (2026-07-22 fix): the sono channel is
+  # digitized on the 1 kHz AI clock, but the DS3's own true internal update
+  # rate is ~241-247 Hz (daq_sono_internal_sample_rate_hertz), so every real
+  # sono reading was previously being counted (and plotted) ~4x. Checked
+  # empirically first (2026-07-22): the raw calibrated mm signal does NOT
+  # show an exact-value zero-order-hold staircase sample-to-sample (only
+  # ~2% exact-repeat diffs in a spot check) -- consecutive AI samples differ
+  # by small, continuously-varying amounts, consistent with the DS3's analog
+  # output stage smoothing/reconstructing its own ~241-247 Hz updates before
+  # the 1 kHz ADC digitizes it, rather than holding a flat step. Exact-value
+  # dedup is therefore the WRONG tool here (it would keep ~98% of "duplicate"
+  # oversampled rows). Instead, DECIMATE to one sample per true DS3 update
+  # interval (round(AI_rate / ds3_rate)), which is robust regardless of
+  # whether the true hardware behavior is a hard step or a smoothed ramp --
+  # either way, only the DS3's own true update rate carries independent
+  # information. Applied to `out` (not the full-rate td used for stim-state
+  # labeling above), so .detect_stim_events() still sees every row and
+  # cannot miss a single-sample stim pulse.
+  decim_n <- max(1L, round(AI_SAMPLE_RATE_HZ / geom$ds3_rate_hz))
+  n_before <- nrow(out)
+  out <- out[seq(1L, n_before, by = decim_n), , drop = FALSE]
+  cli::cli_alert_success("{basename(h5path)} ({category}): {sum(is.finite(out$strain_pred_encoder_right_pct) & is.finite(out$strain_sono_pct))} valid sono samples ({n_before} -> {nrow(out)}, 1-in-{decim_n} decimated to the true ~{round(geom$ds3_rate_hz)} Hz DS3 update rate)")
   out
 }
 
@@ -140,6 +184,8 @@ pooled <- purrr::pmap_dfr(all_rows, function(specimen, h5path, category) {
            error = function(e) { cli::cli_alert_danger("{basename(h5path)}: {conditionMessage(e)}"); tibble() })
 })
 
+src("dynamic_trial_precondition.R")
+
 pooled <- pooled |>
   dplyr::filter(is.finite(.data$strain_pred_encoder_right_pct), is.finite(.data$strain_sono_pct)) |>
   dplyr::mutate(
@@ -147,7 +193,9 @@ pooled <- pooled |>
     active_passive = factor(
       dplyr::if_else(.data$stim_state == "right stim", "active (right stim)", "passive (no/left stim)"),
       levels = ACTIVE_PASSIVE_LEVELS
-    )
+    ),
+    trial_num    = extract_bender_trial_num(.data$trial_id),
+    precondition = classify_session_precondition(.data$specimen, .data$trial_num)
   )
 
 write.csv(pooled, file.path(DATA_OUT_DIR, "sono_strain_validation_pooled_samples.csv"), row.names = FALSE)
@@ -212,15 +260,8 @@ for (fam in PROTOCOL_FAMILY_LEVELS) {
 # specimen's own preconditioning trials are excluded, rather than showing a
 # dynamic-protocol-wide artifact.
 # =============================================================================
-src("dynamic_trial_precondition.R")
-
 dynamic_later <- pooled |>
-  dplyr::filter(.data$protocol_family == "dynamic") |>
-  dplyr::mutate(
-    trial_num    = extract_bender_trial_num(.data$trial_id),
-    precondition = classify_dynamic_precondition(.data$specimen, .data$trial_num)
-  ) |>
-  dplyr::filter(.data$precondition == "later (stable)")
+  dplyr::filter(.data$protocol_family == "dynamic", .data$precondition == "later (stable)")
 
 write.csv(dynamic_later, file.path(DATA_OUT_DIR, "sono_strain_validation_pooled_dynamic_later_samples.csv"), row.names = FALSE)
 cli::cli_alert_success("Saved {nrow(dynamic_later)} 'later (stable)' dynamic samples -> data_processed/sono_strain_validation_pooled_dynamic_later_samples.csv")
@@ -234,5 +275,64 @@ if (is.null(p_dyn_later)) {
   ggplot2::ggsave(fout_later, p_dyn_later, width = 11, height = 6, dpi = 150)
   cli::cli_alert_success("Saved {fout_later}")
 }
+
+# =============================================================================
+# ALL protocol families in ONE multi-panel figure, "later (stable)" trials
+# only -- style of the original per-specimen <specimen>_strainValidSonoEnc.png
+# (facet by protocol_family), extended with an active/passive facet dimension
+# and pooled across all 3 specimens (PI-directed, 2026-07-22).
+#
+# The "later (stable)" filter applies to EVERY protocol family here (not just
+# dynamic) via classify_session_precondition() -- see that function's
+# docstring for why the dynamic-derived cutoff is applied protocol-agnostic-
+# ally (a session-chronology tissue-settling effect, not dynamic-specific).
+# For isometric/isovelocity/frequency_sweep, this typically removes little or
+# nothing (those protocols mostly run AFTER a specimen's first few dynamic
+# trials in every session to date), but is applied uniformly on principle
+# rather than special-cased per family.
+# =============================================================================
+cli::cli_h1("All-protocol-family combined figure, 'later (stable)' trials only")
+
+all_later <- dplyr::filter(pooled, .data$precondition == "later (stable)")
+write.csv(all_later, file.path(DATA_OUT_DIR, "sono_strain_validation_pooled_allprotocols_later_samples.csv"), row.names = FALSE)
+cli::cli_alert_success("Saved {nrow(all_later)} 'later (stable)' samples across all protocol families -> data_processed/sono_strain_validation_pooled_allprotocols_later_samples.csv")
+
+n_excluded_by_family <- pooled |>
+  dplyr::group_by(.data$protocol_family) |>
+  dplyr::summarise(n_total = dplyr::n(), n_early = sum(.data$precondition == "early (preconditioning)", na.rm = TRUE), .groups = "drop")
+print(n_excluded_by_family)
+
+.build_allprotocols_plot <- function(df) {
+  r2_labels <- df |>
+    dplyr::group_by(.data$protocol_family, .data$active_passive) |>
+    dplyr::summarise(
+      r    = suppressWarnings(cor(.data$strain_pred_encoder_right_pct, .data$strain_sono_pct, use = "complete.obs")),
+      rmse = sqrt(mean((.data$strain_pred_encoder_right_pct - .data$strain_sono_pct)^2, na.rm = TRUE)),
+      n    = dplyr::n(), .groups = "drop"
+    ) |>
+    dplyr::mutate(label = sprintf("r=%.3f, RMSE=%.2f, n=%s", .data$r, .data$rmse, format(.data$n, big.mark = ",")))
+
+  n_specimens <- dplyr::n_distinct(df$specimen)
+
+  ggplot(df, aes(x = .data$strain_pred_encoder_right_pct, y = .data$strain_sono_pct, color = .data$specimen)) +
+    geom_point(shape = 1, size = 0.6, alpha = 0.15, stroke = 0.25) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+    geom_text(data = r2_labels, aes(x = -Inf, y = Inf, label = .data$label),
+              inherit.aes = FALSE, hjust = -0.05, vjust = 1.3, size = 2.9, color = "black") +
+    facet_grid(protocol_family ~ active_passive, scales = "free") +
+    scale_color_manual(values = SPECIMEN_COLORS, name = "Specimen", drop = FALSE) +
+    guides(color = guide_legend(override.aes = list(alpha = 1, size = 2))) +
+    labs(title = "Pooled measured (sonomicrometry, right muscle) vs. predicted (encoder angle) strain -- all protocol families",
+         subtitle = sprintf("Pooled across %d specimen(s) (bass16/17/18); RIGHT muscle only; dashed = 1:1 reference; sono decimated to one point per true ~241-247 Hz DS3 update (no oversampling duplicates).\n\"LATER (stable)\" trials only -- each specimen's early tissue-preconditioning trials excluded (dynamic_trial_precondition.R), applied to every protocol family.", n_specimens),
+         x = "Predicted strain (%, from encoder angle, right-folded)",
+         y = "Measured strain (%, sonomicrometry, right muscle)") +
+    theme_bw(base_size = 11) +
+    theme(legend.position = "bottom", strip.text = element_text(size = 9))
+}
+
+p_all_later <- .build_allprotocols_plot(all_later)
+fout_all_later <- file.path(OUT_DIR, "pooled_strainValidSonoEnc_allProtocols_later.png")
+ggplot2::ggsave(fout_all_later, p_all_later, width = 11, height = 12, dpi = 150)
+cli::cli_alert_success("Saved {fout_all_later}")
 
 cli::cli_alert_success("plot_sono_strain_validation_pooled.R complete")

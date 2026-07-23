@@ -1411,3 +1411,61 @@ physically means (a signed bias in %L0, not a correlation). Three new files:
 
 All 3 new/edited scripts ran end-to-end without error against the full
 bass16/17/18 corpus.
+
+### FOLLOW-UP (same day): combined all-protocol figure + sono oversampling fix
+
+PI-requested: one multi-panel figure in the style of the original per-
+specimen `<specimen>_strainValidSonoEnc.png` (facet by protocol_family),
+extended to pool all 3 specimens, split by active/passive, and restricted to
+"later (stable)" trials -- plus a request to confirm sono duplicate/
+oversampled points aren't being double-counted (~241 Hz true DS3 rate vs.
+1 kHz AI digitization).
+
+**Sono oversampling check -- important correction to the initial approach.**
+First attempt de-duplicated by exact-value repeats (assuming a zero-order-
+hold staircase: N identical consecutive mm values per true DS3 update).
+Checked empirically before trusting it (bass16 trial 1): only ~2% of
+consecutive-sample diffs were exactly zero -- the raw calibrated sono signal
+changes by small, continuously-varying amounts on nearly EVERY 1 kHz sample,
+not in flat held steps. Exact-duplicate dedup was therefore the wrong tool
+(it would have kept ~98% of the oversampled rows, doing almost nothing).
+Most likely explanation: the DS3's analog output stage smooths/reconstructs
+its own ~241-247 Hz updates before the 1 kHz ADC digitizes it, so there is
+no literal staircase to detect by value equality even though the true
+independent-information rate is still only ~241-247 Hz.
+**Fix: decimate, don't dedupe** -- `plot_sono_strain_validation_pooled.R`'s
+`.process_trial()` now keeps 1 sample in every `round(1000 / daq_sono_
+internal_sample_rate_hertz)` (typically 1-in-4), applied to the OUTPUT rows
+only (after stim-state labeling on the full-rate td, so `.detect_stim_
+events()` cannot miss a single-sample stim pulse to a decimated-away row).
+This reduced pooled n from ~3.6M to ~0.9M rows (all-trials) -- roughly the
+expected 4x, confirming the fix is doing real work this time. Applies to ALL
+4 existing pooled figures (`pooled_strainValidSonoEnc_{isometric,isovelocity,
+dynamic,frequency_sweep}.png` and `_dynamic_later.png`), not just the new one
+-- regenerated all of them; r/RMSE values did not materially change (as
+expected -- decimating oversampled, non-independent points shouldn't bias a
+correlation, just its inflated n), confirming this is a data-hygiene fix, not
+a result-changing one.
+
+**Protocol-agnostic precondition classification (new):** added
+`classify_session_precondition()` (`dynamic_trial_precondition.R`) -- the
+SAME specimen+trial_num cutoff as `classify_dynamic_precondition()`, applied
+to every protocol family, not just dynamic. Justified because trial_num is a
+per-specimen SESSION-chronology counter spanning every protocol type, and the
+cutoff represents a one-time tissue-settling effect over the session, not a
+dynamic-specific artifact (supported by the earlier cross-protocol
+observation that early-session isometric/isovelocity trials show the same
+degradation). `pooled` now carries `trial_num`/`precondition` columns
+unconditionally.
+
+**New figure:** `figs_summary/pooled_strainValidSonoEnc_allProtocols_later.png`
+-- `facet_grid(protocol_family ~ active_passive)`, colored by specimen,
+"later (stable)" trials only across all families. All 8 cells:
+r = 0.905-0.989 (isometric passive/active 0.988/0.989, isovelocity
+0.972/0.967, dynamic 0.973/0.905, frequency_sweep passive-only 0.965) --
+i.e. once preconditioning trials are excluded and sono oversampling is
+corrected, EVERY protocol family and stim state now sits in the same tight
+0.90-0.99 r range, closing out the original investigation
+(`bass17_strainValidSonoEnc.png`'s dynamic-panel scatter).
+Also saved: `data_processed/sono_strain_validation_pooled_allprotocols_
+later_samples.csv`.
