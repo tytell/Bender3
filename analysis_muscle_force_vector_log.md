@@ -1469,3 +1469,45 @@ corrected, EVERY protocol family and stim state now sits in the same tight
 (`bass17_strainValidSonoEnc.png`'s dynamic-panel scatter).
 Also saved: `data_processed/sono_strain_validation_pooled_allprotocols_
 later_samples.csv`.
+
+### FOLLOW-UP (2026-07-23): step/cycle-level activity split (residual-force check)
+
+PI hypothesis: the per-SAMPLE windowed `active_passive` split (burst window
++ relaxation tail = "active", everything else = "passive") could still leave
+residual post-stimulation force/strain sitting in the "passive" bucket --
+i.e. samples that occur later in the SAME designed step/cycle as a real stim
+burst, after the window closes but before full mechanical recovery, get
+counted as if that unit had never been stimulated at all.
+
+Added a coarser, unit-level split as an alternate figure: for each designed
+experimental unit (one isometric/isovelocity STEP via `step_number`, or one
+dynamic/frequency_sweep bending CYCLE via `cycle_index` -- `step_number`
+doesn't exist as a column for single_finite trials, `cycle_index` collapses
+to 1 value for segmented ones, so the two are genuinely disjoint, not
+redundant), flag whether stim fired ANYWHERE in that whole unit (any side),
+computed from the raw per-sample `stim` column on the FULL-rate signal
+(`.process_trial()`'s new `step_has_stim`, via `stats::ave(..., FUN = max)`)
+-- NOT the windowed label, and computed BEFORE the sono decimation step so a
+short burst can't be lost to either. Label: "purely passive (no stim in
+step/cycle)" vs. "contains stimulation".
+
+`.build_allprotocols_plot()` generalized to take `col_var`/`col_caption` so
+both the sample-level and unit-level figures share one implementation.
+
+New file: `figs_summary/pooled_strainValidSonoEnc_allProtocols_later_
+stepActivity.png`.
+
+**Result:** isometric's "purely passive" cell is now EMPTY (n=0) -- every
+isometric step in the corpus has SOME stim scheduled somewhere in it (no
+truly never-activated FL steps), which the old per-sample split couldn't
+show since it only ever excluded/included individual windowed samples, never
+revealed that the whole-step population itself has no null case. Dynamic's
+"contains stimulation" cell grew from n=8,577 (old, sample-windowed
+"active (right stim)") to n=52,851 (new, whole-cycle) AND got tighter
+(r=0.905 -> 0.932, RMSE=0.96 -> 0.82) -- i.e. once every sample belonging to
+a stimulated cycle is included (not just the narrow burst+relaxation
+window), the fit doesn't degrade, it improves, meaning the earlier windowed
+"active" bucket was actually the noisier/smaller slice, not the residual-
+contaminated one. Isovelocity and frequency_sweep both show real,
+comparably-sized populations on both sides of this split (r=0.97-0.98
+throughout), i.e. no similar all-or-nothing pattern outside isometric.

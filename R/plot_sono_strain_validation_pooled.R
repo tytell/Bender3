@@ -87,6 +87,7 @@ SPECIMEN_SUBFOLDERS <- c(
 PROTOCOL_FAMILY_LEVELS <- c("isometric", "isovelocity", "dynamic", "frequency_sweep")
 SPECIMEN_COLORS <- c(bass16 = "#1b9e77", bass17 = "#d95f02", bass18 = "#7570b3")
 ACTIVE_PASSIVE_LEVELS <- c("passive (no/left stim)", "active (right stim)")
+STEP_ACTIVITY_LEVELS  <- c("purely passive (no stim in step/cycle)", "contains stimulation")
 
 # =============================================================================
 # Geometry reader (same pattern as diag_sono_*.R scripts)
@@ -132,11 +133,28 @@ AI_SAMPLE_RATE_HZ <- 1000.0  # daq_ai_sample_rate_hz, all rig configs (see .curs
   td <- attach_measured_strain(td)
   td <- attach_sono_strain(td, h5path, geom$lidx_right, geom$lidx_pos_motor)
 
+  # Step/cycle-level activity flag (PI-directed, 2026-07-23): "step_number"
+  # exists only for segmented_finite (isometric/isovelocity, one designed
+  # activation window per step); single_finite (dynamic/frequency_sweep) has
+  # no step_number column at all, but does have "cycle_index". Either way,
+  # this identifies the natural experimental unit (one designed step, or one
+  # bending cycle) so we can ask "did stim fire ANYWHERE in this whole
+  # unit", independent of the WINDOWED per-sample stim_state below -- a
+  # step/cycle that had a real stim burst but has since relaxed can still
+  # carry residual force/strain into samples the windowed label would call
+  # "no stim", which is exactly the contamination this flag is meant to
+  # separate out. Computed on the FULL-RATE td (not the decimated `out`)
+  # so a short burst can't be missed by decimation.
+  step_or_cycle_id <- if (category %in% c("isometric", "isovelocity")) td$step_number else td$cycle_index
+  raw_stim_active  <- as.character(td$stim) != "0"
+  step_has_stim    <- as.logical(stats::ave(as.integer(raw_stim_active), step_or_cycle_id, FUN = max))
+
   stim_state <- as.character(.stim_window_state_label(td))
   out <- tibble(
     specimen = specimen, trial_id = tools::file_path_sans_ext(basename(h5path)), protocol_family = category,
     strain_pred_encoder_right_pct = td$strain_pred_encoder_right_pct,
     strain_sono_pct               = td$strain_sono_pct,
+    step_has_stim                 = step_has_stim,
     stim_state                    = stim_state
   )
 
@@ -195,7 +213,11 @@ pooled <- pooled |>
       levels = ACTIVE_PASSIVE_LEVELS
     ),
     trial_num    = extract_bender_trial_num(.data$trial_id),
-    precondition = classify_session_precondition(.data$specimen, .data$trial_num)
+    precondition = classify_session_precondition(.data$specimen, .data$trial_num),
+    step_activity = factor(
+      dplyr::if_else(.data$step_has_stim, "contains stimulation", "purely passive (no stim in step/cycle)"),
+      levels = STEP_ACTIVITY_LEVELS
+    )
   )
 
 write.csv(pooled, file.path(DATA_OUT_DIR, "sono_strain_validation_pooled_samples.csv"), row.names = FALSE)
@@ -302,9 +324,16 @@ n_excluded_by_family <- pooled |>
   dplyr::summarise(n_total = dplyr::n(), n_early = sum(.data$precondition == "early (preconditioning)", na.rm = TRUE), .groups = "drop")
 print(n_excluded_by_family)
 
-.build_allprotocols_plot <- function(df) {
+#' @param col_var Column name (string) to facet the grid's COLUMNS on --
+#'   "active_passive" (per-SAMPLE windowed stim state) by default, or
+#'   "step_activity" (per-STEP/CYCLE any-stim-anywhere) for the alternate
+#'   version below.
+#' @param col_caption Short phrase describing col_var, substituted into the
+#'   subtitle so the two versions of this figure don't share a misleading
+#'   caption.
+.build_allprotocols_plot <- function(df, col_var = "active_passive", col_caption = NULL) {
   r2_labels <- df |>
-    dplyr::group_by(.data$protocol_family, .data$active_passive) |>
+    dplyr::group_by(.data$protocol_family, .data[[col_var]]) |>
     dplyr::summarise(
       r    = suppressWarnings(cor(.data$strain_pred_encoder_right_pct, .data$strain_sono_pct, use = "complete.obs")),
       rmse = sqrt(mean((.data$strain_pred_encoder_right_pct - .data$strain_sono_pct)^2, na.rm = TRUE)),
@@ -313,26 +342,57 @@ print(n_excluded_by_family)
     dplyr::mutate(label = sprintf("r=%.3f, RMSE=%.2f, n=%s", .data$r, .data$rmse, format(.data$n, big.mark = ",")))
 
   n_specimens <- dplyr::n_distinct(df$specimen)
+  col_caption <- col_caption %||% ""
 
   ggplot(df, aes(x = .data$strain_pred_encoder_right_pct, y = .data$strain_sono_pct, color = .data$specimen)) +
     geom_point(shape = 1, size = 0.6, alpha = 0.15, stroke = 0.25) +
     geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
     geom_text(data = r2_labels, aes(x = -Inf, y = Inf, label = .data$label),
               inherit.aes = FALSE, hjust = -0.05, vjust = 1.3, size = 2.9, color = "black") +
-    facet_grid(protocol_family ~ active_passive, scales = "free") +
+    facet_grid(stats::reformulate(col_var, "protocol_family"), scales = "free") +
     scale_color_manual(values = SPECIMEN_COLORS, name = "Specimen", drop = FALSE) +
     guides(color = guide_legend(override.aes = list(alpha = 1, size = 2))) +
     labs(title = "Pooled measured (sonomicrometry, right muscle) vs. predicted (encoder angle) strain -- all protocol families",
-         subtitle = sprintf("Pooled across %d specimen(s) (bass16/17/18); RIGHT muscle only; dashed = 1:1 reference; sono decimated to one point per true ~241-247 Hz DS3 update (no oversampling duplicates).\n\"LATER (stable)\" trials only -- each specimen's early tissue-preconditioning trials excluded (dynamic_trial_precondition.R), applied to every protocol family.", n_specimens),
+         subtitle = sprintf("Pooled across %d specimen(s) (bass16/17/18); RIGHT muscle only; dashed = 1:1 reference; sono decimated to one point per true ~241-247 Hz DS3 update (no oversampling duplicates).\n\"LATER (stable)\" trials only -- each specimen's early tissue-preconditioning trials excluded (dynamic_trial_precondition.R), applied to every protocol family.%s", n_specimens, col_caption),
          x = "Predicted strain (%, from encoder angle, right-folded)",
          y = "Measured strain (%, sonomicrometry, right muscle)") +
     theme_bw(base_size = 11) +
     theme(legend.position = "bottom", strip.text = element_text(size = 9))
 }
 
-p_all_later <- .build_allprotocols_plot(all_later)
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+p_all_later <- .build_allprotocols_plot(all_later, col_var = "active_passive")
 fout_all_later <- file.path(OUT_DIR, "pooled_strainValidSonoEnc_allProtocols_later.png")
 ggplot2::ggsave(fout_all_later, p_all_later, width = 11, height = 12, dpi = 150)
 cli::cli_alert_success("Saved {fout_all_later}")
+
+# =============================================================================
+# ALTERNATE version of the figure above: columns split by STEP/CYCLE-level
+# activity (did stim fire ANYWHERE in this designed step or bending cycle?)
+# rather than the per-SAMPLE windowed stim_state (PI-directed, 2026-07-23).
+#
+# Motivation: the "passive (no/left stim)" bucket in the sample-level figure
+# can still include samples that sit AFTER a right-stim burst within the same
+# step/cycle (relaxation tail, incomplete mechanical recovery) -- i.e.
+# residual force from stimulation earlier in that same unit, mislabeled as
+# equivalent to a step/cycle that was never stimulated at all. This version
+# instead asks, per whole step (isometric/isovelocity) or bending cycle
+# (dynamic/frequency_sweep): "purely passive (no stim in step/cycle)" if
+# stim NEVER fired anywhere in that unit, vs. "contains stimulation" if it
+# fired at any point (any side) -- computed from the raw stim column on the
+# full-rate signal (`.process_trial()`'s step_has_stim), not the windowed
+# per-sample label, so it can't miss a brief burst to decimation or
+# window-boundary effects.
+# =============================================================================
+cli::cli_h1("All-protocol-family combined figure, STEP/CYCLE-level activity split")
+
+p_all_later_step <- .build_allprotocols_plot(
+  all_later, col_var = "step_activity",
+  col_caption = "\nColumns split by STEP/CYCLE-level activity (any stim anywhere in that step/cycle), not per-sample windowed stim state -- isolates residual post-stimulation force/strain from truly-never-stimulated units."
+)
+fout_all_later_step <- file.path(OUT_DIR, "pooled_strainValidSonoEnc_allProtocols_later_stepActivity.png")
+ggplot2::ggsave(fout_all_later_step, p_all_later_step, width = 11, height = 12, dpi = 150)
+cli::cli_alert_success("Saved {fout_all_later_step}")
 
 cli::cli_alert_success("plot_sono_strain_validation_pooled.R complete")
