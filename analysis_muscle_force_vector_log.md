@@ -1906,3 +1906,111 @@ New outputs:
 - `figs_summary/precondition_power_tension_earlyVsLater.png`
 - `data_processed/precondition_power_tension_earlyVsLater_pooled.csv`
 - `data_processed/precondition_power_tension_earlyVsLater_trialcounts.csv`
+
+---
+
+FOLLOW-UP (2026-07-24, same day): PI reframing -- early dynamic trials are
+REAL muscle behavior at UNPRESCRIBED lengths, not junk to exclude.
+
+PI: "The early dynamic trials are showing REAL muscle behavior, just at
+lengths that were not prescribed by the motor and geometry. But we can
+still extract the muscle mechanics (power) using the lengths measured
+using sonomicrometry for those. So why don't we run a sono-based vs
+encoder-based calculation of muscle power for dynamic trials."
+
+This reframes the whole preconditioning finding: rather than excluding
+early trials as unreliable, use sono (the one signal that measures TRUE
+muscle length regardless of what the motor/geometry assumed) to recover
+valid mechanics from them too.
+
+New script `R/diag_sono_vs_geometric_dynamic_power.R` computes dynamic
+cycle power TWO ways from the SAME measured torque (torque is a
+force-transducer measurement, independent of any length assumption):
+  (1) GEOMETRIC (pipeline's existing method, unchanged) -- velocity from
+      commanded-angle kinematics (pos.rad = angle.deg*pi/180).
+  (2) SONO -- velocity from the directly measured muscle length
+      (sono_right_mm), decimated to the true DS3 rate (~241-247 Hz, not
+      the 1 kHz AI oversampling) before differentiating. Force_N =
+      muscle_torque.Nm / r_m (same lever arm used everywhere else --
+      unavoidable, no muscle-specific force transducer exists).
+Scope: RIGHT-STIM cycles only (sono's only wired channel), ALL trials
+(early AND later -- the whole point is testing whether sono recovers
+valid mechanics from the currently-excluded early trials), all 3 specimens.
+
+**Result: the massive early-trial power "inflation" is a geometric-model
+artifact, not real muscle mechanics -- it disappears almost completely
+under the sono method.**
+
+| method | early median (W/kg) | later median (W/kg) |
+|---|---|---|
+| geometric (commanded-angle) | **38.3** | 0.22 |
+| sono (measured length) | -0.71 | -0.23 |
+
+The geometric method's early/later gap (0.22 -> 38.3, a ~170x jump) is the
+same effect quantified throughout this investigation. Under the sono
+method, early and later medians are both small and similar in magnitude
+(-0.71 vs -0.23 W/kg) -- the gap that drove the whole exclusion decision
+is specific to the GEOMETRIC assumption (that the muscle moves exactly as
+the commanded-angle kinematics predict), not to the muscle's actual
+mechanical output. This is strong support for the PI's reframing: the
+early trials were producing real, measurable torque, at REAL muscle
+lengths/velocities that just didn't match what geometry assumed -- once
+the correct (sono) length signal is used, there is no more "extra power"
+to explain.
+
+CAVEATS (this is a first pass, not a finished replacement pipeline):
+- Per-CYCLE agreement between the two methods is weak-to-absent even
+  within "later (stable)" trials (r=0.087 early, r=-0.263 later, n=36/89
+  right-stim cycles) -- the trial-level MEDIANS both landing near zero in
+  later trials does not mean the two methods agree cycle-by-cycle; it may
+  partly reflect both methods sitting near a shared noise floor at low
+  power output.
+- Sono-based PEAK power is frequently much LARGER than the geometric
+  method's peak power (e.g. bass17 trial 4: sono max_peak=1,059 W/kg vs.
+  geometric's 167 W/kg) -- likely differentiation noise: a length signal
+  differentiated at the ~241-247 Hz DS3 rate amplifies any real
+  measurement jitter into large instantaneous-velocity spikes. The
+  low-pass smoothing options already compared in `diag_sono_smoothing.R`
+  (Butterworth 40/120 Hz, rolling mean) were NOT applied here; doing so
+  before differentiating is the natural next step if sono-based peak
+  power (not just average) needs to be trustworthy.
+- n_cycles per trial is small (2-6 for most trials, since only RIGHT-stim
+  cycles count and many dynamic protocols alternate L/R stimulation) --
+  trial-level medians above are pooling comparatively few cycles per trial.
+
+New outputs:
+- `figs_diagnostic/dynamic_sonoVsGeometric_power_vs_trialorder.png`
+- `figs_diagnostic/dynamic_sonoVsGeometric_power_scatter.png`
+- `data_processed/sono_vs_geometric_dynamic_power_persample.csv`
+- `data_processed/sono_vs_geometric_dynamic_power_percycle.csv`
+- `data_processed/sono_vs_geometric_dynamic_power_bytrial.csv`
+- `data_processed/sono_vs_geometric_dynamic_power_earlyLaterGap.csv`
+
+---
+
+FOLLOW-UP (2026-07-24, same day): clarifying why the "offset" was called
+concerning, given pooled_strainValidSonoEnc_allProtocols_later_
+stepActivity.png looks tight.
+
+PI: "I'm not understanding how strain offset is so concerning. It looks
+good (fit, adherence to ideal 1:1) in this figure."
+
+No contradiction -- these are two different datasets. The "offset is
+concerning" language applied to the EARLY (excluded) dynamic trials, which
+do NOT appear in that figure at all -- `_allProtocols_later*.png` is
+restricted to "later (stable)" trials by construction (that's what
+"_later" in the filename means). The figure the PI is looking at IS the
+clean, validated subset that resulted FROM excluding the concerning data,
+not evidence against the concern:
+
+| dataset | r | offset (pct-pts) | offset as %% of ~5%% commanded amplitude |
+|---|---|---|---|
+| dynamic, EARLY, active (excluded, not in this figure) | 0.293 | 4.92 | 92-200% |
+| dynamic, LATER, active (shown in this figure) | 0.932 (step-activity version) | ~0.4 | 10-25% |
+
+The dynamic panel in the attached figure (r=0.932, RMSE=0.82) is exactly
+the "later (stable)" data -- it looks tight BECAUSE the early data (which
+had an offset comparable in size to the ENTIRE commanded motion) was
+already removed. There is no remaining large offset to be concerned about
+in that figure; the residual offset in "later" data is small (well under
+2 pct-points, see also the calibration-gain-consistency writeup above).
