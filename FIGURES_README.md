@@ -621,6 +621,22 @@ the point-selection design this feeds:
   0.20%) -- the headline confirmation that early-trial excess shortening is
   a real, trial-order-decaying muscle property, promoted here as the
   cross-fish summary of that finding.
+  `sono_conditioning_not_fatigue.png` (BUILT 2026-07-24,
+  `R/summary_sono_conditioning_not_fatigue.R`) -- PI request: show, from the
+  data, that good sono requires CONDITIONING (a modest dose), not a fatigued
+  muscle. 2 panels. (A) |active-vs-passive sono strain excess| vs. cumulative
+  dynamic conditioning cycles delivered before each trial -- reads off the
+  dose (excess drops into a <1 pct-pt "good" band after ~10-20 cycles;
+  lower bound, other protocols also condition). (B) DECOUPLING scatter:
+  |excess| vs. peak active force capacity (max |muscle_torque.Nm| per trial,
+  the standard fatigue readout, as %% of each specimen's own session max) --
+  low excess occurs across the FULL force range. Decisive case: bass17 ends
+  its session at ~99%% of peak strength with the excess already resolved
+  (dose to good ~12 cycles at ~89%% force), so stabilization is a
+  conditioning-dose effect, not force loss. HONEST CAVEATS: n=3; bass16 and
+  bass18 are noisier/sparser and their sessions ended at lower force
+  (possibly real fatigue for those two) -- bass17, the specimen with the
+  most sustained dynamic protocol, carries the clean decoupling.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.
