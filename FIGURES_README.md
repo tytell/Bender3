@@ -545,6 +545,26 @@ the point-selection design this feeds:
   columns, n=36 early / 89 later cycles) visualizes the trial-median table
   directly -- still a first-pass comparison, not a finished replacement
   pipeline.
+  `diag_precondition_sono_length_activeVsPassive.R`
+  (`dynamic_precondition_sonoLengthExcess_{vs_trialorder,boxplot}.png`) --
+  ground-truths the early-trial "excess shortening" using STRICTLY the
+  active-vs-passive difference (PI request), reusing `calc_muscle_torque()`'s
+  own phase-matched act-minus-(averaged)-passive machinery UNCHANGED, but
+  pointed at the 40 Hz-filtered sono STRAIN instead of a torque channel.
+  Output ("sono strain excess") does not depend on L0, the commanded-angle
+  assumption, the encoder, or any cross-trial calibration -- it is a
+  within-trial, phase-matched comparison against each trial's own passive
+  baseline. RESULT: reproduces the same early > later pattern (early
+  median 4.81%, mean 5.29%, n=36 cycles; later median 0.20%, mean 0.03%,
+  n=89 cycles), decaying toward zero at each specimen's own precondition
+  cutoff -- the strongest available confirmation that the excess shortening
+  is a real, trial-order-decaying biomechanical property of the muscle, not
+  an artifact of any one length/velocity model. Also clarified in the same
+  session: the torque source for this ENTIRE investigation (`deconvolve_
+  bender()`) is the single primary-bending-axis ("z-torque") channel, NOT
+  the multi-axis empirical uHat vector from `muscle_force_vector.R` (a
+  separate pipeline feeding the `_uhatBoth` FL/FV plots) -- corrects an
+  earlier mis-statement in the decision log, no code changed.
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),

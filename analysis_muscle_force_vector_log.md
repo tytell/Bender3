@@ -2060,3 +2060,67 @@ had an offset comparable in size to the ENTIRE commanded motion) was
 already removed. There is no remaining large offset to be concerned about
 in that figure; the residual offset in "later" data is small (well under
 2 pct-points, see also the calibration-gain-consistency writeup above).
+
+---
+
+## Ground-truthing via active-vs-passive differencing + torque-axis clarification (2026-07-24)
+
+Two PI questions arose from the geometric-vs-sono power comparison above:
+(1) can the divergence be ground-truthed using strictly the active-vs-
+passive difference, rather than trusting either absolute kinematic
+assumption? (2) is the torque feeding these power calcs the multi-axis
+empirical uHat vector (`muscle_force_vector.R`), or the single primary-
+bending-axis ("z-torque") channel -- and which is more defensible?
+
+**Torque-axis clarification (correction to an earlier answer in this
+session).** `deconvolve_bender()` (the torque source for
+`calc_muscle_torque()`, and therefore every script in this investigation,
+including `diag_sono_vs_geometric_dynamic_power.R`) selects ONE single
+calibrated axis -- `calibration_inertia_axis_sensor` or
+`daq_primary_bending_axis` (x/y/z torque column from `/derived/
+forcetorque_calibrated`) -- and inertia-corrects it. This IS the
+single-axis ("z-torque"/primary-bending-axis) approach, NOT the multi-axis
+empirical uHat vector reconstruction in `muscle_force_vector.R` (a separate
+pipeline feeding the `_uhatBoth` FL/FV plots and SNR-gated exports). An
+earlier answer in this session incorrectly called the power-script torque
+"uHat-projected" -- it is not; no code change needed, correcting the record
+here only. Advantages of the single-axis approach already in production
+use: fewer compounding assumptions (no empirical-direction computation, no
+SNR-dependent empirical/geometric switch), and more robust at low force --
+exactly where uHat's own SNR gating (see `_snrPass` fractions elsewhere in
+this log, e.g. 27/32, 3/13) shows it is least trustworthy.
+
+**Ground-truthing via active-vs-passive differencing.** `calc_muscle_
+torque()` already does phase-matched active-minus-(averaged)-passive
+differencing for FORCE -- that machinery is what made `muscle_torque.Nm`
+trustworthy throughout this investigation. The LENGTH/velocity side of
+`diag_sono_vs_geometric_dynamic_power.R` was never treated the same way
+(both geometric and sono velocity are raw absolute traces). New script
+`R/diag_precondition_sono_length_activeVsPassive.R` closes that asymmetry
+by reusing `calc_muscle_torque()` UNCHANGED, pointing `torque_col` at the
+40 Hz-filtered sono STRAIN instead of a force channel. Output: "sono strain
+excess" = active-cycle sono strain minus the averaged passive-cycle sono
+strain at the SAME phase, same trial (shortening-positive convention, so
+excess > 0 means the active cycle shortens MORE than the passive baseline
+at that phase).
+
+**Result: the ground-truthed excess reproduces the same early > later
+pattern seen throughout this investigation, cycle-by-cycle within each
+trial, independent of any absolute-kinematics assumption (geometric OR
+sono).** Early trials: median 4.81%, mean 5.29% (n=36 cycles); later
+trials: median 0.20%, mean 0.03% (n=89 cycles). Per-specimen trial-order
+trend (`dynamic_precondition_sonoLengthExcess_vs_trialorder.png`) shows a
+decay toward zero at each specimen's own cutoff (bass16: 3.7-5.2% early ->
+-2.3 to 0.8% later; bass17: 8.6-9.7% decaying to 0.5% across trials 1-8,
+then -0.4 to -0.9% for 9-12; bass18: 8.3-9.8% early -> ~0% later). Because
+this is a WITHIN-TRIAL, phase-matched comparison against each trial's OWN
+passive baseline, it does not depend on L0, the commanded-angle assumption,
+or any cross-trial calibration -- this is the strongest available
+confirmation that the early-trial "excess shortening" is a REAL,
+trial-order-decaying biomechanical property of the muscle, not an artifact
+of any one length/velocity model.
+
+New outputs:
+- `figs_diagnostic/dynamic_precondition_sonoLengthExcess_vs_trialorder.png`
+- `figs_diagnostic/dynamic_precondition_sonoLengthExcess_boxplot.png`
+- `data_processed/sono_length_activeVsPassive_{persample,bytrial,earlyLaterGap}.csv`
