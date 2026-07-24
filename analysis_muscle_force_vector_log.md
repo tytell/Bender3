@@ -1732,3 +1732,115 @@ New outputs:
 - `figs_diagnostic/dynamic_precondition_passive_sonoValidation_earlyVsLater.png`
 - `data_processed/dynamic_precondition_sono_fidelity_active_vs_passive.csv`
 - `data_processed/dynamic_precondition_sono_fidelity_passive_by_specimen.csv`
+
+CORRECTION (same day): "passive" must be no stim on EITHER side, for the
+WHOLE cycle -- not the per-sample "no/left stim" window above.
+
+PI clarification: "For comparing early versus late trials, passive means
+no left OR right stim at all during the cycle." The `active_passive`
+bucket used just above is a per-SAMPLE windowed split where only right-stim
+counts as "active" (since sono only instruments the right muscle) -- so its
+"passive" bucket still includes LEFT-stim cycles, which have real
+muscle-driven bending (just not from the muscle sono is watching), not a
+clean no-activation baseline. Re-ran with the correct CYCLE-LEVEL
+definition: `step_activity == "purely passive (no stim in step/cycle)"`
+(stim never fired on either side, anywhere in that whole bending cycle --
+already computed in the pooled CSV, `plot_sono_strain_validation_pooled.R`).
+
+| samples | precondition | n | r | RMSE (%) | offset (pct-pts) |
+|---|---|---|---|---|---|
+| STRICT passive (no stim either side, whole cycle) | early | 15,988 | 0.915 | 1.63 | -0.447 |
+| STRICT passive (no stim either side, whole cycle) | later | 116,188 | 0.975 | 1.84 | +0.158 |
+| active (right stim) | early | 4,235 | 0.293 | 6.34 | +4.92 |
+| active (right stim) | later | 8,577 | 0.905 | 0.957 | +0.426 |
+
+With the correct definition, STRICT-passive fidelity is already quite good
+even in EARLY trials (r=0.915, close to later's 0.975) -- much better than
+the old loose passive number (r=0.610) suggested, because that number was
+partly measuring left-stim-driven bending dynamics, not sensor noise. The
+offset stays small in both groups AND FLIPS SIGN (-0.447 early ->
++0.158 later), consistent with residual scatter around zero rather than a
+directional bias. This makes the contrast with active's early offset
+(+4.92, one direction, ~30x larger) sharper, not weaker: the massive,
+one-directional early bias is specific to right-side stimulation, not a
+generic property of early-session mechanics. Conclusion from the earlier
+(superseded) loose-passive comparison is unchanged, just now on firmer
+footing. `diag_precondition_passive_sono_fidelity.R` now uses the strict
+definition as primary and reports the old loose number only as a labeled
+comparison row.
+
+---
+
+FOLLOW-UP (2026-07-24, same day): can a fixed calibration factor recover
+the "true" strain from the active-trial offset?
+
+PI: "Based on the offset, can we just add a calibration factor to truly
+get the desired strain? If so, does the active data suggest such a factor
+would be consistent across conditions or variable (and therefore kinda
+useless)?"
+
+New script `R/diag_precondition_calibration_gain_check.R` -- fits
+`strain_sono_pct ~ strain_pred_encoder_right_pct` PER TRIAL (dynamic,
+active/right-stim only), extracting slope (a hypothetical multiplicative
+GAIN correction) and intercept (a hypothetical additive OFFSET correction)
+separately, then checks whether either is stable enough across trials to
+serve as a single fixed calibration factor.
+
+**Result: no single factor works. Early trials aren't a fixed error at
+all (the fit itself is barely a real relationship), and even the
+"later/stable" residual gain differs by specimen.**
+
+| trial group | n trials | median gain (slope) | sd | range | median offset (intercept) | sd |
+|---|---|---|---|---|---|---|
+| early (preconditioning) | 14 | 0.66 | 0.61 | -0.24 to 1.66 | 6.09 | ~4-5 |
+| later (stable) | 16 | 1.08 | 0.13 | 0.93 to 1.28 | 0.40 | ~0.6 |
+
+Early trials: gain swings from -0.24 to 1.66 trial-to-trial within the SAME
+specimen/session (bass16 trial 1: slope=0.07, r=0.04 -- essentially no
+linear relationship at all; bass17 trial 4: slope=1.66; bass18 trials 1-2:
+NEGATIVE slope, r<0). A "calibration factor" presupposes a stable linear
+relationship to correct -- there isn't one in early trials. This is the
+regression-level signature of the same trial-order decay documented above
+(early trials trend from near-zero/negative gain toward ~1 as trial number
+increases), not a fixed sensor/geometry error.
+
+Later (stable) trials: gain is far more self-consistent WITHIN a specimen
+but DIFFERS BETWEEN specimens:
+
+| specimen | n trials | median gain | sd gain | median offset | sd offset |
+|---|---|---|---|---|---|
+| bass16 | 9 | 1.03 | 0.124 | 0.38 | 0.76 |
+| bass17 | 4 | 1.27 | 0.020 | 0.34 | 0.27 |
+| bass18 | 3 | 1.08 | 0.050 | 0.49 | 0.16 |
+
+bass17's later-trial gain is remarkably tight (1.24-1.28, sd=0.02) --
+consistent with a small, real, specimen-specific geometric mis-estimate
+(e.g. muscle depth/body width measured slightly off for that individual)
+that a PER-SPECIMEN multiplicative correction could plausibly remove.
+bass18 is also fairly tight (sd=0.05). bass16 is looser (sd=0.12, includes
+trials 10-12 at 1.20-1.24 vs trials 5-8 at 0.93-0.99) -- a specimen-wide
+factor would still leave meaningful trial-to-trial residual there.
+
+**Bottom line for the PI's question:**
+1. NO universal calibration factor (one number for the whole dataset) is
+   defensible -- gain isn't even a fixed number for the SAME specimen in
+   early trials, and later-trial gain differs specimen-to-specimen
+   (1.03-1.27).
+2. A PER-SPECIMEN multiplicative gain applied ONLY to later/stable trials
+   is plausible for bass17 (and reasonably so for bass18), but would be a
+   band-aid on top of an underlying geometric uncertainty already explored
+   (muscle-depth/body-width sensitivity, ruled insufficient ALONE to
+   explain the full early-trial gain but plausible for this smaller
+   residual). It should not be applied to early trials, where slippage
+   dominates and no fixed factor exists.
+3. Simplest, already-implemented alternative that requires no assumed
+   correction model: keep using the existing hard exclusion cutoff
+   (`dynamic_trial_precondition.R`) for anything requiring accurate
+   absolute strain, rather than trying to correct the excluded trials.
+
+New outputs:
+- `figs_diagnostic/dynamic_precondition_calibration_gain_vs_trialorder.png`
+- `figs_diagnostic/dynamic_precondition_calibration_offset_vs_trialorder.png`
+- `data_processed/dynamic_precondition_calibration_gain_by_trial.csv`
+- `data_processed/dynamic_precondition_calibration_gain_consistency_by_precondition.csv`
+- `data_processed/dynamic_precondition_calibration_gain_consistency_later_by_specimen.csv`

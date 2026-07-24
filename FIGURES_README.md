@@ -490,16 +490,33 @@ the point-selection design this feeds:
   unlike dynamic's early-trial 2-10 pct-point offsets.
   `diag_precondition_passive_sono_fidelity.R` (`dynamic_precondition_
   passive_sonoValidation_earlyVsLater.png`) -- PI question: does PASSIVE
-  (no/left stim) fidelity also improve early->later? Yes for pointwise r
-  (0.61->0.97, less noise) but the MEAN-LEVEL OFFSET stays ~0 in passive
-  samples even early (+0.02 vs active's +4.92 pct-points) -- the dramatic
-  bias is specific to active stimulation (real muscle tension driving
-  slip), not generic early-session sensor noise.
+  fidelity also improve early->later? PASSIVE here means STRICT cycle-level
+  (PI-clarified 2026-07-24: no stim on EITHER side, anywhere in the whole
+  cycle -- `step_activity == "purely passive"`, not the looser per-sample
+  "no/left stim" window used in an earlier version of this script, which
+  still mixed in left-stim cycles that have real muscle-driven bending).
+  Yes for pointwise r (0.915->0.975) but the MEAN-LEVEL OFFSET stays small
+  and FLIPS SIGN in both groups (-0.45 early, +0.16 later) vs. active's
+  early offset of +4.92 pct-points, one direction, ~30x larger -- the
+  dramatic bias is specific to active (right-side) stimulation, not
+  generic early-session mechanics.
   Sanity check (not a separate figure): commanded p2p strain amplitude for
   these dynamic trials is ~5% (median 5.04%); early-trial OFFSETS alone
   are 92-200% of that commanded amplitude (later trials: 10-25%) -- the
   early bias is the same order of magnitude as the entire commanded
   motion, not a subtle measurement artifact.
+  `diag_precondition_calibration_gain_check.R` (`dynamic_precondition_
+  calibration_{gain,offset}_vs_trialorder.png`) -- PI question: can a
+  fixed calibration factor recover true strain from the offset? Fits
+  sono~predicted PER TRIAL (dynamic, active/right-stim) to get a gain
+  (slope) and offset (intercept). NO: early-trial gain is not even a
+  stable relationship (ranges -0.24 to 1.66 trial-to-trial within the
+  same specimen, some trials near-zero/negative r) -- it's the trial-order
+  decay, not a fixed error. Later/stable gain is tighter WITHIN a specimen
+  (bass17 1.24-1.28, bass18 0.99-1.08, bass16 0.93-1.24) but DIFFERS
+  BETWEEN specimens (median 1.03/1.27/1.08) -- no universal factor; a
+  per-specimen gain on later/stable trials only is plausible for
+  bass17/bass18, not for early trials.
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),
