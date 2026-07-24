@@ -1982,6 +1982,52 @@ New outputs:
 - `figs_diagnostic/dynamic_sonoVsGeometric_power_vs_trialorder.png`
 - `figs_diagnostic/dynamic_sonoVsGeometric_power_scatter.png`
 - `data_processed/sono_vs_geometric_dynamic_power_persample.csv`
+
+### FOLLOW-UP (2026-07-24): sono signal conditioning before differentiating +
+### boxplot comparison
+
+PI directed the sono peak-power-noise caveat above be resolved: "condition
+the sono signal (remove steps and apply a sensible filter -- we already
+decided that, check log)... rerun analyses and plots... add boxplot
+comparison of sono vs encoder power outputs." No single "chosen" filter had
+actually been written down as a final decision in `diag_sono_smoothing.R`'s
+own entry (that script only compared 5 candidates and concluded de-
+staircasing did NOT change the amplitude-ratio pattern, i.e. it ruled out
+staircase artifact as the strain-gain explanation -- it never picked a
+production filter). Adopted the best-justified candidate from that
+comparison for this differentiation-sensitive use case: **zero-phase
+Butterworth low-pass, 40 Hz cutoff, order 4 (`filtfilt`)** -- "below DS3
+Nyquist, preserves muscle motion" per that script's own framing, and every
+dynamic cycling frequency in this corpus is well under 10 Hz, so 40 Hz
+leaves enormous headroom while removing genuine ADC/electrical noise. Applied
+to the FULL-TRIAL `sono_right_mm` (continuous series, avoiding filtfilt edge
+artifacts that per-cycle-slice filtering would introduce) BEFORE the existing
+decimate-to-true-DS3-rate step, then differentiated as before.
+
+**Result: fixes the peak-power noise, does not change the core finding.**
+Bass17 trial 4 (the example flagged above): sono peak power was 1,059 W/kg
+(vs. geometric's 167 W/kg) before filtering; now 151.8 W/kg (vs. geometric's
+167.1 W/kg) -- same order of magnitude, no more spurious differentiation
+spikes. Per-cycle peak-power correlation, "later (stable)" trials: r=0.965
+(n=89) -- essentially absent before filtering, now tight. The trial-median
+early/later gap that is this script's main finding is unchanged in direction
+and magnitude: geometric 38.3 -> 0.22 W/kg (early->later, ~170x), sono -2.49
+-> -0.02 W/kg (early->later, both near zero) -- filtering does not alter the
+conclusion that the massive early-trial "power inflation" is a geometric-
+model artifact. One caveat REMAINS despite filtering: per-cycle AVG-power
+correlation between methods stays weak-to-negative even in later trials
+(r=-0.27 early, r=-0.684 later, n=36/89) -- filtering fixed the peak-power
+noise but did NOT create cycle-by-cycle agreement on the mean; both methods
+independently sit near a shared near-zero-power floor in later trials
+without tracking each other's residual variation there.
+
+New output: `figs_diagnostic/dynamic_sonoVsGeometric_power_boxplot.png` --
+2x2 (rows = mean/peak, columns = geometric/sono) boxplot+jitter of per-cycle
+power by precondition (n=36 early / 89 later cycles), colored by specimen.
+Visually confirms the trial-median table: geometric's early box sits far
+above its later box (~0-100 W/kg spread vs. tight-to-zero); sono's early and
+later boxes both sit near zero for the mean-power row, and the peak-power
+row now shows sono's spread comparable to (not wildly exceeding) geometric's.
 - `data_processed/sono_vs_geometric_dynamic_power_percycle.csv`
 - `data_processed/sono_vs_geometric_dynamic_power_bytrial.csv`
 - `data_processed/sono_vs_geometric_dynamic_power_earlyLaterGap.csv`

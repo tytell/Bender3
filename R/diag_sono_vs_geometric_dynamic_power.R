@@ -13,9 +13,24 @@
 #       from the COMMANDED-angle kinematics (pos.rad = angle.deg*pi/180,
 #       the same quantity 03_analyze.R's add_muscle_instantaneous() uses).
 #   (2) SONO -- velocity from the DIRECTLY MEASURED muscle length
-#       (sono_right_mm, attach_sono_strain()), decimated to the true DS3
-#       update rate (daq_sono_internal_sample_rate_hertz) before
-#       differentiating, to avoid the 1 kHz AI oversampling.
+#       (sono_right_mm, attach_sono_strain()), CONDITIONED before
+#       differentiating (PI-directed, 2026-07-24, following up on the
+#       first pass of this script which differentiated the raw decimated
+#       signal and got visibly noisy peak-power estimates): zero-phase
+#       Butterworth low-pass at 40 Hz (order 4, filtfilt -- same recipe
+#       already compared/vetted in diag_sono_smoothing.R, "below DS3
+#       Nyquist, preserves muscle motion"; every dynamic cycling frequency
+#       in this corpus is well under 10 Hz) applied to the FULL-TRIAL
+#       sono_right_mm at its native 1 kHz AI rate (zero-phase = no lag,
+#       and filtering the continuous full-trial series avoids the edge
+#       artifacts a filtfilt would produce if applied separately to each
+#       disjoint stim-window slice), THEN decimated to the true DS3 update
+#       rate (daq_sono_internal_sample_rate_hertz, ~241-247 Hz -- "decimate,
+#       don't dedupe", the fix already adopted in plot_sono_strain_
+#       validation_pooled.R) before differentiating. This removes both the
+#       1 kHz AI staircase/oversampling AND genuine sensor/ADC noise above
+#       the real muscle-motion bandwidth, which the raw-signal derivative
+#       in the first pass was amplifying into spurious peak-power spikes.
 #       Force_N = muscle_torque.Nm / r_m (SAME lever arm used everywhere
 #       else in this pipeline -- unavoidable, since there is no muscle-
 #       specific force transducer, only a whole-body torque sensor).
@@ -33,8 +48,23 @@
 #            data:    02_processed/data_processed/
 
 suppressPackageStartupMessages({
-  library(dplyr); library(tibble); library(purrr); library(ggplot2); library(cli); library(rhdf5); library(readr)
+  library(dplyr); library(tidyr); library(tibble); library(purrr); library(ggplot2); library(cli); library(rhdf5); library(readr); library(signal)
 })
+
+# Zero-phase Butterworth LP filter via filtfilt -- same recipe as
+# diag_sono_smoothing.R's .butter_lp(), duplicated here (that script is a
+# standalone analysis, not a sourceable library).
+.butter_lp_sono <- function(x, cutoff_hz, sample_rate_hz, order = 4L) {
+  nyq <- sample_rate_hz / 2.0
+  if (cutoff_hz >= nyq) return(x)
+  ok <- is.finite(x)
+  if (sum(ok) < 20L) return(x)
+  filt <- signal::butter(order, cutoff_hz / nyq, type = "low")
+  out  <- x
+  out[ok] <- signal::filtfilt(filt, x[ok])
+  out
+}
+SONO_LOWPASS_CUTOFF_HZ <- 40.0
 
 .pipeline_root <- if (nzchar(Sys.getenv("BENDER3_R_ROOT"))) Sys.getenv("BENDER3_R_ROOT") else "R"
 src <- function(f) source(file.path(.pipeline_root, f))
@@ -117,6 +147,12 @@ SPECIMEN_COLORS     <- c(bass16 = "#1b9e77", bass17 = "#d95f02", bass18 = "#7570
   if (!("sono_right_mm" %in% names(td)) || all(!is.finite(td$sono_right_mm))) return(tibble())
   if (!is.finite(r_m) || r_m <= 0) return(tibble())
 
+  # Condition sono BEFORE any row restriction, on the full continuous
+  # trial (filtfilt is zero-phase but assumes a continuous time series --
+  # filtering disjoint stim-window slices separately would introduce edge
+  # artifacts at every slice boundary). See module header for rationale.
+  td$sono_right_mm_filt <- .butter_lp_sono(td$sono_right_mm, SONO_LOWPASS_CUTOFF_HZ, geom$ai_rate_hz)
+
   td$.row_id <- seq_len(nrow(td))
   td2 <- set_cycle_types(td)
   msc <- tryCatch(
@@ -146,7 +182,8 @@ SPECIMEN_COLORS     <- c(bass16 = "#1b9e77", bass17 = "#d95f02", bass18 = "#7570
   if ("cycletype" %in% names(msc)) msc <- dplyr::filter(msc, .data$cycletype == "act")
   if (nrow(msc) == 0L) return(tibble())
 
-  msc$sono_right_mm <- td$sono_right_mm[msc$.row_id]
+  msc$sono_right_mm      <- td$sono_right_mm[msc$.row_id]
+  msc$sono_right_mm_filt <- td$sono_right_mm_filt[msc$.row_id]
   msc$specimen  <- specimen
   msc$trial_id  <- trial_id
   msc$trial_num <- extract_bender_trial_num(trial_id)
@@ -156,7 +193,7 @@ SPECIMEN_COLORS     <- c(bass16 = "#1b9e77", bass17 = "#d95f02", bass18 = "#7570
   msc$ai_rate_hz     <- geom$ai_rate_hz
   dplyr::select(msc, dplyr::any_of(c(
     "specimen", "trial_id", "trial_num", "cycle", "t.s", "pos.rad", "muscle_torque.Nm",
-    "sono_right_mm", "r_m", "muscle_mass.kg", "sono_rate_hz", "ai_rate_hz",
+    "sono_right_mm", "sono_right_mm_filt", "r_m", "muscle_mass.kg", "sono_rate_hz", "ai_rate_hz",
     "curvature.invm", "freq.Hz"
   )))
 }
@@ -192,7 +229,7 @@ all_rows <- all_rows |>
     dplyr::mutate(
       dt_s      = .data$t.s - dplyr::lag(.data$t.s),
       dpos_rad  = .data$pos.rad - dplyr::lag(.data$pos.rad),
-      dsono_mm  = .data$sono_right_mm - dplyr::lag(.data$sono_right_mm)
+      dsono_mm  = .data$sono_right_mm_filt - dplyr::lag(.data$sono_right_mm_filt)
     ) |>
     dplyr::ungroup() |>
     dplyr::filter(is.finite(.data$dt_s), .data$dt_s > 0) |>
@@ -325,5 +362,49 @@ gap_tbl <- trial_power |>
 cli::cli_h1("Early vs. later median power, geometric vs. sono method")
 print(gap_tbl)
 write.csv(gap_tbl, file.path(DATA_OUT_DIR, "sono_vs_geometric_dynamic_power_earlyLaterGap.csv"), row.names = FALSE)
+
+# =============================================================================
+# Plot 3: boxplot comparison, geometric vs. sono, at CYCLE level (PI-
+# requested, 2026-07-24) -- avg AND peak power side by side (2x2: rows =
+# {avg, peak}, columns = {geometric, sono}), x = precondition (n-labeled),
+# points colored by specimen. cyc has far more rows than trial_power (36
+# early / 89 later cycles vs. 14/16 trials), giving boxes with enough
+# points to actually show a distribution rather than 2-4 dots.
+# =============================================================================
+box_long <- cyc |>
+  tidyr::pivot_longer(
+    cols = c("avg_power_geom_Wkg", "peak_power_geom_Wkg", "avg_power_sono_Wkg", "peak_power_sono_Wkg"),
+    names_to = "metric", values_to = "power_Wkg"
+  ) |>
+  dplyr::mutate(
+    method = ifelse(grepl("_geom_", .data$metric), "geometric (commanded-angle)", "sono (measured length, 40 Hz LP-filtered)"),
+    stat   = ifelse(grepl("^avg_", .data$metric), "mean (cycle-averaged)", "peak (cycle-max |instantaneous|)")
+  ) |>
+  dplyr::filter(is.finite(.data$power_Wkg))
+
+n_lab_box <- box_long |>
+  dplyr::distinct(.data$specimen, .data$trial_id, .data$cycle, .data$precondition) |>
+  dplyr::count(.data$precondition, name = "n_cycles") |>
+  dplyr::mutate(x_label = sprintf("%s\n(n=%d cycles)", .data$precondition, .data$n_cycles))
+box_long <- dplyr::left_join(box_long, dplyr::select(n_lab_box, "precondition", "x_label"), by = "precondition")
+box_long$x_label <- factor(box_long$x_label, levels = dplyr::arrange(n_lab_box, .data$precondition)$x_label)
+box_long$method  <- factor(box_long$method, levels = c("geometric (commanded-angle)", "sono (measured length, 40 Hz LP-filtered)"))
+box_long$stat    <- factor(box_long$stat, levels = c("mean (cycle-averaged)", "peak (cycle-max |instantaneous|)"))
+
+p3 <- ggplot(box_long, aes(x = .data$x_label, y = .data$power_Wkg)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5, fill = "grey95", color = "grey40") +
+  geom_jitter(aes(color = .data$specimen), width = 0.12, size = 1.8, alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey70", linewidth = 0.4) +
+  facet_grid(stat ~ method, scales = "free_y") +
+  scale_color_manual(values = SPECIMEN_COLORS, name = "Specimen") +
+  labs(title = "Dynamic, right-stim cycles: mass-specific power, geometric vs. sono method (early vs. later)",
+       subtitle = sprintf("Sono velocity from a %.0f Hz zero-phase Butterworth LP filter on sono_right_mm (full trial), decimated to the true DS3\nrate before differentiating -- see module header. Each point = one active right-stim cycle.", SONO_LOWPASS_CUTOFF_HZ),
+       x = NULL, y = "Power (W/kg)") +
+  theme_bw(base_size = 11) +
+  theme(legend.position = "bottom", strip.text = element_text(size = 9))
+
+fout3 <- file.path(OUT_DIR, "dynamic_sonoVsGeometric_power_boxplot.png")
+ggplot2::ggsave(fout3, p3, width = 10, height = 7, dpi = 150)
+cli::cli_alert_success("Saved {fout3}")
 
 cli::cli_alert_success("diag_sono_vs_geometric_dynamic_power.R complete -- outputs in {OUT_DIR}/ and {DATA_OUT_DIR}/")

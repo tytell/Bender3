@@ -518,23 +518,33 @@ the point-selection design this feeds:
   per-specimen gain on later/stable trials only is plausible for
   bass17/bass18, not for early trials.
   `diag_sono_vs_geometric_dynamic_power.R` (`dynamic_sonoVsGeometric_
-  power_vs_trialorder.png`, `..._power_scatter.png`) -- PI reframing:
-  early dynamic trials show REAL muscle behavior at lengths NOT prescribed
-  by the motor/geometry; can sono recover valid power from them instead of
-  excluding them? Computes dynamic cycle power two ways from the SAME
-  measured torque -- GEOMETRIC (commanded-angle kinematics, the pipeline's
-  existing method) vs. SONO (directly measured muscle length, decimated to
-  the true ~241-247 Hz DS3 rate before differentiating), RIGHT-STIM cycles
-  only, ALL trials (early + later, no exclusion applied here). RESULT: the
-  early-trial power "inflation" (geometric median 38.3 W/kg early vs. 0.22
-  W/kg later, ~170x) nearly VANISHES under the sono method (-0.71 vs. -0.23
-  W/kg) -- strong evidence the inflation is a geometric-model artifact, not
-  real muscle output. CAVEAT: per-cycle agreement between the two methods
-  is weak even in later trials (r=0.09/-0.26), and sono-based PEAK power is
-  often noisier/larger than geometric's (likely differentiation noise on
-  the sono signal) -- this is a first-pass comparison, not a finished
-  replacement pipeline; applying the smoothing options from `diag_sono_
-  smoothing.R` before differentiating is the natural next step.
+  power_vs_trialorder.png`, `..._power_scatter.png`, `..._power_boxplot.png`)
+  -- PI reframing: early dynamic trials show REAL muscle behavior at lengths
+  NOT prescribed by the motor/geometry; can sono recover valid power from
+  them instead of excluding them? Computes dynamic cycle power two ways from
+  the SAME measured torque -- GEOMETRIC (commanded-angle kinematics, the
+  pipeline's existing method) vs. SONO (directly measured muscle length,
+  zero-phase Butterworth LOW-PASS FILTERED at 40 Hz on the full-trial
+  continuous series -- "condition the sono signal" per PI direction,
+  2026-07-24, using the best-justified candidate from `diag_sono_
+  smoothing.R`'s earlier comparison -- THEN decimated to the true
+  ~241-247 Hz DS3 rate before differentiating), RIGHT-STIM cycles only, ALL
+  trials (early + later, no exclusion applied here). RESULT: the early-trial
+  power "inflation" (geometric median 38.3 W/kg early vs. 0.22 W/kg later,
+  ~170x) nearly VANISHES under the sono method (-2.49 vs. -0.02 W/kg) --
+  strong evidence the inflation is a geometric-model artifact, not real
+  muscle output; unchanged by the filtering follow-up. The 40 Hz filter DID
+  fix the peak-power noise flagged in the first pass (bass17 trial 4:
+  sono max_peak 1,059 -> 151.8 W/kg, now comparable to geometric's 167 W/kg;
+  per-cycle peak-power r rises to 0.965 in later trials). REMAINING CAVEAT:
+  per-cycle AVG-power agreement between the two methods stays weak-to-
+  negative even in later trials (r=-0.27 early, r=-0.68 later) -- filtering
+  fixed peak-power noise but not cycle-by-cycle mean-power tracking; both
+  methods independently sit near a shared near-zero floor in later trials.
+  The boxplot (`_power_boxplot.png`, 2x2: mean/peak rows x geometric/sono
+  columns, n=36 early / 89 later cycles) visualizes the trial-median table
+  directly -- still a first-pass comparison, not a finished replacement
+  pipeline.
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),
