@@ -546,6 +546,20 @@ the point-selection design this feeds:
   not degrades, once the full cycle is included: r 0.905->0.932). Sono is
   DECIMATED (1-in-~4) to the true ~241-247 Hz DS3 update rate before
   plotting/pooling -- the 1 kHz AI clock oversamples the DS3 by ~4x.
+  `precondition_power_tension_earlyVsLater.png` (BUILT 2026-07-24,
+  `R/summary_precondition_power_tension_earlyVsLater.R`) -- PI question:
+  does the early/later exclusion leave too little power/tension data?
+  6-panel grid (protocol x mean/max, independent y-axes, n labeled per
+  x-tick): dynamic loses close to half its trials to the cutoff (14 early
+  / 16 later) and the excluded early trials are the highest-power ones
+  in the dataset (power-side signature of the same slip effect); but
+  isovelocity (1 early / 10 later) and isometric (1 early / 4 later) are
+  barely affected -- almost none of those trials were run early in a
+  session to begin with, so there's little to lose either way. CAVEAT:
+  the early/later trial-number cutoff was fit and validated on DYNAMIC
+  trials only; applying it to isovelocity/isometric trial numbers here is
+  a reasonable but not independently re-validated extrapolation (same
+  specimen/session, same chronological trial counter).
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.

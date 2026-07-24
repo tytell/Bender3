@@ -1844,3 +1844,65 @@ New outputs:
 - `data_processed/dynamic_precondition_calibration_gain_by_trial.csv`
 - `data_processed/dynamic_precondition_calibration_gain_consistency_by_precondition.csv`
 - `data_processed/dynamic_precondition_calibration_gain_consistency_later_by_specimen.csv`
+
+---
+
+FOLLOW-UP (2026-07-24, same day): does the exclusion leave too little
+power/tension data to be useful?
+
+PI: "I agree on the exclusion, but doesn't that leave me with very few
+muscle power (W/kg) and tension data? Add a mass-specific power and tension
+plot to figs_summary, comparing the early vs later groups."
+
+New script `R/summary_precondition_power_tension_earlyVsLater.R` -- pools
+the three trial-level power/tension tables already computed by the
+diag_precondition_*_vs_offset* scripts (dynamic, isovelocity, isometric),
+classifies each trial early/later, and plots mean+max power/tension side by
+side (6 panels: 3 protocols x {mean, max}, independent y-axes, n labeled
+on every x-axis tick).
+
+CAVEAT applied here: the hard early/later trial-number cutoff
+(`dynamic_trial_precondition.R`) was calibrated and validated ONLY on
+DYNAMIC trials (where the offset degradation was measured). Applying the
+same specimen-specific trial-number threshold to isovelocity/isometric
+trial numbers (this script does, via `classify_session_precondition`) is a
+reasonable extrapolation -- trial_num is a single chronological counter
+across the whole session, and the underlying mechanism (tissue
+preconditioning) is a property of the specimen/session, not the protocol
+-- but it was NOT independently re-fit for those two protocols, consistent
+with the isovelocity script's own comment ("No hard early/later cutoff
+exists for isovelocity (dynamic-only)").
+
+**Result: the "very few data" concern is real for dynamic, but mostly
+moot for isovelocity/isometric -- for a different reason than expected.**
+
+| protocol | early (preconditioning) trials | later (stable) trials |
+|---|---|---|
+| dynamic | 14 | 16 |
+| isovelocity | 1 | 10 |
+| isometric | 1 | 4 |
+
+Dynamic loses close to half its trials (14 of 30) to the exclusion, and
+those 14 early trials show clearly and consistently HIGHER power than the
+16 later trials (mean power median ~3-8 W/kg early vs. ~0 W/kg later; max
+power median ~200 W/kg early vs. ~40 W/kg later) -- i.e. the excluded
+trials are not just noisier, they are systematically the highest-power
+trials in the whole dynamic dataset, which is the direct power-side
+signature of the same slip/preconditioning effect documented throughout
+this investigation.
+
+Isovelocity and isometric are NOT meaningfully reduced by the cutoff --
+each protocol only has ONE trial that even falls in the "early" window
+session-wide (bass18 isovelocity trial 3; bass18 isometric trial 4).
+That is because isovelocity/isometric trials were rarely run in the first
+few trials of a session to begin with (dynamic trials dominate the early
+slots), not because the cutoff itself is discarding a large isovelocity/
+isometric dataset. Practically: essentially ALL isovelocity (10/11) and
+isometric (4/5) trials already qualify as "later (stable)" and are usable
+as-is; only dynamic power estimates are meaningfully constrained by the
+exclusion (n=16 usable of 30 total).
+
+New outputs:
+- `figs_summary/precondition_power_tension_earlyVsLater.png`
+- `data_processed/precondition_power_tension_earlyVsLater_pooled.csv`
+- `data_processed/precondition_power_tension_earlyVsLater_trialcounts.csv`
