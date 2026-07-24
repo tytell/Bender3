@@ -637,6 +637,22 @@ the point-selection design this feeds:
   bass18 are noisier/sparser and their sessions ended at lower force
   (possibly real fatigue for those two) -- bass17, the specimen with the
   most sustained dynamic protocol, carries the clean decoupling.
+  `FL_isometric_sonoVsCommanded.png` / `FV_isovelocity_sonoVsCommanded.png`
+  (BUILT 2026-07-24, `R/prototype_fv_fl_sono_length.R`) -- PI request 2A:
+  prototype FL/FV curves with the x-axis (length/velocity) recomputed from
+  the REAL muscle length (40 Hz-filtered sono) instead of the commanded
+  operating_point; force (y) unchanged (active-minus-passive primary-axis
+  torque). RIGHT muscle only (sono's only channel). RESULT: for these
+  protocols the commanded and sono x-axes AGREE tightly (isometric r=0.992
+  in value AND scale; isovelocity r=0.972 in rank) -- i.e. the existing
+  commanded-based FL/FV curves are already faithful here, because
+  isometric/isovelocity were run under good conditioning; the dramatic
+  sono-vs-commanded divergence was specific to EARLY DYNAMIC trials, not
+  these. FV PROTOTYPE CAVEAT: sono strain-RATE comes out ~10x smaller in
+  magnitude than the commanded rate (partly real muscle-tendon-grip series
+  compliance, partly a still-imprecise steady-ramp window) -- do NOT fit a
+  sono-based Vmax until the constant-velocity ramp segment is isolated; FL
+  (a position, not a rate) has no such issue.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.
