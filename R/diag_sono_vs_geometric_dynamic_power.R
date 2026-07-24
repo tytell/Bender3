@@ -391,14 +391,28 @@ box_long$x_label <- factor(box_long$x_label, levels = dplyr::arrange(n_lab_box, 
 box_long$method  <- factor(box_long$method, levels = c("geometric (commanded-angle)", "sono (measured length, 40 Hz LP-filtered)"))
 box_long$stat    <- factor(box_long$stat, levels = c("mean (cycle-averaged)", "peak (cycle-max |instantaneous|)"))
 
+# PI follow-up, 2026-07-24: "some early trials have much higher cycle power,
+# much closer to Coughlin (2000) -- look into that." Coughlin's bass power
+# (14.4 +/- 1.9 W/kg, DERIVED as work x frequency at 0.572L, 2.4 L/s -- see
+# summary_coughlin2000_bass_comparison.R) is overlaid on every facet so it's
+# visible exactly WHERE the apparent "closer to Coughlin" early-trial power
+# survives (mean, geometric only) vs. where it does NOT survive sono
+# correction (mean, sono method -- median actually goes slightly NEGATIVE).
+COUGHLIN_POWER_WKG <- list(mean = 14.4, sd = 1.9)
+
 p3 <- ggplot(box_long, aes(x = .data$x_label, y = .data$power_Wkg)) +
+  annotate("rect", xmin = -Inf, xmax = Inf,
+           ymin = COUGHLIN_POWER_WKG$mean - COUGHLIN_POWER_WKG$sd,
+           ymax = COUGHLIN_POWER_WKG$mean + COUGHLIN_POWER_WKG$sd,
+           fill = "#b30000", alpha = 0.12) +
+  geom_hline(yintercept = COUGHLIN_POWER_WKG$mean, color = "#b30000", linetype = "dashed", linewidth = 0.4) +
   geom_boxplot(outlier.shape = NA, width = 0.5, fill = "grey95", color = "grey40") +
   geom_jitter(aes(color = .data$specimen), width = 0.12, size = 1.8, alpha = 0.7) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey70", linewidth = 0.4) +
   facet_grid(stat ~ method, scales = "free_y") +
   scale_color_manual(values = SPECIMEN_COLORS, name = "Specimen") +
   labs(title = "Dynamic, right-stim cycles: mass-specific power, geometric vs. sono method (early vs. later)",
-       subtitle = sprintf("Sono velocity from a %.0f Hz zero-phase Butterworth LP filter on sono_right_mm (full trial), decimated to the true DS3\nrate before differentiating -- see module header. Each point = one active right-stim cycle.", SONO_LOWPASS_CUTOFF_HZ),
+       subtitle = sprintf("Sono velocity from a %.0f Hz zero-phase Butterworth LP filter on sono_right_mm (full trial), decimated to the true DS3\nrate before differentiating -- see module header. Each point = one active right-stim cycle. Red band = Coughlin (2000) bass\npower, derived (1 pt, 0.572L @ 2.4 L/s) -- see summary_coughlin2000_bass_comparison.R for provenance/caveats.", SONO_LOWPASS_CUTOFF_HZ),
        x = NULL, y = "Power (W/kg)") +
   theme_bw(base_size = 11) +
   theme(legend.position = "bottom", strip.text = element_text(size = 9))

@@ -155,4 +155,76 @@ all_steps |>
                     .groups = "drop") |>
   print()
 
+# =============================================================================
+# PI follow-up, 2026-07-24: "How does zTorque muscle TENSION compare to uHat
+# tension? Double check your work and math." Converts both force methods to
+# specific tension (N/cm^2) using MEASURED_RED_MUSCLE_CSA_CM2
+# (muscle_geometry.R, the SAME CSA now used everywhere else -- CSA is a
+# property of the muscle, independent of which force-reconstruction method
+# is used, so applying one shared CSA to both is correct here).
+#
+# Sign check FIRST: force_zTorque_N and force_uhat_N are documented above
+# (this script's own header/subtitles) to use OPPOSITE raw sign conventions.
+# Tension is compared on |force| (magnitude) -- sign is a convention
+# artifact for this comparison, not a real difference in muscle output.
+# =============================================================================
+tension_tbl <- all_steps |>
+  dplyr::mutate(
+    same_sign            = sign(.data$force_zTorque_N) == sign(.data$force_uhat_N),
+    tension_zTorque_Ncm2 = abs(.data$force_zTorque_N) / MEASURED_RED_MUSCLE_CSA_CM2,
+    tension_uhat_Ncm2    = abs(.data$force_uhat_N)    / MEASURED_RED_MUSCLE_CSA_CM2,
+    ratio_uhat_over_z_abs = .data$tension_uhat_Ncm2 / .data$tension_zTorque_Ncm2
+  )
+write.csv(tension_tbl, file.path(DATA_OUT_DIR, "fv_fl_ztorque_vs_uhat_tension.csv"), row.names = FALSE)
+
+cli::cli_h1(sprintf("Sign agreement (raw force_zTorque_N vs. force_uhat_N), CSA = %.2f cm^2", MEASURED_RED_MUSCLE_CSA_CM2))
+print(dplyr::count(tension_tbl, .data$category, .data$same_sign))
+
+cli::cli_h1("Magnitude-only (|force|-based) agreement, by category")
+print(tension_tbl |> dplyr::group_by(.data$category) |> dplyr::summarise(
+  n = dplyr::n(),
+  r_abs = suppressWarnings(cor(abs(.data$force_zTorque_N), abs(.data$force_uhat_N), use = "complete.obs")),
+  median_ratio_abs = median(.data$ratio_uhat_over_z_abs, na.rm = TRUE),
+  mean_tension_zTorque_Ncm2 = mean(.data$tension_zTorque_Ncm2, na.rm = TRUE),
+  mean_tension_uhat_Ncm2    = mean(.data$tension_uhat_Ncm2, na.rm = TRUE),
+  max_tension_zTorque_Ncm2  = max(.data$tension_zTorque_Ncm2, na.rm = TRUE),
+  max_tension_uhat_Ncm2     = max(.data$tension_uhat_Ncm2, na.rm = TRUE),
+  .groups = "drop"))
+
+cli::cli_h1("Magnitude-only agreement, by specimen x category (heterogeneity check)")
+print(tension_tbl |> dplyr::group_by(.data$specimen, .data$category) |> dplyr::summarise(
+  n = dplyr::n(),
+  r_abs = suppressWarnings(cor(abs(.data$force_zTorque_N), abs(.data$force_uhat_N), use = "complete.obs")),
+  median_ratio_abs = round(median(.data$ratio_uhat_over_z_abs, na.rm = TRUE), 3),
+  .groups = "drop"))
+
+# CAVEAT, printed + on-figure: the isovelocity force here is a LOCAL
+# peak-window mean (.mfv_window_peak_means(), MFV_PEAK_WINDOW_S=0.15s,
+# muscle_force_vector.R) -- NOT the constant-velocity-window, phase-matched
+# force method summary_fv_fl_best_within_individual.R later found NECESSARY
+# to remove an "anti-Hill" inflation artifact from isovelocity steps. High
+# isovelocity tension values here (up to several x Coughlin's 2000 bass
+# benchmark) most likely reflect that PRE-fix windowing, not real muscle
+# tension approaching the literature value -- do not read them as
+# "zTorque/uHat isovelocity tension matches Coughlin."
+cli::cli_alert_warning("CAVEAT: isovelocity force here is a pre-CV-window PEAK-WINDOW MEAN (MFV_PEAK_WINDOW_S=0.15s) -- NOT the constant-velocity-window method summary_fv_fl_best_within_individual.R found necessary to remove an inflation artifact. Isovelocity tension values here are NOT a trustworthy Coughlin comparison; use isometric only for that.")
+
+COUGHLIN_TENSION_NCM2 <- list(mean = 18.64, sd = 3.36)  # Coughlin 2000, 186.4+/-33.6 kN/m^2
+
+pTension <- ggplot(tension_tbl, aes(x = .data$tension_zTorque_Ncm2, y = .data$tension_uhat_Ncm2)) +
+  annotate("rect", xmin = COUGHLIN_TENSION_NCM2$mean - COUGHLIN_TENSION_NCM2$sd,
+           xmax = COUGHLIN_TENSION_NCM2$mean + COUGHLIN_TENSION_NCM2$sd, ymin = -Inf, ymax = Inf,
+           fill = "#b30000", alpha = 0.08) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+  geom_point(aes(color = .data$specimen, shape = .data$category), size = 2.6, alpha = 0.8) +
+  scale_color_manual(values = SPECIMEN_COLORS, name = "Specimen") +
+  facet_wrap(~category, scales = "free") +
+  labs(title = "zTorque vs. uHat specific tension (|force| / measured CSA), right muscle",
+       subtitle = sprintf("CSA = %.2f cm^2 (MEASURED_RED_MUSCLE_CSA_CM2). Dashed = 1:1 line (methods agree). Red band = Coughlin (2000) bass tension\n(18.64+/-3.36 N/cm^2). CAVEAT: isovelocity force is a pre-CV-window peak-window mean -- NOT a trustworthy Coughlin comparison (see log).", MEASURED_RED_MUSCLE_CSA_CM2),
+       x = "zTorque tension (N/cm^2)", y = "uHat tension (N/cm^2)") +
+  theme_bw(base_size = 11) + theme(legend.position = "bottom")
+foutT <- file.path(OUT_DIR, "tension_zTorqueVsUhat_scatter.png")
+ggplot2::ggsave(foutT, pTension, width = 11, height = 5.5, dpi = 150)
+cli::cli_alert_success("Saved {foutT}")
+
 cli::cli_alert_success("diag_fv_fl_ztorque_vs_uhat.R complete")

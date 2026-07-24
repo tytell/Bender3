@@ -165,6 +165,40 @@ resolve_step_contraction <- function(recruitment, operating_point,
 # dissected/weighed measurement), per PI direction.
 DEFAULT_MUSCLE_VOLUME_FRACTION <- 0.03
 
+# =============================================================================
+# MEASURED red-muscle CSA (PI-directed, 2026-07-24): "I agree about the CSA
+# [geometric estimate being the likely cause of the tension gap vs. Coughlin
+# 2000]. Use the CSA in this table as an estimate for now" --
+# 01_inputs/bass_csa_measurements/bass_csa_measurements.xlsx.
+#
+# Source: image-analysis CSA measurements (red / white / whole muscle,
+# left/right) on FIVE cross-sectional "chunks" (each with an anterior and a
+# posterior face) dissected from ONE reference specimen, "bass07" -- NOT one
+# of bass16/17/18 used for the mechanics rig. The spreadsheet has NO chunk-
+# length or bass07-total-length metadata, so there is no exact way to map a
+# chunk to a %L position.
+#
+# WORKING ASSUMPTION (stated explicitly because it is unverified): with 5
+# roughly evenly-spaced chunks spanning the body, chunks 2-4 (the middle
+# three) are assumed to bracket the ~50%L clamp position the PI reported for
+# bass16/17/18 (chunk 1 = most anterior, chunk 5 = most posterior, matching
+# the whole-CSA taper: chunk1/2 ~31-37 cm^2 widest, chunk5 ~12-20 cm^2
+# narrowest toward the tail).
+#
+# MEASURED_RED_MUSCLE_CSA_CM2 = mean of ALL red-left + red-right measurements
+# (both faces) across chunks 2, 3 and 4 (n=11 of 17 total red measurements;
+# chunk 1 and 5 excluded as likely outside the 50%L bracket) = 0.55 cm^2.
+# Left/right are pooled (not averaged as a pair) to get a single "one side"
+# CSA estimate, matching the single-side (right muscle) force this pipeline
+# already divides by CSA (see diag_precondition_tension_vs_offset_isometric.R,
+# summary_coughlin2000_bass_comparison.R). Range across those 11 values is
+# large (0.257-1.50 cm^2) -- reflects a real anterior-posterior red-muscle
+# gradient plus segmentation noise on thin tissue, not a single sharp value;
+# treat MEASURED_RED_MUSCLE_CSA_CM2 as a rough "for now" point estimate, not
+# a precise per-specimen measurement (bass16/17/18's OWN CSA was never
+# imaged -- this substitutes a same-species reference value for all three).
+MEASURED_RED_MUSCLE_CSA_CM2 <- 0.55
+
 #' Estimate muscle mass (kg) and cross-sectional area (cm^2) from gross body
 #' geometry: approximate the body cross-section at the test section as an
 #' OVAL (local body width x height), multiply by the clamp-to-clamp

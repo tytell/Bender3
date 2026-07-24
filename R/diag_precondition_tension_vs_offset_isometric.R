@@ -82,9 +82,8 @@ cli::cli_h1("Part A: per-step isometric specific tension, right muscle, bass16/1
       cli::cli_alert_danger("{trial_id}: analyze_isometric failed: {conditionMessage(e)}"); NULL
     })
     if (is.null(res) || nrow(res$step_summary) == 0L) return(tibble())
-    if (!is.finite(res$r_m) || res$r_m <= 0 ||
-        !is.finite(res$muscle$csa_muscle_cm2) || res$muscle$csa_muscle_cm2 <= 0) {
-      cli::cli_alert_warning("{trial_id}: missing/invalid r_m or muscle CSA -- skipped")
+    if (!is.finite(res$r_m) || res$r_m <= 0) {
+      cli::cli_alert_warning("{trial_id}: missing/invalid r_m -- skipped")
       return(tibble())
     }
 
@@ -93,9 +92,16 @@ cli::cli_h1("Part A: per-step isometric specific tension, right muscle, bass16/1
     # torque -> force), specific_tension_Ncm2 = Force0_N / csa_muscle_cm2.
     # Applied per-STEP here (each step's own muscle_force_Nm), not just at
     # one fit-level F0.
+    #
+    # CSA source (PI-directed, 2026-07-24): MEASURED_RED_MUSCLE_CSA_CM2
+    # (muscle_geometry.R) -- image-analysis CSA from a reference specimen
+    # ("bass07"), NOT the 3%-of-body-oval GEOMETRIC estimate
+    # (res$muscle$csa_muscle_cm2) used previously. See that constant's
+    # header comment for full provenance/caveats (position-mapping
+    # assumption, single reference specimen, not bass16/17/18's own CSA).
     steps <- res$step_summary
     steps$force_N               <- steps$muscle_force_Nm / res$r_m
-    steps$specific_tension_Ncm2 <- steps$force_N / res$muscle$csa_muscle_cm2
+    steps$specific_tension_Ncm2 <- steps$force_N / MEASURED_RED_MUSCLE_CSA_CM2
 
     steps$specimen  <- specimen
     steps$trial_id  <- trial_id
@@ -173,7 +179,7 @@ p1 <- p1 +
   scale_color_manual(values = SPECIMEN_COLORS, name = "Specimen") +
   annotate("text", x = -Inf, y = Inf, label = lab1, hjust = -0.05, vjust = 1.4, size = 3.4) +
   labs(title = "Isometric: trial-mean specific tension vs. trial-mean sono-strain offset",
-       subtitle = "Right-muscle steps only. Tension = (muscle_force_Nm / r_m) / muscle_csa_cm2 (lever-arm torque -> force -> area-specific tension), per step.\nOffset = mean(sono strain) - mean(encoder-predicted strain), active-window, %L0. Only 5 isometric trials exist in the whole corpus -- interpret cautiously.",
+       subtitle = "Right-muscle steps only. Tension = (muscle_force_Nm / r_m) / MEASURED_RED_MUSCLE_CSA_CM2 (bass07 reference CSA, NOT the geometric body-oval estimate -- muscle_geometry.R), per step.\nOffset = mean(sono strain) - mean(encoder-predicted strain), active-window, %L0. Only 5 isometric trials exist in the whole corpus -- interpret cautiously.",
        x = "Trial-mean sono-strain offset (percentage points of L0)",
        y = "Trial-mean specific tension (N/cm^2)") +
   theme_bw(base_size = 11) + theme(legend.position = "right")

@@ -542,9 +542,21 @@ the point-selection design this feeds:
   fixed peak-power noise but not cycle-by-cycle mean-power tracking; both
   methods independently sit near a shared near-zero floor in later trials.
   The boxplot (`_power_boxplot.png`, 2x2: mean/peak rows x geometric/sono
-  columns, n=36 early / 89 later cycles) visualizes the trial-median table
+  columns, n=34 early / 89 later cycles) visualizes the trial-median table
   directly -- still a first-pass comparison, not a finished replacement
-  pipeline.
+  pipeline. UPDATE 2026-07-24 (PI: "some early trials have much higher cycle
+  power, much closer to Coughlin -- look into that"): added a red Coughlin
+  (2000) bass power reference band (14.4+/-1.9 W/kg, derived -- see
+  `summary_coughlin2000_bass_comparison.R`) to all 4 facets. CONFIRMS the
+  effect is the SAME geometric artifact documented above: in the
+  mean/geometric panel, early-trial power sits ABOVE the Coughlin band
+  (looks "closer to/exceeding" a real literature benchmark); in the
+  mean/sono panel (real, measured muscle length), the SAME early trials'
+  median goes slightly NEGATIVE and nowhere near the Coughlin band -- the
+  apparent match disappears (and reverses) once corrected with real muscle
+  kinematics. Peak power still shows some earlyvs.later elevation even
+  after sono correction (median ~40 vs. ~5 W/kg), but well below the
+  geometric method's early-trial peak inflation.
   `diag_precondition_sono_length_activeVsPassive.R`
   (`dynamic_precondition_sonoLengthExcess_{vs_trialorder,boxplot}.png`) --
   ground-truths the early-trial "excess shortening" using STRICTLY the
@@ -653,6 +665,200 @@ the point-selection design this feeds:
   compliance, partly a still-imprecise steady-ramp window) -- do NOT fit a
   sono-based Vmax until the constant-velocity ramp segment is isolated; FL
   (a position, not a rate) has no such issue.
+  `FL_FV_best_within_individual.png` (BUILT 2026-07-24,
+  `R/summary_fv_fl_best_within_individual.R`) -- PI request: reproduce the
+  canonical textbook FL/FV shapes (see the Hill reference) from the
+  BEST-quality points, WITHIN A SINGLE INDIVIDUAL, in standard sign
+  conventions. Three fixes vs. the messy zTorqueVsUhat diagnostic:
+  (1) FORCE = the sign-FOLDED active-minus-(velocity-matched)passive
+  single-axis tension (`muscle_force_Nm`), always POSITIVE -- the earlier
+  "negative forces" were the UNfolded `force_zTorque_N`, a display artifact.
+  (2) AXES in canonical convention: FL x = length strain with shorter muscle
+  LEFT (negative) / longer RIGHT (positive) = -(shortening-positive sono
+  strain); FV x = velocity with SHORTENING negative / LENGTHENING positive,
+  normalised to V/Vmax. (3) THE UNLOCK for FV -- the constant-velocity window
+  is detected from the COMMANDED angle (|omega| >= 60% of the step peak,
+  longest contiguous run) and that SAME time window is applied to sono for
+  BOTH the strain-rate (velocity) AND the active force (phase-matched). Using
+  the mean force over the whole ramp had made the concentric limb look
+  ANTI-Hill (force rising with shortening speed) because it mixed force-length
+  effects; the CV-window force removes that and the concentric limb recovers
+  the expected Hill shape. BEST-POINT gates (principled, then rationalised):
+  RIGHT muscle only; genuine activation (F>0); FV only -- the sono ramp must
+  be a clean straight line over the CV window (R^2 >= 0.90). Individual chosen
+  by best combined FL+FV coverage = bass18 (confirmed by the all-individuals
+  overview below: bass18 is the ONLY specimen whose isovelocity set spans BOTH
+  a shortening and a lengthening side -- bass16/bass17 are eccentric-only, so
+  they cannot form a full FV curve). FL additionally uses the SINGLE
+  best-activated isometric trial within the individual (bass18 = bender_04);
+  pooling both isometric trials had smeared the curve vertically because the
+  second trial (bender_11) was only weakly activated. RESULT: Panel B (FV) is textbook
+  -- force near zero at fast shortening (V ~ -0.6), ~0.45 at isometric (V=0),
+  plateauing ~0.95 during lengthening (concentric-rise -> eccentric plateau).
+  Panel A (FL) is an inverted-U peaking near -8% strain, declining on both
+  limbs. CAVEAT/why per-panel normalisation: in bass18 the isometric holds
+  produced anomalously little force (F0 ~= 1/17 of the eccentric peak, a
+  weak-isometric artifact, NOT a physiological feature), so a shared F0
+  normalisation would crush FL to a sliver; each panel is therefore
+  normalised to its own within-individual peak to show the SHAPES faithfully.
+  Per-step values (all 3 specimens, incl. whole-window force for comparison)
+  in `data_processed/fv_fl_best_within_individual_steps.csv`.
+  `FV_pooled_vs_ideal.png` (BUILT 2026-07-24,
+  `R/summary_fv_pooled_vs_ideal.R`) -- PI request: pool the (surprisingly
+  consistent) isovelocity FV points across ALL individuals on one graph,
+  each specimen its own colour + loess line, and overlay an IDEALISED FV
+  curve to show closeness of fit. Reads the gated per-step CSV from
+  `summary_fv_fl_best_within_individual.R` (RIGHT muscle, F>0, clean sono
+  ramp R^2>=0.90; force & velocity from the encoder-defined constant-velocity
+  window applied to sono). Each individual normalised to its OWN Vmax and
+  peak FV tension so lengthening plateaus -> 1 and shapes are comparable
+  regardless of absolute force. Idealised curve = a Hill-type logistic
+  (upper asymptote fixed at 1, steepness k and midpoint x0 fit to the pooled
+  points by bounded optimisation). PI-directed exclusion: three bass18
+  LENGTHENING points (bender_03 steps 14-16, residual +0.32..+0.39 above the
+  ideal -- genuine eccentric overshoot / force-length contamination at those
+  mid-velocity lengths) are dropped for the clean demonstration (identified
+  as the top-3 positive residuals among bass18 lengthening points). RESULT:
+  all three specimens trace the same concentric-rise -> eccentric-plateau
+  shape; pooled R^2 vs the idealised curve = 0.83 (n=24, k=3.8, x0=0.50).
+  NOTE the shortening (V<0) side is bass18-only
+  -- bass16/bass17 isovelocity points that pass the gates are lengthening-only
+  -- so the concentric limb is sparsely sampled; the midpoint sits right of
+  isometric because bass18's near-isometric shortening force is elevated
+  relative to a symmetric sigmoid.   Pooled normalised points saved to
+  `data_processed/fv_pooled_normalised.csv`.
+  `isometric_L0_activation_kinetics.png` (BUILT 2026-07-24,
+  `R/summary_isometric_l0_activation.R`) -- PI request: normalised force-vs-time
+  of ISOMETRIC NEAR-ZERO (L0) contractions pooled across every source they
+  occur in, plus activation/relaxation-time boxplots vs. Coughlin & Carroll
+  (2006, CBP-A 145:533, Fig. 2) red (slow) muscle. Sources of L0 (~0 deg)
+  stimulated contractions: (1) isometric-protocol near-zero step(s), (2)
+  isovelocity V=0 step, (3) dynamic pre/post-cycling L0 bookends (left+right,
+  via `detect_dynamic_l0_bookends()`). Force is peak-normalised,
+  baseline-subtracted, sign-folded contraction-positive. TOP panel: thin
+  lines = individual contractions coloured by specimen, thick = per-specimen
+  mean drawn only while >=50% of that specimen's contractions still
+  contribute (the ~54 ms bookend twitches -- the majority, 120/159 -- end
+  near 0.4 s, so this stops the mean cleanly instead of letting it jump onto
+  the 0.3-0.5 s tetani-only tail). BOTTOM: boxplots (+ raw points) of
+  activation time (rise to 90% of peak) and relaxation time (offset to 50%
+  decay) per specimen, with a red shaded band = C&C red (slow) muscle
+  mean+/-SD read off Fig. 2 (TA ~78 ms, TR ~150 ms) AND a gray shaded band =
+  C&C white/fast feeding muscle (sternohyoideus + epaxial, TA ~10-20 ms,
+  TR ~28-45 ms) -- so ours sit between the two references. RESULT: bass feeding-muscle L0
+  kinetics are FASTER than red muscle -- activation medians ~45-80 ms, relaxation
+  ~50-90 ms (mostly below the C&C red band) -- consistent with fast-twitch
+  feeding muscle. CAVEAT (on the figure): ours are TETANIC rise/half-relaxation,
+  C&C are single-twitch TA/TR, so the comparison is qualitative (fast-vs-slow).
+  Bookends capped at 0.35 s post-stim AND before the next stim event of any
+  kind, to avoid pre-cycling motor-motion contaminating the tiny twitch tail.
+  Per-contraction times + durations in
+  `data_processed/isometric_l0_activation_times.csv`.
+  `isometric_L0_activation_kinetics_bookendsOnly.png` (BUILT 2026-07-24,
+  same script) -- PI request: a bookend-ONLY twin of the figure above so the
+  force-vs-time traces and the kinetics boxplots share ONE comparable
+  contraction type. Restricted to the dynamic pre/post L0 bookend twitches
+  (drops the isometric-protocol steps + isovelocity V=0 tetani). Same two
+  reference bands (C&C red slow + white/fast). The traces are now all ~54 ms
+  twitches ending near 0.4 s, and the boxplots are on a matched (compressed)
+  y-scale instead of being squashed by the long tetani tails.
+  `isometric_L0_activation_earlyVsLater.png` (BUILT 2026-07-24,
+  `R/summary_activation_early_vs_later.R`) -- PI request: compare L0 activation
+  (and relaxation) time between EARLY (preconditioning) and LATER (stable)
+  session stages. Reads the per-contraction times above, classifies each by
+  the specimen session cutoff (`dynamic_trial_precondition.R`:
+  classify_session_precondition; bass16<5, bass17<9, bass18<5 = early).
+  TYPE-CONTROLLED: restricted to dynamic pre/post L0 BOOKEND twitches only,
+  because the isometric-protocol and isovelocity V=0 L0 contractions ran
+  almost exclusively LATER (source x stage table printed by the script), so an
+  all-source split would confound session stage with contraction type (fast
+  bookend twitches vs slower 0.3-0.5 s tetani). Bookends are the one L0 source
+  present in BOTH stages for all three specimens. Boxplots (+ points) per
+  specimen x stage, Wilcoxon p per specimen (both groups n>=4), Coughlin red
+  (slow) + gray white/fast bands for reference. RESULT: within the same twitch type, LATER twitches
+  relax slower / more variably (bass17 p=0.006, bass18 p<0.001) and bass18
+  also activates slightly slower (p=0.002), while early twitches are fast and
+  tight -- a within-session slowing consistent with mild fatigue, NOT the
+  early-fast artifact the confounded all-source version would have implied.
+  Classified per-contraction table (all sources) in
+  `data_processed/isometric_l0_activation_times_precondition.csv`.
+  [DIAGNOSTIC tier] `isometric_meantension_vs_offset.png` /
+  `isometric_maxtension_vs_offset.png` (`R/diag_precondition_tension_vs_
+  offset_isometric.R`, `figs_diagnostic/`) -- specific tension (N/cm^2) vs.
+  sono-strain offset, per isometric trial (right-muscle steps only; PI
+  direction, 2026-07-24: use tension not power for isometric, since the
+  motor doesn't move during activation so power is ~zero by design). Only
+  5 isometric trials exist across all 3 specimens -- correlation is
+  descriptive only (n=5, not significant). UPDATE 2026-07-24 (PI: "I agree
+  about the CSA [geometric estimate]. Use the CSA in this table as an
+  estimate for now" -- `01_inputs/bass_csa_measurements/
+  bass_csa_measurements.xlsx`): tension now divides by
+  `MEASURED_RED_MUSCLE_CSA_CM2` (0.55 cm^2, `muscle_geometry.R`) instead of
+  the 3%-of-body-oval geometric guess. That constant is an image-analysis
+  CSA measurement from a REFERENCE specimen ("bass07", NOT bass16/17/18),
+  averaged over the middle 3 of 5 body "chunks" ASSUMED to bracket ~50%L
+  (no chunk-length/position metadata exists to verify this). Effect was
+  modest (~1.2-1.5x higher tension per trial) because the prior geometric
+  CSA (~0.65-0.83 cm^2, specimen-specific) was already in a similar range
+  to the new fixed 0.55 cm^2 -- our tension is STILL ~11-20x below
+  Coughlin (2000)'s 18.64 N/cm^2, so CSA method was NOT the dominant driver
+  of that gap; some other factor (activation level, series compliance,
+  measurement method) likely also contributes.
+  `coughlin2000_bass_power_work_tension_comparison.png` (BUILT 2026-07-24,
+  `R/summary_coughlin2000_bass_comparison.R`) -- PI request: compare OUR
+  measured mass-specific power (W/kg), work per cycle (J/kg) and specific
+  tension (kN/m^2) against published largemouth bass RED MUSCLE values from
+  Coughlin (2000, J. Exp. Biol. 203:617-629) -- a DIFFERENT reference paper
+  than the "Coughlin & Carroll 2006" activation/relaxation band used above.
+  User's 10-question clarification form was skipped, so the RECOMMENDED
+  default from each question was used (documented in the script header).
+  Panel A: the SAME dynamic L0 bookend twitches as
+  `isometric_L0_activation_kinetics_bookendsOnly.png` (reused via the new
+  `data_processed/isometric_l0_activation_traces.csv` export -- see that
+  script), x-axis tightened to the twitch itself (-0.2 to 0.45 s, vs. the
+  0-1.2 s span before), with shaded bands for stim-ON, the activation window
+  (onset->90% peak) and the relaxation window (offset->50% decay) plus their
+  median durations. Panels B/C/D: boxplots (+ points) of, respectively,
+  isometric specific tension (trial-max, N/cm^2 -> kN/m^2), dynamic mean
+  cycle power (W/kg) and dynamic mean work per cycle (J/kg) -- LATER
+  (stable) trials only, dynamic power/work restricted to right-stim cycles
+  (this repo's "active" convention) -- each with a red Coughlin (2000)
+  reference band. PROVENANCE CAVEATS (also on the figure): Coughlin's
+  tension (186.4+/-33.6 kN/m^2, N=18) is POSITION-POOLED (no significant
+  position effect, so no single 50%L value exists); the work value
+  (3.56+/-0.47 J/kg, N=6) is a SINGLE data point at 0.572L ("MID",
+  closest to 50%L) for the FASTEST bass swimming speed tested (2.4 L/s,
+  4.05 Hz) -- not a range, and embedded on-figure text in the PDF (all
+  other position x speed combinations exist only as bar/scatter graphics
+  and were not digitized); power (14.4+/-1.9 W/kg) is DERIVED as
+  work x frequency (Coughlin's own definition), not independently reported.
+  Coughlin's numbers reflect SUBMAXIMAL in-vivo swimming stimulation, not
+  the animal's maximum -- an apples-to-oranges risk against our closer-to-
+  maximal characterization protocols. RESULT: our isometric specific
+  tension (later trials: ~0.15-0.81 N/cm^2 = 1.5-8.1 kN/m^2) is roughly
+  15-50x BELOW Coughlin's band, most likely because our tension uses a
+  GEOMETRIC whole-body-oval CSA estimate (`compute_muscle_mass_and_csa()`)
+  rather than Coughlin's HISTOLOGICAL live-fiber-area measurement on an
+  isolated single-myotome bundle. Our dynamic power/work land much closer
+  to (and for some trials, above) the single Coughlin reference point.
+  No bath/room temperature is logged anywhere in this rig's HDF5 metadata;
+  assumed ambient ~20-22 C (uncontrolled) vs. Coughlin's controlled 20 C
+  bath. Comparison data in
+  `data_processed/coughlin2000_bass_comparison_data.csv`.
+  UPDATE 2026-07-24: tension (panel B) now uses `MEASURED_RED_MUSCLE_CSA_CM2`
+  (0.55 cm^2, `muscle_geometry.R`) instead of the geometric body-oval
+  estimate -- see that entry's log addendum below. Tension improved only
+  modestly (still ~11-20x below Coughlin, not fully explained by the CSA
+  guess alone) -- do not describe this figure as "resolving" the tension gap.
+  [DIAGNOSTIC tier] `FL_FV_candidates_all_individuals.png`
+  (`R/summary_fv_fl_best_within_individual.R`, `figs_diagnostic/`) -- the
+  all-individuals companion used to justify the
+  bass18 choice: FL (top) and FV (bottom) faceted by specimen, points
+  coloured by trial, per-specimen loess overlaid. Shows at a glance that (a)
+  bass18's FL peak comes entirely from the well-activated bender_04 while
+  bender_11 is a weak second trial, (b) bass17's FL is a clean descending
+  limb only, (c) bass16's FL is trial-mixed/messy, and (d) only bass18 has
+  isovelocity points on BOTH the shortening and lengthening sides.
   [DIAGNOSTIC tier] `FL_isometric_zTorqueVsUhat.png` /
   `FV_isovelocity_zTorqueVsUhat.png` (BUILT 2026-07-24,
   `R/diag_fv_fl_ztorque_vs_uhat.R`, saved to `figs_diagnostic/`) -- PI
@@ -667,6 +873,36 @@ the point-selection design this feeds:
   structured FV trends for all 3 specimens -- concrete support for the
   earlier conclusion that the simple single-axis (zTorque/primary-bending-
   axis) force is the more robust default for these data. RIGHT muscle only.
+  [DIAGNOSTIC tier] `tension_zTorqueVsUhat_scatter.png` (BUILT 2026-07-24,
+  same script) -- PI follow-up: "how does zTorque muscle TENSION compare
+  to uHat tension? double check the math." Converts the same 114 right-
+  muscle steps to specific tension (`|force_N| / MEASURED_RED_MUSCLE_
+  CSA_CM2`, 0.55 cm^2, `muscle_geometry.R` -- one shared CSA for both
+  methods, since CSA is a muscle property, not a force-method property);
+  compared on MAGNITUDE (`|force|`) since the two raw force columns use
+  opposite sign conventions by construction (confirmed: 85% sign-disagree
+  for isometric steps, 62% for isovelocity). Faceted isometric/isovelocity,
+  1:1 dashed line, Coughlin (2000) 18.64+/-3.36 N/cm^2 band on the x-axis.
+  RESULT: agreement is weak AND specimen-dependent, not a stable
+  relationship -- magnitude correlation ranges from r=0.89 (bass16
+  isometric) to r=-0.58 (bass18 isometric, inverted) to r=-0.08 (bass18
+  isovelocity, none); the uHat/zTorque ratio swings from ~0.10 (bass17,
+  matching its known uHat SNR collapse) to ~5.4 (bass18 isovelocity) --
+  too unstable to treat as a fixed calibration factor between methods.
+  Pooled, zTorque tension is systematically ~2x (mean) to ~3x (max) larger
+  than uHat's. CAVEAT (on the figure and in the log): the isovelocity
+  tension values here (up to several x the Coughlin band) are NOT a
+  trustworthy Coughlin comparison -- this script's isovelocity force is a
+  pre-fix, local PEAK-WINDOW MEAN (`MFV_PEAK_WINDOW_S=0.15s`,
+  `muscle_force_vector.R`), the same windowing `summary_fv_fl_best_
+  within_individual.R` later found produced an "anti-Hill" inflation
+  artifact before its constant-velocity-window fix; that fix was not
+  retrofitted here (out of scope -- this is a force-method comparison, not
+  a length/velocity-model one). The ISOMETRIC-only panel (no motion
+  confound) is the trustworthy read, and it shows both methods sitting
+  far below Coughlin regardless of force method -- the CSA-driven tension
+  gap documented elsewhere is not resolved by switching force methods.
+  Per-step data: `data_processed/fv_fl_ztorque_vs_uhat_tension.csv`.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.
