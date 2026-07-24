@@ -1511,3 +1511,180 @@ window), the fit doesn't degrade, it improves, meaning the earlier windowed
 contaminated one. Isovelocity and frequency_sweep both show real,
 comparably-sized populations on both sides of this split (r=0.97-0.98
 throughout), i.e. no similar all-or-nothing pattern outside isometric.
+
+FOLLOW-UP (2026-07-24): normalized power vs. sono-strain offset (direct
+check on "is high power just the slipping artifact?")
+
+PI concern: `dynamic_precondition_offset_vs_trialorder.png` and
+`dynamic_precondition_power_vs_trialorder.png` (from
+`diag_precondition_power_check.R`) both show the SAME early-trial pattern
+side by side, implying (but not directly showing) that the trials with the
+highest measured power are exactly the trials where the muscle appears to
+be slipping (highest sono-strain offset). New script
+`R/diag_precondition_power_vs_offset.R` tests this directly by correlating
+per-trial normalized power against per-trial offset (joins the two CSVs
+`diag_precondition_power_check.R` already writes, at the TRIAL level --
+not per-cycle, to avoid reconciling two different cycle-index conventions
+between the sono and power pipelines).
+
+**Result: confirmed, and it is not a between-specimen confound.**
+- Pooled (n=30 dynamic trials, all 3 specimens): trial-mean cycle-averaged
+  power (W/kg) vs. trial-mean sono offset (%L0), r=0.727, p=5.3e-6.
+  Trial-max instantaneous peak power (W/kg) vs. same offset, r=0.630,
+  p=1.9e-4.
+- WITHIN each specimen separately (controls for one fish simply producing
+  more power AND happening to have bigger early-trial offsets by
+  coincidence): bass16 r=0.68 (n=13), bass17 r=0.55 (n=12), bass18 r=0.98
+  (n=5, most extreme). All positive, all substantial -- the relationship
+  holds fish-by-fish, not just in the pooled cloud.
+- Visually (`dynamic_precondition_meanpower_vs_offset.png`): every "later
+  (stable)" trial (circle) sits at offset~0, power~0. Every trial with
+  power >5 W/kg is an "early (preconditioning)" trial (triangle), and the
+  two highest-power trials in the whole dataset (bass17 ~27 W/kg, bass18
+  ~27 W/kg) are also among the highest-offset trials (7-8 pct-points).
+
+**Interpretation:** this reinforces (does not merely repeat) the existing
+early/later cutoff -- it shows the artifact is not confined to the strain
+channel. The apparently high power numbers from early trials are not an
+independent positive finding; they are very likely inflated by the same
+excess/spurious shortening that inflates the sono-strain offset (more
+measured length change per cycle -> more computed work/power for the same
+commanded motion and stim). This is an ADDITIONAL reason (beyond sono
+validation) to exclude "early (preconditioning)" trials from any power
+analysis, not just from strain-validation analysis.
+
+New outputs:
+- `figs_diagnostic/dynamic_precondition_meanpower_vs_offset.png`
+- `figs_diagnostic/dynamic_precondition_maxpower_vs_offset.png`
+- `figs_diagnostic/dynamic_precondition_power_vs_offset_byspecimen.png`
+- `data_processed/dynamic_precondition_power_vs_offset_by_trial.csv`
+- `data_processed/dynamic_precondition_power_vs_offset_within_specimen_cor.csv`
+
+FOLLOW-UP (2026-07-24, same day): peak-power version + isovelocity extension
+
+PI asks: (1) "perform a similar analysis using peak power instead of cycle
+average" and (2) "perform a peak/avg power analysis on the other protocol
+types as well."
+
+(1) Added `dynamic_precondition_maxpower_vs_offset_byspecimen.png` to
+`diag_precondition_power_vs_offset.R` -- the peak-power counterpart of the
+existing mean-power by-specimen facet plot (Plot 3). Trial-max
+`peak_power.Wkg` vs. offset, faceted by specimen, one within-specimen r per
+panel. Pooled: r=0.630 (already known from Plot 2); already-reported
+within-specimen r_max values (bass16=0.74, bass17=0.63, bass18=0.99) are now
+visualized directly per specimen, not just tabulated.
+
+(2) Which OTHER protocol types can actually support a "peak/avg power"
+analysis -- decided by physical definition, not code convenience:
+- isometric: the motor does NOT move during the activation window (that is
+  the literal definition of "isometric"). Mechanical power there is ~zero
+  BY DESIGN, not by measurement -- there is no meaningful power signal to
+  correlate against offset. FORCE (muscle_force_Nm, already computed by
+  analyze_isometric()) is the correct isometric analog of "how hard is the
+  muscle working" -- flagged to PI as a separate possible follow-up, not
+  computed here (different physical quantity, not power).
+- frequency_sweep: passive-only in every category grouping seen throughout
+  this whole investigation (active_mask always FALSE) -- no stimulation is
+  ever delivered, so calc_muscle_torque()'s cycletype=="act" filter (the
+  existing per-cycle power framework) returns zero rows. No muscle-driven
+  power exists to analyze.
+- isovelocity: DOES have genuine per-step mechanical power, and the
+  codebase already has a VETTED torque -> Watts conversion (muscle_geometry
+  .R::add_specific_properties_to_fit(): "real muscle power at that
+  operating point is peak_power_composite * dclamp_m/(100*r_m)", where the
+  composite is F0(muscle_force_Nm, a TORQUE despite the "_force" name) *
+  Vmax(shortening_strain_pct, %/s for isovelocity per 03_analyze.R's
+  build_segmented_step_summary() comment) -- torque x angular_velocity =
+  power). New script `R/diag_precondition_power_vs_offset_isovelocity.R`
+  applies this IDENTICAL formula PER STEP (each step's own measured
+  muscle_force_Nm x shortening_strain_pct, not just the Hill fit's single
+  extrapolated Vmax) -- no new physics, a finer-grained application of an
+  already-vetted conversion. Restricted to muscle_side=="right" (the
+  sono-instrumented muscle), matching the dynamic analysis's side
+  convention. Required two additional sources not already loaded by this
+  script's pattern: `plot_force_vs_time.R` (.smooth_trace_display_only(),
+  needed by build_segmented_step_summary()'s peak-window force extraction)
+  and `fit_fv_fl.R` (fit_force_velocity_curve(), needed by
+  analyze_isovelocity() even though this script never uses the resulting
+  Hill fit) -- both were silent dependency gaps until the script was
+  actually run, now documented as required sources in the file header.
+
+**Result:** isovelocity offsets are much smaller in magnitude than dynamic's
+(mostly -0.2% to +0.5%, i.e. near the sono noise floor) except one bass18
+trial at +2.4%. Trial-mean power (W/kg) vs. offset: pooled r=0.919,
+p=6.3e-5, n=11. Trial-max |power| vs. offset: r=0.820, p=0.002, n=11. The
+single high-offset bass18 trial (+2.4%, ~90 W/kg mean / 603 W/kg peak) is a
+high-leverage point, but the remaining 10 trials still trend the same
+direction (e.g. bass17's three trials, all near-zero/slightly-negative
+offset, all show negative mean power -- net energy absorption, physically
+consistent with near-zero-offset "no slip" trials). Same qualitative
+conclusion as dynamic: higher offset tracks higher measured power, now
+confirmed in a SECOND, independently-computed protocol family using a
+different power-extraction method (per-step torque x commanded angular
+velocity, vs. dynamic's calc_muscle_torque()/summarize_muscle_cycles()
+work-loop integration) -- this is not an artifact specific to one power
+pipeline.
+
+New outputs:
+- `figs_diagnostic/dynamic_precondition_maxpower_vs_offset_byspecimen.png`
+- `figs_diagnostic/isovelocity_meanpower_vs_offset.png`
+- `figs_diagnostic/isovelocity_maxpower_vs_offset.png`
+- `data_processed/isovelocity_power_percycle.csv` (per-step, all sides)
+- `data_processed/isovelocity_power_vs_offset_by_trial.csv`
+
+FOLLOW-UP (2026-07-24, same day): isometric using TENSION (not power) + offset
+magnitude sanity check against commanded amplitude
+
+PI: "Please run analysis for isometric using tension" -- following directly
+from the isometric-has-no-power-by-design reasoning above. New script
+`R/diag_precondition_tension_vs_offset_isometric.R` computes per-step
+SPECIFIC TENSION (N/cm^2) via the exact same lever-arm conversion
+muscle_geometry.R::add_specific_properties_to_fit() already applies to a
+fit's single F0 anchor point (Force0_N = muscle_force_Nm / r_m;
+specific_tension_Ncm2 = Force0_N / csa_muscle_cm2), applied PER STEP.
+Right-muscle steps only, same convention as the power scripts. Required the
+same `plot_force_vs_time.R` source-dependency fix found in the isovelocity
+script.
+
+**Result:** only 5 isometric trials exist in the WHOLE corpus (bass16=2,
+bass17=1, bass18=2), so this is a very small-n check. Mean tension vs.
+offset: r=0.323, p=0.596 (not significant). Max tension vs. offset:
+r=-0.408, p=0.495 (not significant, opposite sign). Neither correlation is
+meaningful with n=5 -- flagged in the plot subtitle itself ("interpret
+cautiously"), and the script explicitly suppresses the fitted trend line
+whenever n<4. Notably, isometric offsets themselves are ALL small (0.57-
+1.24 pct-points, one trial slightly negative) -- nothing like dynamic's
+2-10 pct-point early-trial offsets -- consistent with isometric never
+showing the same large-magnitude preconditioning effect dynamic does (the
+motor isn't moving, so there's much less opportunity for progressive
+mechanical settling/slip to manifest as a strain-offset signal).
+
+New outputs:
+- `figs_diagnostic/isometric_meantension_vs_offset.png`
+- `figs_diagnostic/isometric_maxtension_vs_offset.png`
+- `data_processed/isometric_tension_percycle.csv` (per-step, all sides)
+- `data_processed/isometric_tension_vs_offset_by_trial.csv`
+
+PI: "2-10% offset seems high, especially if commanded strain was something
+like 5%." Checked directly against the vetted pooled sono CSV (not the
+older/incomplete amp_ratio_all_dynamic_trials.csv, which only had right-stim
+coverage for 5/30 dynamic trials -- likely predates full bass17/18
+collection): commanded (encoder-predicted) peak-to-peak strain amplitude
+for the SAME active-right dynamic trials used in the offset analysis is
+remarkably uniform, median 5.04% (range 4.8-6.6%) -- confirming the PI's
+5% estimate almost exactly. Expressing each trial's OFFSET as a percentage
+OF ITS OWN commanded p2p amplitude:
+  - "early (preconditioning)" trials (n=14): median 92%, mean |ratio| 104%,
+    max 200% of the commanded p2p amplitude -- i.e. in the worst early
+    trials, the MEAN-level bias alone is comparable to or LARGER than the
+    entire commanded oscillation's peak-to-peak swing.
+  - "later (stable)" trials (n=16): median 9.9%, mean |ratio| 12.1%, max
+    25.4% -- an order of magnitude smaller, but still non-trivial (roughly
+    a tenth of the commanded swing).
+This confirms the PI's intuition was correct and quantifies it: the early-
+trial offsets are not a subtle measurement bias, they are on the same
+scale as the entire commanded motion, consistent with real gross mechanical
+settling/slip rather than a small calibration artifact. The "later
+(stable)" residual offset, while much smaller, is not zero and should be
+kept in mind as an ~10%-of-amplitude noise floor even after excluding early
+trials.
