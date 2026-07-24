@@ -608,6 +608,19 @@ the point-selection design this feeds:
   trials only; applying it to isovelocity/isometric trial numbers here is
   a reasonable but not independently re-validated extrapolation (same
   specimen/session, same chronological trial counter).
+  `sonoLengthExcess_activeVsPassive_byTrialOrder.png` (BUILT 2026-07-24,
+  `R/diag_precondition_sono_length_activeVsPassive.R` -- same script also
+  writes the `figs_diagnostic/dynamic_precondition_sonoLengthExcess_*`
+  copies) -- cross-fish (3-panel) trial-order view of the ground-truthed
+  active-minus-passive sono strain excess. Excess = active-cycle sono
+  strain minus PHASE-MATCHED average passive-cycle sono strain, same trial
+  (reuses `calc_muscle_torque()`'s act-minus-passive logic, pointed at sono
+  strain instead of torque). Independent of L0/commanded-angle/encoder/
+  cross-trial calibration. Shows the early > later excess decaying to zero
+  at each specimen's own precondition cutoff (early median 4.81% vs. later
+  0.20%) -- the headline confirmation that early-trial excess shortening is
+  a real, trial-order-decaying muscle property, promoted here as the
+  cross-fish summary of that finding.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.

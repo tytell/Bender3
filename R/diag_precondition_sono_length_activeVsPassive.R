@@ -71,8 +71,10 @@ src("plot_angle_sono_validation.R")   # attach_sono_strain(), .sono_reference_le
 src("dynamic_trial_precondition.R")
 
 OUT_DIR      <- FIGS_DIAGNOSTIC_DIR
+SUMMARY_DIR  <- FIGS_SUMMARY_DIR   # cross-fish (3-specimen) version lives here too
 DATA_OUT_DIR <- file.path(.crittergripper_root(), "02_processed", "data_processed")
 dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
+dir.create(SUMMARY_DIR, recursive = TRUE, showWarnings = FALSE)
 dir.create(DATA_OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
 SPECIMEN_SUBFOLDERS <- c(bass16 = BASS16_RAW_SUBFOLDER, bass17 = BASS17_RAW_SUBFOLDER, bass18 = BASS18_RAW_SUBFOLDER)
@@ -230,6 +232,12 @@ p1 <- ggplot(trial_excess, aes(x = .data$trial_num, y = .data$mean_excess_pct, c
 fout1 <- file.path(OUT_DIR, "dynamic_precondition_sonoLengthExcess_vs_trialorder.png")
 ggplot2::ggsave(fout1, p1, width = 11, height = 5, dpi = 150)
 cli::cli_alert_success("Saved {fout1}")
+
+# Cross-fish (3-specimen) summary copy -- genuinely pooled content, belongs
+# in figs_summary/ per the figure-placement rules.
+fsum <- file.path(SUMMARY_DIR, "sonoLengthExcess_activeVsPassive_byTrialOrder.png")
+ggplot2::ggsave(fsum, p1, width = 11, height = 5, dpi = 150)
+cli::cli_alert_success("Saved {fsum}")
 
 # =============================================================================
 # Plot 2: cycle-level boxplot, early vs later -- distribution summary.
