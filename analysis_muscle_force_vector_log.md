@@ -1688,3 +1688,47 @@ settling/slip rather than a small calibration artifact. The "later
 (stable)" residual offset, while much smaller, is not zero and should be
 kept in mind as an ~10%-of-amplitude noise floor even after excluding early
 trials.
+
+FOLLOW-UP (2026-07-24, same day): does passive fidelity ALSO improve
+early->later, or is the effect active-stim-specific?
+
+PI: "Is the sono fidelity in passive trials ALSO better than earlier ones?"
+New script `R/diag_precondition_passive_sono_fidelity.R` -- a pure re-slice
+of the already-vetted pooled sono CSV by precondition status, no new
+processing, giving the PASSIVE (no/left stim) counterpart of the ACTIVE
+(right-stim) numbers `diag_precondition_power_check.R` already reported.
+
+**Result: yes, pointwise fidelity improves, but the MEAN-LEVEL BIAS (the
+thing the whole cutoff was built around) does NOT appear in passive samples
+at all, even early.**
+
+| samples | precondition | n | r | RMSE (%) | offset (pct-pts) |
+|---|---|---|---|---|---|
+| passive (no/left stim) | early | 47,773 | 0.610 | 2.25 | **+0.017** |
+| passive (no/left stim) | later | 160,462 | 0.973 | 1.62 | +0.086 |
+| active (right stim) | early | 4,235 | 0.293 | 6.34 | **+4.92** |
+| active (right stim) | later | 8,577 | 0.905 | 0.957 | +0.426 |
+
+Passive r rises 0.61->0.97 (less scatter/noise in later trials, same
+direction as active) but the passive OFFSET stays ~0 in BOTH early and
+later trials (+0.02 vs +0.09 pct-points -- both negligible). Active's early
+offset is +4.92 pct-points -- two orders of magnitude larger than passive's
+early offset. Per-specimen passive breakdown: bass18's early passive r is
+the worst of all (0.246), consistent with bass18 also showing the most
+extreme active-offset/power anomalies elsewhere in this investigation.
+
+**Interpretation:** the dramatic MEAN-LEVEL bias (the "slip") is
+specifically an ACTIVE-STIMULATION phenomenon -- it only appears when the
+muscle is actually pulling on the grips, not just from general early-
+session mechanical unsettledness. Passive samples DO get noisier early
+(more scatter, lower r) -- consistent with a generally less-settled
+early-session mechanical state -- but with no directional bias, because
+there's no muscle tension to drive slip in one direction. This is
+independent confirmation that the offset cutoff is capturing a real,
+stimulation-linked mechanical effect, not just generic early-session sensor
+noise that would show up equally regardless of stimulation state.
+
+New outputs:
+- `figs_diagnostic/dynamic_precondition_passive_sonoValidation_earlyVsLater.png`
+- `data_processed/dynamic_precondition_sono_fidelity_active_vs_passive.csv`
+- `data_processed/dynamic_precondition_sono_fidelity_passive_by_specimen.csv`

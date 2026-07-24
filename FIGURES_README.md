@@ -456,6 +456,50 @@ the point-selection design this feeds:
   4-tier confidence (added 2026-07-22, SNR-magnitude conflation audit -- this
   file previously had NO confidence flagging at all; lines stay at fixed
   alpha, only points are tiered).
+  `precondition*`/`isovelocity_*power*`/`isometric_*tension*` (BUILT
+  2026-07-22/23/24, DIAGNOSTIC, cross-fish, read-only, several scripts --
+  the "dynamic sono validation is tight for isovelocity/isometric but weak
+  for dynamic" investigation, see `analysis_muscle_force_vector_log.md`
+  for the full multi-day writeup) --
+  `dynamic_trial_precondition.R` (shared, not a plotter): hard specimen-
+  specific "early (preconditioning)" vs. "later (stable)" trial-order
+  cutoff (bass16=5, bass17=9, bass18=5), chosen so trial-mean sono-strain
+  offset falls and stays below 1.5 pct-points -- root cause traced to
+  early-trial tissue preconditioning, not signal processing (calibration/
+  crosstalk, 247 Hz staircase, mechanical vibration, and true phase lag
+  were all ruled out first). `diag_precondition_power_check.R`
+  (`dynamic_precondition_{offset,power}_vs_trialorder.png`,
+  `dynamic_precondition_power_vs_curvature.png`) -- shows the SAME
+  early-trial pattern in muscle power output (active dynamic cycles: mean
+  power/offset both fall from trial ~1-4 onward). `diag_precondition_
+  power_vs_offset.R` (dynamic, `dynamic_precondition_{mean,max}power_
+  vs_offset.png` + 2 by-specimen facet versions) -- power DIRECTLY
+  correlated against offset (not just both against trial order): pooled
+  r=0.73 (mean)/0.63 (max), n=30, holds WITHIN every specimen individually
+  (r=0.55-0.98), i.e. not a between-fish confound. `diag_precondition_
+  power_vs_offset_isovelocity.R` (`isovelocity_{mean,max}power_
+  vs_offset.png`) -- independent confirmation in a 2nd protocol, per-step
+  torque x angular-velocity power (same conversion muscle_geometry.R
+  already used for a Hill fit's Vmax, applied per-step instead): r=0.92
+  (mean)/0.82 (max), n=11. `diag_precondition_tension_vs_offset_
+  isometric.R` (`isometric_{mean,max}tension_vs_offset.png`) -- isometric
+  has no external power by design (motor doesn't move), so uses SPECIFIC
+  TENSION instead (same lever-arm torque->force->N/cm^2 conversion,
+  per-step); only 5 isometric trials exist corpus-wide, correlation not
+  significant (n=5), and isometric offsets are all small (<1.3 pct-points)
+  unlike dynamic's early-trial 2-10 pct-point offsets.
+  `diag_precondition_passive_sono_fidelity.R` (`dynamic_precondition_
+  passive_sonoValidation_earlyVsLater.png`) -- PI question: does PASSIVE
+  (no/left stim) fidelity also improve early->later? Yes for pointwise r
+  (0.61->0.97, less noise) but the MEAN-LEVEL OFFSET stays ~0 in passive
+  samples even early (+0.02 vs active's +4.92 pct-points) -- the dramatic
+  bias is specific to active stimulation (real muscle tension driving
+  slip), not generic early-session sensor noise.
+  Sanity check (not a separate figure): commanded p2p strain amplitude for
+  these dynamic trials is ~5% (median 5.04%); early-trial OFFSETS alone
+  are 92-200% of that commanded amplitude (later trials: 10-25%) -- the
+  early bias is the same order of magnitude as the entire commanded
+  motion, not a subtle measurement artifact.
 - **Summary** (`figs_summary/`): GENUINELY cross-fish content only --
   either one pooled-across-all-fish panel (`FLsuperplot_*`) or side-by-side
   per-individual panels in one figure (`specimen_comparison_specific_properties.png`),
@@ -469,6 +513,22 @@ the point-selection design this feeds:
   / group-mean cross-fish tiers are still open (point-selection method
   design, see the decision log) -- do not assume a fitted curve vs. binned
   mean without checking that file first.
+  `pooled_strainValidSonoEnc_*.png` (BUILT 2026-07-22/23, `R/plot_sono_
+  strain_validation_pooled.R`, part of the sono-validation/preconditioning
+  investigation above) -- pools measured (sono) vs. predicted (encoder)
+  RIGHT-muscle strain across all 3 specimens: one file per protocol family
+  (`_isometric`/`_isovelocity`/`_dynamic`/`_frequency_sweep`, active vs.
+  passive panels), `_dynamic_later.png` (dynamic restricted to "later
+  (stable)" trials only, dynamic_trial_precondition.R cutoff), and two
+  ALL-protocol combined figures (protocol_family x column facet):
+  `_allProtocols_later.png` (columns = per-sample windowed active/passive
+  state) and `_allProtocols_later_stepActivity.png` (columns = per-STEP/
+  CYCLE any-stim-anywhere, isolating residual post-stim force/strain from
+  truly-never-stimulated units -- revealed isometric has ZERO purely-
+  passive steps corpus-wide, and dynamic's stimulated-cycle fit improves,
+  not degrades, once the full cycle is included: r 0.905->0.932). Sono is
+  DECIMATED (1-in-~4) to the true ~241-247 Hz DS3 update rate before
+  plotting/pooling -- the 1 kHz AI clock oversamples the DS3 by ~4x.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.
