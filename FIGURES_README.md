@@ -653,6 +653,20 @@ the point-selection design this feeds:
   compliance, partly a still-imprecise steady-ramp window) -- do NOT fit a
   sono-based Vmax until the constant-velocity ramp segment is isolated; FL
   (a position, not a rate) has no such issue.
+  [DIAGNOSTIC tier] `FL_isometric_zTorqueVsUhat.png` /
+  `FV_isovelocity_zTorqueVsUhat.png` (BUILT 2026-07-24,
+  `R/diag_fv_fl_ztorque_vs_uhat.R`, saved to `figs_diagnostic/`) -- PI
+  request 2B: FL/FV built with the two FORCE-reconstruction methods as
+  separate panels. Both forces (N) come from `attach_vector_muscle_force()`:
+  `force_zTorque_N` (simple single-axis) vs. `muscle_force_vector_N` (uHat
+  empirical vector); commanded x-axis held constant so only the force method
+  varies. FINDINGS: (1) the two columns carry OPPOSITE sign conventions
+  (compare magnitude/trend, not sign); (2) uHat COLLAPSES toward zero for
+  bass17 (low-SNR empirical direction) and is generally noisier/compressed,
+  while the single-axis zTorque robustly recovers clean monotonic FL and
+  structured FV trends for all 3 specimens -- concrete support for the
+  earlier conclusion that the simple single-axis (zTorque/primary-bending-
+  axis) force is the more robust default for these data. RIGHT muscle only.
 
 ## Filename tokens
 `{signal}_{protocol}[_{method}][_{filter}].png` inside per-fish folders.
