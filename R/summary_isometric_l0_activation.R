@@ -18,12 +18,23 @@
 #
 # BOTTOM row: boxplots (+ raw points) of activation time and relaxation time
 #   per specimen.
-#     activation time = t(rise to 90% of peak) - t(stim onset).
-#     relaxation time = t(fall to 50% of peak, after stim offset) - t(offset).
+#   UPDATE 2026-07-24 (PI direction): "Activation/relaxation times should be
+#   determined using the 10 to 90% (activation) and 90 to 10% (relaxation)
+#   window. That's what Coughlin used." Definitions (changed from the prior
+#   stim-onset/half-decay convention):
+#     activation time = t(rise to 90% of peak) - t(rise to 10% of peak).
+#     relaxation time = t(fall to 10% of peak, after the peak) -
+#                        t(fall to 90% of peak, after the peak).
+#   Both are pure RISE/FALL times relative to the contraction's OWN peak --
+#   no longer anchored to stim onset/offset -- matching Coughlin's method.
 #   Shaded band = Coughlin & Carroll (2006) red-muscle mean +/- SD read from
-#   their Fig. 2 (TA ~78 ms, TR ~150 ms). NOTE ours are TETANIC rise/half-
-#   relaxation times, theirs are single-twitch TA/TR -- comparison is
-#   qualitative (order-of-magnitude / fast-vs-slow), stated on the figure.
+#   their Fig. 2 (TA ~78 ms, TR ~150 ms) -- a DIFFERENT paper (kinetics-
+#   focused) than Coughlin (2000) (the power/work/tension paper whose 10-90/
+#   90-10 CONVENTION we now match). C&C (2006)'s own TA/TR use THEIR paper's
+#   stim-onset/half-decay definition, not this 10-90/90-10 one, so the
+#   numeric comparison to the C&C band remains qualitative (order-of-
+#   magnitude fast-vs-slow) for that reason ON TOP OF the existing tetanic-
+#   vs-twitch caveat below.
 #
 # Run: Rscript R/summary_isometric_l0_activation.R  -> figs_summary/
 
@@ -144,18 +155,44 @@ cli::cli_alert_info("Collected {dplyr::n_distinct(units$unit_id)} L0 contraction
   # residual -- search [0, stim_offset + 0.15s].
   cwin <- t >= 0 & t <= (dur + 0.15)
   if (!any(cwin)) return(NULL)
-  peak <- max(f[cwin], na.rm = TRUE)
+  cwin_idx <- which(cwin)
+  peak_rel_i <- which.max(f[cwin_idx])
+  peak <- f[cwin_idx[peak_rel_i]]
   if (!is.finite(peak) || peak <= 0) return(NULL)
   fn <- f / peak
-  # activation: first rising crossing of 0.9 within the contraction window
-  rise_idx <- which(cwin & fn >= 0.9)
-  ta_ms <- if (length(rise_idx)) t[rise_idx[1L]] * 1000 else NA_real_
-  # relaxation: after offset, first fall to 0.5
-  off <- dur
-  fall_idx <- which(t > off & fn <= 0.5)
-  tr_ms <- if (length(fall_idx)) (t[fall_idx[1L]] - off) * 1000 else NA_real_
+  peak_t <- t[cwin_idx[peak_rel_i]]
+
+  # ACTIVATION (PI direction, 2026-07-24 -- matches Coughlin (2000)'s own
+  # convention): rise time from the FIRST crossing of 10% peak to the FIRST
+  # SUBSEQUENT crossing of 90% peak, searched within the rise phase only
+  # (contraction window up to the peak) -- no longer anchored to stim onset.
+  rise_win <- cwin & t <= peak_t
+  idx10r <- which(rise_win & fn >= 0.10)
+  t10_rise <- if (length(idx10r)) t[idx10r[1L]] else NA_real_
+  ta_ms <- NA_real_; t90_rise <- NA_real_
+  if (is.finite(t10_rise)) {
+    idx90r <- which(rise_win & t >= t10_rise & fn >= 0.90)
+    if (length(idx90r)) { t90_rise <- t[idx90r[1L]]; ta_ms <- (t90_rise - t10_rise) * 1000 }
+  }
+
+  # RELAXATION (PI direction, 2026-07-24): fall time from the FIRST
+  # post-peak crossing below 90% peak to the FIRST SUBSEQUENT crossing below
+  # 10% peak -- no longer anchored to stim offset. Searched over the whole
+  # post-peak trace available for this unit (already time-bounded upstream
+  # by BOOKEND_RELAX_S / RELAX_S, so no extra cap needed here).
+  fall_win <- t > peak_t
+  idx90f <- which(fall_win & fn <= 0.90)
+  tr_ms <- NA_real_; t90_fall <- NA_real_; t10_fall <- NA_real_
+  if (length(idx90f)) {
+    t90_fall <- t[idx90f[1L]]
+    idx10f <- which(fall_win & t >= t90_fall & fn <= 0.10)
+    if (length(idx10f)) { t10_fall <- t[idx10f[1L]]; tr_ms <- (t10_fall - t90_fall) * 1000 }
+  }
+
   u$force_norm <- fn
   attr(u, "ta_ms") <- ta_ms; attr(u, "tr_ms") <- tr_ms
+  attr(u, "t10_rise") <- t10_rise; attr(u, "t90_rise") <- t90_rise
+  attr(u, "t90_fall") <- t90_fall; attr(u, "t10_fall") <- t10_fall
   u
 }
 
@@ -173,7 +210,9 @@ print(dplyr::count(late_dbg, .data$specimen, .data$source))
 times <- purrr::imap_dfr(proc, function(u, id) tibble::tibble(
   unit_id = id, specimen = u$specimen[1L], source = u$source[1L],
   stim_duration_s = u$stim_duration_s[1L],
-  activation_ms = attr(u, "ta_ms"), relaxation_ms = attr(u, "tr_ms")))
+  activation_ms = attr(u, "ta_ms"), relaxation_ms = attr(u, "tr_ms"),
+  t10_rise_s = attr(u, "t10_rise"), t90_rise_s = attr(u, "t90_rise"),
+  t90_fall_s = attr(u, "t90_fall"), t10_fall_s = attr(u, "t10_fall")))
 cli::cli_h2("stim duration (s) and count by source")
 print(times |> dplyr::group_by(.data$source) |>
   dplyr::summarise(n = dplyr::n(), dur_med = round(median(.data$stim_duration_s), 3),
@@ -235,15 +274,15 @@ build_kinetics_fig <- function(traces_in, times_in, fout, top_source_note) {
     theme_bw(base_size = 12)
 
   pTA <- .box_panel(times_in, "activation_ms", COUGHLIN$activation, COUGHLIN_WHITE$activation,
-                    "B. Activation time (rise to 90% peak)", "Activation time (ms)")
+                    "B. Activation time (10% to 90% of peak)", "Activation time (ms)")
   pTR <- .box_panel(times_in, "relaxation_ms", COUGHLIN$relaxation, COUGHLIN_WHITE$relaxation,
-                    "C. Relaxation time (offset to 50% decay)", "Relaxation time (ms)")
+                    "C. Relaxation time (90% to 10% of peak)", "Relaxation time (ms)")
 
   fig <- pTop / (pTA | pTR) +
     patchwork::plot_layout(heights = c(1.25, 1)) +
     patchwork::plot_annotation(
       title = "Isometric L0 contractile kinetics across individuals vs. Coughlin & Carroll (2006) red (slow) + white (fast) muscle",
-      subtitle = "Ours are TETANIC rise / half-relaxation times; C&C are single-twitch TA/TR (Fig. 2) -- comparison is qualitative (fast-vs-slow).",
+      subtitle = "Ours = 10-90% rise / 90-10% fall times (Coughlin (2000) convention, PI-directed 2026-07-24); C&C (2006) band uses THEIR OWN stim-onset/half-decay\ndefinition on single twitches, not this one -- comparison is qualitative (fast-vs-slow), not a matched-definition benchmark.",
       theme = theme(plot.title = element_text(face = "bold", size = 12)))
   ggplot2::ggsave(fout, fig, width = 11, height = 9, dpi = 150)
   cli::cli_alert_success("Saved {fout}")

@@ -91,14 +91,14 @@ print(dplyr::count(d, .data$specimen, .data$precondition, .drop = FALSE))
     theme_bw(base_size = 12) + theme(legend.position = "bottom")
 }
 
-pA <- .panel("activation_ms", COUGHLIN$activation, COUGHLIN_WHITE$activation, "A. Activation time (rise to 90% peak)", "Activation time (ms)")
-pB <- .panel("relaxation_ms", COUGHLIN$relaxation, COUGHLIN_WHITE$relaxation, "B. Relaxation time (offset to 50% decay)", "Relaxation time (ms)")
+pA <- .panel("activation_ms", COUGHLIN$activation, COUGHLIN_WHITE$activation, "A. Activation time (10% to 90% of peak)", "Activation time (ms)")
+pB <- .panel("relaxation_ms", COUGHLIN$relaxation, COUGHLIN_WHITE$relaxation, "B. Relaxation time (90% to 10% of peak)", "Relaxation time (ms)")
 
 fig <- (pA | pB) + patchwork::plot_layout(guides = "collect") +
   patchwork::plot_annotation(
     title = "L0 bookend-twitch kinetics: early (preconditioning) vs. later (stable) trials",
-    subtitle = "Dynamic pre/post L0 BOOKEND twitches only (type-controlled: iso/isovel L0 ran almost only later, so all-source would confound stage with\ntwitch-vs-tetanus). Classified by the specimen session cutoff (bass16<5, bass17<9, bass18<5 = early). Red band = C&C 2006 red (slow) muscle; gray band = C&C 2006 white/fast (sternohyoideus/epaxial).",
-    theme = theme(plot.title = element_text(face = "bold", size = 13), plot.subtitle = element_text(size = 9))) &
+    subtitle = "Dynamic pre/post L0 BOOKEND twitches only (type-controlled: iso/isovel L0 ran almost only later, so all-source would confound stage with\ntwitch-vs-tetanus). Classified by the specimen session cutoff (bass16<5, bass17<9, bass18<5 = early). Activation/relaxation = 10-90%/90-10% of\npeak (Coughlin (2000) convention, PI-directed 2026-07-24). Red band = C&C 2006 red (slow) muscle (THEIR OWN, different, stim-onset/half-decay\ndefinition -- qualitative comparison only); gray band = C&C 2006 white/fast (sternohyoideus/epaxial).",
+    theme = theme(plot.title = element_text(face = "bold", size = 13), plot.subtitle = element_text(size = 8.3))) &
   theme(legend.position = "bottom")
 
 fout <- file.path(OUT_DIR, "isometric_L0_activation_earlyVsLater.png")

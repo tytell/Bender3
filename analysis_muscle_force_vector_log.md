@@ -2448,3 +2448,93 @@ Outputs: `figs_diagnostic/tension_zTorqueVsUhat_scatter.png` (1:1 line +
 Coughlin band, faceted isometric/isovelocity, colored by specimen);
 `data_processed/fv_fl_ztorque_vs_uhat_tension.csv` (per-step tension +
 sign-agreement flag for both methods).
+
+### 2026-07-24 addendum -- Coughlin (2000) reference corrected to the PI's actual swim condition; activation/relaxation switched to Coughlin's 10-90%/90-10% convention
+
+PI, two-part follow-up: (1) "My bender data was simulating swimming at 3 Hz
+(2 BL/s) at ~50% longitudinal position. That means the shaded area should
+be around 2.4 J/kg and 7 W/kg and isometric tension around 180 kN/m^2 based
+on the Coughlin graphs. Please re-run those analyses using the appropriate
+ranges." (2) "Activation/relaxation times should be determined using the
+10 to 90% (activation) and 90 to 10% (relaxation) window. That's what
+Coughlin used."
+
+**Part 1 -- corrected Coughlin (2000) reference.** The prior work/power
+value (3.56 J/kg, derived 14.4 W/kg) was the ONLY data point extractable as
+PDF TEXT, but it was at Coughlin's FASTEST tested swimming speed (2.4 L/s,
+4.05 Hz) -- not the PI's actual 2 BL/s / 3 Hz protocol, a real condition
+mismatch flagged as a caveat at the time but not correctable without
+digitizing the bar/scatter figures. The PI has now read the correct-
+condition values directly off Coughlin's Figs. 6/7/9 by eye: work
+2.4 J/kg, power 7.2 W/kg (=2.4 x 3 Hz, Coughlin's own work x frequency
+definition), tension 180 kN/m^2 (=18.0 N/cm^2, essentially the same
+magnitude as the prior 186.4 kN/m^2 text value -- tension does not depend
+on position/speed per Coughlin's own stats, so this is a confirmation, not
+a condition change). No SEM exists for a graph-read point, so
+`COUGHLIN2000$work_Jkg`/`power_Wkg` now carry `sd = 0` and render as a
+single dashed reference LINE on the figures (not a shaded band); tension
+keeps its previously-reported +/-33.6 kN/m^2 S.E.M. band. Updated in
+`R/summary_coughlin2000_bass_comparison.R` (`COUGHLIN2000` constant,
+figure labels/subtitle/caveats) and `R/diag_sono_vs_geometric_dynamic_
+power.R` (`COUGHLIN_POWER_WKG`, used on `dynamic_sonoVsGeometric_power_
+boxplot.png`).
+
+RESULT after recomputing against the corrected references: our isometric
+specific tension (later trials, n=4: median 8.58 kN/m^2, range 3.5-11.4)
+is ~16-51x below Coughlin's 180 kN/m^2 -- consistent with, not resolving,
+the CSA-driven gap already documented. Dynamic mean cycle power (n=16:
+median 1.16 W/kg, max 2.53) and mean work per cycle (n=16: median
+0.18 J/kg, max 1.31) now sit BELOW the corrected (much lower) 7.2 W/kg /
+2.4 J/kg reference for every trial -- UNLIKE the pre-correction comparison
+against the mismatched fastest-speed benchmark, where some trials had
+looked "close to or above" the (higher, wrong-condition) reference. All
+three metrics (tension, power, work) now show the SAME consistent
+below-Coughlin pattern once compared at the matching condition -- the
+earlier "power/work land close to Coughlin" language in this log and in
+`FIGURES_README.md` was an artifact of comparing against the wrong swim
+speed, not a real finding, and has been corrected in both places.
+
+**Part 2 -- activation/relaxation window convention.** Changed the TA/TR
+definition in `R/summary_isometric_l0_activation.R`'s `.process_unit()`
+(feeds `isometric_L0_activation_kinetics.png`,
+`isometric_L0_activation_kinetics_bookendsOnly.png`,
+`isometric_L0_activation_earlyVsLater.png`, and Panel A of
+`coughlin2000_bass_power_work_tension_comparison.png`) from a stim-onset/
+offset-anchored definition (activation = onset -> rise to 90% of peak;
+relaxation = offset -> fall to 50% of peak, i.e. half-relaxation) to a
+pure rise/fall-around-the-peak definition matching Coughlin (2000)'s own
+convention: activation = t(rise to 10% of peak) -> t(rise to 90% of peak);
+relaxation = t(fall to 90% of peak, post-peak) -> t(fall to 10% of peak).
+Both are now anchored to the contraction's OWN peak, not to the stim
+timing. The underlying crossing timestamps (`t10_rise_s`, `t90_rise_s`,
+`t90_fall_s`, `t10_fall_s`) are now exported alongside `activation_ms`/
+`relaxation_ms` in `data_processed/isometric_l0_activation_times.csv` so
+downstream figures can draw the correct window shading (previously
+Panel A's shaded activation/relaxation rectangles were anchored at t=0/
+stim-offset; they now use the median of these real crossing timestamps).
+
+CAVEAT (new, on all four affected figures): the Coughlin & Carroll (2006)
+red/white reference bands (TA~78ms/TR~150ms red; TA~10-20ms/TR~28-45ms
+white) used on the kinetics figures are from a DIFFERENT paper than
+Coughlin (2000) and use THEIR OWN stim-onset/half-decay definition, not
+this new 10-90%/90-10% one -- the numeric comparison to those bands
+remains qualitative (fast-vs-slow only), now for two independent reasons
+(single-twitch-vs-tetanic AND definition mismatch) instead of one.
+
+RESULT: values shift under the new definition but the fast-vs-slow
+conclusion is unchanged (per-specimen activation medians ~43-69 ms,
+relaxation medians ~70-170 ms, all sources pooled). The
+early-vs-later comparison (`isometric_L0_activation_earlyVsLater.png`)
+DID change qualitatively for activation: bass17's previously-significant
+"later activates slower" result (p=0.006 under the old definition) is NOT
+significant under the new one (p=0.476); bass18's activation result holds
+(p=0.002) and relaxation is significant for bass17/bass18 under both
+definitions (p<0.001) but not bass16 (p=0.120 new vs. not previously
+reported significant either). Treat any pre-2026-07-24 activation/
+relaxation p-value or ms figure anywhere in this log or
+`FIGURES_README.md` as referring to the OLD definition and superseded.
+
+All four regenerated figures verified visually before commit; OneDrive
+intermittently timed out on `ggsave()`/`write.csv()` during regeneration
+(transient sync issue, not a code defect) -- retried until each output's
+mtime confirmed a fresh write.

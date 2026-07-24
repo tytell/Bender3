@@ -456,6 +456,97 @@ the point-selection design this feeds:
   4-tier confidence (added 2026-07-22, SNR-magnitude conflation audit -- this
   file previously had NO confidence flagging at all; lines stay at fixed
   alpha, only points are tiered).
+  `amp_ratio*`/`sono_phase_lag*`/`sono_progressive_slip*`/`sono_vibration*`/
+  `muscle_depth_sensitivity`/`dynamic_by_amplitude_bin`/
+  `dynamic_active_by_specimen_trialorder` (BUILT 2026-07-22/23, DIAGNOSTIC,
+  cross-fish, read-only, several scripts -- the EARLY leg of the same
+  "dynamic sono validation is tight for isovelocity/isometric but weak for
+  dynamic" investigation the `precondition*` entry below concludes; these
+  are the elimination steps that ruled out signal-processing/mechanical
+  causes before landing on trial-order/preconditioning, per
+  `analysis_muscle_force_vector_log.md`) --
+  `diag_sono_amp_ratio_multitrial.R` (`amp_ratio_by_stimstate_boxplot.png`,
+  `amp_ratio_vs_freq_by_stimstate.png`) -- per-cycle amplitude ratio
+  (measured/sono p2p over encoder-predicted p2p) across every dynamic trial
+  in bass16/17/18, split by dominant per-cycle stim state (no/left/right
+  stim): pooled ratio is essentially THE SAME regardless of stim state
+  (no stim 1.71, left stim 1.68, right stim 1.56, mean; medians 1.5-1.6
+  across all three) -- rules out a stim-driven (excitation/biological-slip)
+  origin FOR THE RATIO ITSELF; whatever is inflating measured strain is
+  present in passive cycles too, so it must be amplitude- and/or
+  sensor/geometry-related, not muscle-activation-specific.
+  `diag_sono_dynamic_by_amplitude.R` (`dynamic_by_amplitude_bin.png`) --
+  re-renders the dynamic panel of `strainValidSonoEnc.png` (measured vs.
+  predicted strain, ALL samples) split into separate, independently-scaled
+  panels by that cycle's predicted p2p amplitude bin, making the
+  amplitude-dependent (not stim-dependent) "tall not wide" departure from
+  1:1 visible directly in the sample cloud rather than only in per-cycle
+  summary numbers.
+  `diag_sono_amp_ratio_destaircased.R` (`amp_ratio_destaircased_comparison.png`)
+  -- tests whether the amplitude-dependent ratio is a signal-conditioning
+  artifact of the sono channel's ~247 Hz DS3-update-rate-vs-1000-Hz-AI-rate
+  staircase (a raw max-min p2p is an extreme-value statistic on a stepped
+  signal, which could inflate small-amplitude cycles more than large ones).
+  Compares raw (staircase) vs. roll-mean-4 vs. lin-interp de-staircased
+  sono: de-staircasing shrinks the ratio somewhat at the smallest amplitude
+  bin (0-2% bin: raw mean 5.45 -> roll-mean 3.74 -> lin-interp 4.63) but the
+  linear fit (measured ~ predicted, no-stim cycles) intercept/slope/R^2 are
+  nearly IDENTICAL across all three conditions (slope 1.15-1.16, R^2~0.89)
+  -- the staircase is NOT the primary driver of the effect; a real
+  amplitude-dependent gain survives de-staircasing.
+  `diag_muscle_depth_sensitivity.R` (`muscle_depth_sensitivity.png`) --
+  since predicted strain is directly proportional to the moment arm
+  r_m = half_body_width - muscle_depth, tests whether a muscle-depth
+  mis-estimate (currently a 1.0 mm DEFAULT_MUSCLE_DEPTH_MM fallback in
+  every bass16/17/18 file -- the field was never measured) could explain
+  the gain. RULED OUT DECISIVELY: the max gain achievable by moving depth
+  to its physical floor of 0 mm (muscle at the body surface) is only
+  ~1.05x for all three specimens (r_m only grows ~21/20/19 mm ->
+  21/19/22 mm) -- explaining the observed 1.15x (de-staircased) to 1.71x
+  (raw, no-stim-pooled) gains via depth alone would require NEGATIVE depth
+  (-1.7 to -14 mm, i.e. muscle outside the body), a physical impossibility.
+  `diag_sono_phase_lag_multitrial.R` (`sono_phase_lag_vs_freq.png`,
+  `sono_phase_lag_by_stimstate.png`) -- per-cycle cross-correlation lag
+  (sono relative to encoder-predicted, de-staircased sono) across every
+  dynamic trial: tests whether lag is fixed-ms (hardware/DS3 latency,
+  roughly flat vs. frequency) and whether stimulation adds EXTRA lag
+  (excitation-contraction coupling, a real biological signature) on top of
+  passive baseline lag. A separate, phase-BLIND question from the
+  amplitude-ratio metric above (p2p doesn't care about timing) -- addresses
+  whether some of the "weak" dynamic pointwise fit is a timing offset
+  rather than (or in addition to) a magnitude gain.
+  `diag_sono_vibration_check.R` (`sono_vibration_timeseries_overlay.png`,
+  `sono_vibration_residual_vs_acceleration.png`) -- tests the mechanical-
+  vibration hypothesis (motor motion itself, independent of amplitude,
+  shaking the sono crystals/clamp): regresses the amplitude-ratio residual
+  (after removing the amplitude effect, `measured ~ predicted` residual)
+  against peak angular velocity and peak angular acceleration. RULED OUT:
+  R^2 stays at 0.8833 whether velocity/acceleration are added to the
+  amplitude-only model or not, and the residual's correlation with peak
+  velocity (-0.0019) and peak acceleration (-0.0052) is essentially zero --
+  vibration adds nothing once amplitude is accounted for.
+  `diag_sono_progressive_slip.R` (`sono_progressive_slip_vs_cycle_index.png`,
+  `sono_progressive_slip_vs_trial_order.png`) -- tests whether repeated
+  motor OSCILLATION progressively loosens the clamp, i.e. whether the
+  gain trends UPWARD (a) with cycle index WITHIN a single trial, or (b)
+  with trial order WITHIN a session (chronological `bender_NN`). RESULT:
+  the OPPOSITE of "accumulating slip" -- pooled trial-order coefficient on
+  the amplitude/frequency-controlled residual is NEGATIVE (-0.143
+  pct-pt/trial, SE=0.037, p=0.0005; per-specimen r = -0.68/-0.49/-0.81),
+  i.e. the excess DECAYS with trial order rather than growing -- the first
+  direct evidence for what `dynamic_trial_precondition.R` later formalizes
+  as the early/later preconditioning cutoff.
+  `dynamic_active_by_specimen_trialorder.png` (BUILT 2026-07-23, ad hoc
+  script, not retained as a standalone `R/` file -- disaggregates the
+  pooled dynamic-active (right-stim) sample cloud from
+  `plot_sono_strain_validation_pooled.R`'s data by specimen AND by trial
+  order (trials 1-4 "early" vs. 5+ "later", a coarse pre-cursor to the
+  later specimen-specific cutoff): pointwise r jumps from ~0.33 (early,
+  pooled across specimens; bass18 early = -0.067) to 0.84-0.91 (later,
+  all three specimens) -- THE key disaggregation that showed the "weak
+  dynamic fit" is concentrated in a specific, identifiable early-trial
+  subset per specimen, not a general property of dynamic trials, directly
+  motivating the `dynamic_trial_precondition.R` cutoff below.
   `precondition*`/`isovelocity_*power*`/`isometric_*tension*` (BUILT
   2026-07-22/23/24, DIAGNOSTIC, cross-fish, read-only, several scripts --
   the "dynamic sono validation is tight for isovelocity/isometric but weak
@@ -546,11 +637,17 @@ the point-selection design this feeds:
   directly -- still a first-pass comparison, not a finished replacement
   pipeline. UPDATE 2026-07-24 (PI: "some early trials have much higher cycle
   power, much closer to Coughlin -- look into that"): added a red Coughlin
-  (2000) bass power reference band (14.4+/-1.9 W/kg, derived -- see
-  `summary_coughlin2000_bass_comparison.R`) to all 4 facets. CONFIRMS the
-  effect is the SAME geometric artifact documented above: in the
-  mean/geometric panel, early-trial power sits ABOVE the Coughlin band
-  (looks "closer to/exceeding" a real literature benchmark); in the
+  (2000) bass power reference LINE (14.4 W/kg, derived -- see
+  `summary_coughlin2000_bass_comparison.R`) to all 4 facets. SUPERSEDED
+  same day (PI-corrected protocol condition, see that entry): the reference
+  is now 7.2 W/kg (=2.4 J/kg work x 3 Hz, the PI's actual 2 BL/s / 3 Hz
+  swimming condition, graph-read off Coughlin's Figs. 6/7 -- the prior
+  14.4 W/kg was Coughlin's FASTEST tested speed, a mismatched condition; no
+  SEM exists for either graph-read value, so this is a dashed line, not a
+  shaded band). CONFIRMS the effect is the SAME geometric artifact
+  documented above: in the mean/geometric panel, early-trial power sits
+  ABOVE the Coughlin line (looks "closer to/exceeding" a real literature
+  benchmark); in the
   mean/sono panel (real, measured muscle length), the SAME early trials'
   median goes slightly NEGATIVE and nowhere near the Coughlin band -- the
   apparent match disappears (and reverses) once corrected with real muscle
@@ -741,18 +838,31 @@ the point-selection design this feeds:
   contribute (the ~54 ms bookend twitches -- the majority, 120/159 -- end
   near 0.4 s, so this stops the mean cleanly instead of letting it jump onto
   the 0.3-0.5 s tetani-only tail). BOTTOM: boxplots (+ raw points) of
-  activation time (rise to 90% of peak) and relaxation time (offset to 50%
-  decay) per specimen, with a red shaded band = C&C red (slow) muscle
-  mean+/-SD read off Fig. 2 (TA ~78 ms, TR ~150 ms) AND a gray shaded band =
-  C&C white/fast feeding muscle (sternohyoideus + epaxial, TA ~10-20 ms,
-  TR ~28-45 ms) -- so ours sit between the two references. RESULT: bass feeding-muscle L0
-  kinetics are FASTER than red muscle -- activation medians ~45-80 ms, relaxation
-  ~50-90 ms (mostly below the C&C red band) -- consistent with fast-twitch
-  feeding muscle. CAVEAT (on the figure): ours are TETANIC rise/half-relaxation,
+  activation time (10% to 90% of peak, rise) and relaxation time (90% to 10%
+  of peak, fall, post-peak) per specimen, with a red shaded band = C&C red
+  (slow) muscle mean+/-SD read off Fig. 2 (TA ~78 ms, TR ~150 ms) AND a gray
+  shaded band = C&C white/fast feeding muscle (sternohyoideus + epaxial,
+  TA ~10-20 ms, TR ~28-45 ms) -- so ours sit between the two references.
+  UPDATE 2026-07-24 (PI direction: "Activation/relaxation times should be
+  determined using the 10 to 90% (activation) and 90 to 10% (relaxation)
+  window. That's what Coughlin used."): both times CHANGED from a
+  stim-onset/offset-anchored definition (rise-to-90%-from-onset,
+  fall-to-50%-from-offset) to a pure rise/fall-around-the-peak definition,
+  matching Coughlin (2000)'s own convention. C&C (2006)'s red/white bands
+  use THEIR OWN, different (onset/half-decay) definition, so the numeric
+  comparison to those bands is qualitative (order-of-magnitude fast-vs-slow)
+  for that reason IN ADDITION TO the pre-existing tetanic-vs-twitch caveat
+  below -- values shift somewhat vs. the pre-2026-07-24 numbers but the
+  fast-vs-slow conclusion is unchanged. RESULT: bass feeding-muscle L0
+  kinetics are FASTER than red muscle -- per-specimen activation medians
+  ~43-69 ms, relaxation medians ~70-170 ms (activation below the C&C red
+  band for all 3; relaxation below/near it) -- consistent with fast-twitch
+  feeding muscle. CAVEAT (on the figure): ours are TETANIC rise/fall,
   C&C are single-twitch TA/TR, so the comparison is qualitative (fast-vs-slow).
   Bookends capped at 0.35 s post-stim AND before the next stim event of any
   kind, to avoid pre-cycling motor-motion contaminating the tiny twitch tail.
-  Per-contraction times + durations in
+  Per-contraction times + durations (plus the underlying 10%/90% crossing
+  timestamps, `t10_rise_s`/`t90_rise_s`/`t90_fall_s`/`t10_fall_s`) in
   `data_processed/isometric_l0_activation_times.csv`.
   `isometric_L0_activation_kinetics_bookendsOnly.png` (BUILT 2026-07-24,
   same script) -- PI request: a bookend-ONLY twin of the figure above so the
@@ -775,11 +885,19 @@ the point-selection design this feeds:
   bookend twitches vs slower 0.3-0.5 s tetani). Bookends are the one L0 source
   present in BOTH stages for all three specimens. Boxplots (+ points) per
   specimen x stage, Wilcoxon p per specimen (both groups n>=4), Coughlin red
-  (slow) + gray white/fast bands for reference. RESULT: within the same twitch type, LATER twitches
-  relax slower / more variably (bass17 p=0.006, bass18 p<0.001) and bass18
-  also activates slightly slower (p=0.002), while early twitches are fast and
-  tight -- a within-session slowing consistent with mild fatigue, NOT the
-  early-fast artifact the confounded all-source version would have implied.
+  (slow) + gray white/fast bands for reference. UPDATED 2026-07-24:
+  activation/relaxation now use the 10-90%/90-10%-of-peak definition (see
+  `isometric_L0_activation_kinetics.png` entry above), replacing the prior
+  stim-onset/offset-anchored one -- this changed which comparisons are
+  significant (see RESULT below), not just the values, so treat the
+  pre-2026-07-24 p-values as superseded. RESULT: within the same twitch
+  type, LATER twitches relax slower / more variably in bass17 and bass18
+  (Wilcoxon p<0.001 both) but NOT bass16 (p=0.120); activation is slower
+  LATER only in bass18 (p=0.002; bass16 p=0.058, bass17 p=0.476, both n.s.
+  under this definition) -- early twitches are fast and tight, a
+  within-session slowing consistent with mild fatigue (strongest/most
+  consistent in relaxation time), NOT the early-fast artifact the
+  confounded all-source version would have implied.
   Classified per-contraction table (all sources) in
   `data_processed/isometric_l0_activation_times_precondition.csv`.
   [DIAGNOSTIC tier] `isometric_meantension_vs_offset.png` /
@@ -801,13 +919,17 @@ the point-selection design this feeds:
   modest (~1.2-1.5x higher tension per trial) because the prior geometric
   CSA (~0.65-0.83 cm^2, specimen-specific) was already in a similar range
   to the new fixed 0.55 cm^2 -- our tension is STILL ~11-20x below
-  Coughlin (2000)'s 18.64 N/cm^2, so CSA method was NOT the dominant driver
-  of that gap; some other factor (activation level, series compliance,
-  measurement method) likely also contributes.
+  Coughlin (2000)'s tension reference (180 kN/m^2 = 18.0 N/cm^2, PI-updated
+  2026-07-24 from the original 186.4 kN/m^2 text value -- see
+  `coughlin2000_bass_power_work_tension_comparison.png` below, essentially
+  the same magnitude), so CSA method was NOT the dominant driver of that
+  gap; some other factor (activation level, series compliance, measurement
+  method) likely also contributes.
   `coughlin2000_bass_power_work_tension_comparison.png` (BUILT 2026-07-24,
-  `R/summary_coughlin2000_bass_comparison.R`) -- PI request: compare OUR
-  measured mass-specific power (W/kg), work per cycle (J/kg) and specific
-  tension (kN/m^2) against published largemouth bass RED MUSCLE values from
+  `R/summary_coughlin2000_bass_comparison.R`, UPDATED 2026-07-24 same day
+  per PI follow-up -- see below) -- PI request: compare OUR measured
+  mass-specific power (W/kg), work per cycle (J/kg) and specific tension
+  (kN/m^2) against published largemouth bass RED MUSCLE values from
   Coughlin (2000, J. Exp. Biol. 203:617-629) -- a DIFFERENT reference paper
   than the "Coughlin & Carroll 2006" activation/relaxation band used above.
   User's 10-question clarification form was skipped, so the RECOMMENDED
@@ -817,39 +939,56 @@ the point-selection design this feeds:
   `data_processed/isometric_l0_activation_traces.csv` export -- see that
   script), x-axis tightened to the twitch itself (-0.2 to 0.45 s, vs. the
   0-1.2 s span before), with shaded bands for stim-ON, the activation window
-  (onset->90% peak) and the relaxation window (offset->50% decay) plus their
-  median durations. Panels B/C/D: boxplots (+ points) of, respectively,
-  isometric specific tension (trial-max, N/cm^2 -> kN/m^2), dynamic mean
-  cycle power (W/kg) and dynamic mean work per cycle (J/kg) -- LATER
-  (stable) trials only, dynamic power/work restricted to right-stim cycles
-  (this repo's "active" convention) -- each with a red Coughlin (2000)
-  reference band. PROVENANCE CAVEATS (also on the figure): Coughlin's
-  tension (186.4+/-33.6 kN/m^2, N=18) is POSITION-POOLED (no significant
-  position effect, so no single 50%L value exists); the work value
-  (3.56+/-0.47 J/kg, N=6) is a SINGLE data point at 0.572L ("MID",
-  closest to 50%L) for the FASTEST bass swimming speed tested (2.4 L/s,
-  4.05 Hz) -- not a range, and embedded on-figure text in the PDF (all
-  other position x speed combinations exist only as bar/scatter graphics
-  and were not digitized); power (14.4+/-1.9 W/kg) is DERIVED as
-  work x frequency (Coughlin's own definition), not independently reported.
-  Coughlin's numbers reflect SUBMAXIMAL in-vivo swimming stimulation, not
-  the animal's maximum -- an apples-to-oranges risk against our closer-to-
-  maximal characterization protocols. RESULT: our isometric specific
-  tension (later trials: ~0.15-0.81 N/cm^2 = 1.5-8.1 kN/m^2) is roughly
-  15-50x BELOW Coughlin's band, most likely because our tension uses a
-  GEOMETRIC whole-body-oval CSA estimate (`compute_muscle_mass_and_csa()`)
-  rather than Coughlin's HISTOLOGICAL live-fiber-area measurement on an
-  isolated single-myotome bundle. Our dynamic power/work land much closer
-  to (and for some trials, above) the single Coughlin reference point.
-  No bath/room temperature is logged anywhere in this rig's HDF5 metadata;
-  assumed ambient ~20-22 C (uncontrolled) vs. Coughlin's controlled 20 C
-  bath. Comparison data in
+  (10%->90% of peak) and the relaxation window (90%->10% of peak, post-peak)
+  plus their median durations. Panels B/C/D: boxplots (+ points) of,
+  respectively, isometric specific tension (trial-max, N/cm^2 -> kN/m^2),
+  dynamic mean cycle power (W/kg) and dynamic mean work per cycle (J/kg) --
+  LATER (stable) trials only, dynamic power/work restricted to right-stim
+  cycles (this repo's "active" convention) -- each with a red Coughlin
+  (2000) reference. UPDATE 2026-07-24 (PI: "My bender data was simulating
+  swimming at 3 Hz (2 BL/s) at ~50% longitudinal position. The shaded area
+  should be around 2.4 J/kg and 7 W/kg and isometric tension around
+  180 kN/m^2 based on the Coughlin graphs"): work/power/tension reference
+  values REPLACED with PI-provided values graphically read off Coughlin's
+  Figs. 4/6/7/9 AT THE PI's OWN protocol condition -- work 2.4 J/kg, power
+  7.2 W/kg (=2.4 x 3 Hz, Coughlin's own work x frequency derivation),
+  tension 180 kN/m^2 (essentially the same magnitude as the prior 186.4
+  text value -- tension is position/speed-independent per Coughlin's own
+  stats). The PREVIOUS work/power value (3.56 J/kg, derived 14.4 W/kg) was
+  the only one extractable as PDF TEXT but was at Coughlin's FASTEST tested
+  speed (2.4 L/s, 4.05 Hz) -- MISMATCHED to this rig's actual 2 BL/s / 3 Hz
+  protocol; the new values fix that mismatch. No SEM exists for a
+  graph-read point, so work/power now show as a single dashed reference
+  LINE (no shaded uncertainty band) instead of a band; tension keeps
+  Coughlin's reported +/-33.6 kN/m^2 S.E.M. band (position-pooled, N=18).
+  PROVENANCE CAVEATS (also on the figure): Coughlin's numbers reflect
+  SUBMAXIMAL in-vivo swimming stimulation, not the animal's maximum -- an
+  apples-to-oranges risk against our closer-to-maximal characterization
+  protocols. RESULT (recomputed against the corrected references): our
+  isometric specific tension (later trials, n=4: median 8.58 kN/m^2, range
+  3.5-11.4) is ~16-51x BELOW Coughlin's 180 kN/m^2 band, most likely
+  because our tension uses a GEOMETRIC whole-body-oval-derived CSA
+  reference (`MEASURED_RED_MUSCLE_CSA_CM2`, see addendum below) rather than
+  Coughlin's HISTOLOGICAL live-fiber-area measurement on an isolated
+  single-myotome bundle. Dynamic mean cycle power (n=16: median 1.16 W/kg,
+  max 2.53) and mean work per cycle (n=16: median 0.18 J/kg, max 1.31) now
+  ALSO sit clearly BELOW the corrected (much lower) 7.2 W/kg / 2.4 J/kg
+  reference lines for every trial -- UNLIKE the pre-2026-07-24 comparison
+  against the mismatched fastest-speed reference, where some trials looked
+  "close to or above" the (much higher, 14.4/3.56) benchmark. All three
+  metrics now show the SAME consistent below-Coughlin pattern once compared
+  at the correct condition -- do not cite the old "power/work land close to
+  Coughlin" language, it was an artifact of the wrong reference speed, not
+  a real result. No bath/room temperature is logged anywhere in this rig's
+  HDF5 metadata; assumed ambient ~20-22 C (uncontrolled) vs. Coughlin's
+  controlled 20 C bath. Comparison data in
   `data_processed/coughlin2000_bass_comparison_data.csv`.
-  UPDATE 2026-07-24: tension (panel B) now uses `MEASURED_RED_MUSCLE_CSA_CM2`
-  (0.55 cm^2, `muscle_geometry.R`) instead of the geometric body-oval
-  estimate -- see that entry's log addendum below. Tension improved only
-  modestly (still ~11-20x below Coughlin, not fully explained by the CSA
-  guess alone) -- do not describe this figure as "resolving" the tension gap.
+  Tension (panel B) uses `MEASURED_RED_MUSCLE_CSA_CM2` (0.55 cm^2,
+  `muscle_geometry.R`, image-analysis CSA from reference specimen "bass07")
+  instead of the geometric body-oval estimate -- see that entry's log
+  addendum below. Tension improved only modestly vs. the geometric guess
+  (still ~16-51x below Coughlin, not fully explained by the CSA guess
+  alone) -- do not describe this figure as "resolving" the tension gap.
   [DIAGNOSTIC tier] `FL_FV_candidates_all_individuals.png`
   (`R/summary_fv_fl_best_within_individual.R`, `figs_diagnostic/`) -- the
   all-individuals companion used to justify the
@@ -882,7 +1021,9 @@ the point-selection design this feeds:
   compared on MAGNITUDE (`|force|`) since the two raw force columns use
   opposite sign conventions by construction (confirmed: 85% sign-disagree
   for isometric steps, 62% for isovelocity). Faceted isometric/isovelocity,
-  1:1 dashed line, Coughlin (2000) 18.64+/-3.36 N/cm^2 band on the x-axis.
+  1:1 dashed line, Coughlin (2000) 18.0+/-3.36 N/cm^2 band on the x-axis
+  (updated 2026-07-24 from 18.64, the original text value -- see
+  `coughlin2000_bass_power_work_tension_comparison.png`, ~same magnitude).
   RESULT: agreement is weak AND specimen-dependent, not a stable
   relationship -- magnitude correlation ranges from r=0.89 (bass16
   isometric) to r=-0.58 (bass18 isometric, inverted) to r=-0.08 (bass18

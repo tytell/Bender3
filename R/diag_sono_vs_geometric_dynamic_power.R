@@ -393,26 +393,31 @@ box_long$stat    <- factor(box_long$stat, levels = c("mean (cycle-averaged)", "p
 
 # PI follow-up, 2026-07-24: "some early trials have much higher cycle power,
 # much closer to Coughlin (2000) -- look into that." Coughlin's bass power
-# (14.4 +/- 1.9 W/kg, DERIVED as work x frequency at 0.572L, 2.4 L/s -- see
-# summary_coughlin2000_bass_comparison.R) is overlaid on every facet so it's
-# visible exactly WHERE the apparent "closer to Coughlin" early-trial power
-# survives (mean, geometric only) vs. where it does NOT survive sono
-# correction (mean, sono method -- median actually goes slightly NEGATIVE).
-COUGHLIN_POWER_WKG <- list(mean = 14.4, sd = 1.9)
+# reference is overlaid on every facet so it's visible exactly WHERE the
+# apparent "closer to Coughlin" early-trial power survives (mean, geometric
+# only) vs. where it does NOT survive sono correction (mean, sono method --
+# median actually goes slightly NEGATIVE).
+# UPDATE 2026-07-24 (PI direction): the reference value now uses the PI's
+# OWN protocol condition (3 Hz tailbeat, 2 BL/s, ~50%L), read directly off
+# Coughlin (2000) Figs. 6/7/9 -- 7.2 W/kg (= 2.4 J/kg work x 3 Hz, the same
+# "power = work x frequency" derivation Coughlin uses) -- superseding the
+# PREVIOUS value (14.4 W/kg), which was the only data point extractable as
+# PDF TEXT but at a MISMATCHED, faster condition (2.4 L/s / 4.05 Hz, the
+# fastest speed Coughlin tested, not this rig's 2 BL/s protocol). No SEM is
+# available for this graphically-read point (shown as a single reference
+# line, not a shaded band) -- see summary_coughlin2000_bass_comparison.R for
+# the same updated value/rationale.
+COUGHLIN_POWER_WKG <- list(mean = 2.4 * 3, sd = 0)
 
 p3 <- ggplot(box_long, aes(x = .data$x_label, y = .data$power_Wkg)) +
-  annotate("rect", xmin = -Inf, xmax = Inf,
-           ymin = COUGHLIN_POWER_WKG$mean - COUGHLIN_POWER_WKG$sd,
-           ymax = COUGHLIN_POWER_WKG$mean + COUGHLIN_POWER_WKG$sd,
-           fill = "#b30000", alpha = 0.12) +
-  geom_hline(yintercept = COUGHLIN_POWER_WKG$mean, color = "#b30000", linetype = "dashed", linewidth = 0.4) +
+  geom_hline(yintercept = COUGHLIN_POWER_WKG$mean, color = "#b30000", linetype = "dashed", linewidth = 0.5) +
   geom_boxplot(outlier.shape = NA, width = 0.5, fill = "grey95", color = "grey40") +
   geom_jitter(aes(color = .data$specimen), width = 0.12, size = 1.8, alpha = 0.7) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey70", linewidth = 0.4) +
   facet_grid(stat ~ method, scales = "free_y") +
   scale_color_manual(values = SPECIMEN_COLORS, name = "Specimen") +
   labs(title = "Dynamic, right-stim cycles: mass-specific power, geometric vs. sono method (early vs. later)",
-       subtitle = sprintf("Sono velocity from a %.0f Hz zero-phase Butterworth LP filter on sono_right_mm (full trial), decimated to the true DS3\nrate before differentiating -- see module header. Each point = one active right-stim cycle. Red band = Coughlin (2000) bass\npower, derived (1 pt, 0.572L @ 2.4 L/s) -- see summary_coughlin2000_bass_comparison.R for provenance/caveats.", SONO_LOWPASS_CUTOFF_HZ),
+       subtitle = sprintf("Sono velocity from a %.0f Hz zero-phase Butterworth LP filter on sono_right_mm (full trial), decimated to the true DS3\nrate before differentiating -- see module header. Each point = one active right-stim cycle. Red dashed line = Coughlin (2000) bass\npower at the PI's actual protocol condition (3 Hz, 2 BL/s, ~50%%L; graphically-read, no SEM available) -- see summary_coughlin2000_bass_comparison.R.", SONO_LOWPASS_CUTOFF_HZ),
        x = NULL, y = "Power (W/kg)") +
   theme_bw(base_size = 11) +
   theme(legend.position = "bottom", strip.text = element_text(size = 9))

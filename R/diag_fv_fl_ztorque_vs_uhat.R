@@ -209,7 +209,7 @@ print(tension_tbl |> dplyr::group_by(.data$specimen, .data$category) |> dplyr::s
 # "zTorque/uHat isovelocity tension matches Coughlin."
 cli::cli_alert_warning("CAVEAT: isovelocity force here is a pre-CV-window PEAK-WINDOW MEAN (MFV_PEAK_WINDOW_S=0.15s) -- NOT the constant-velocity-window method summary_fv_fl_best_within_individual.R found necessary to remove an inflation artifact. Isovelocity tension values here are NOT a trustworthy Coughlin comparison; use isometric only for that.")
 
-COUGHLIN_TENSION_NCM2 <- list(mean = 18.64, sd = 3.36)  # Coughlin 2000, 186.4+/-33.6 kN/m^2
+COUGHLIN_TENSION_NCM2 <- list(mean = 18.0, sd = 3.36)  # Coughlin 2000, 180+/-33.6 kN/m^2 (PI-updated 2026-07-24, graph-read at the PI's actual protocol condition; ~same magnitude as the original 186.4 text value -- see summary_coughlin2000_bass_comparison.R)
 
 pTension <- ggplot(tension_tbl, aes(x = .data$tension_zTorque_Ncm2, y = .data$tension_uhat_Ncm2)) +
   annotate("rect", xmin = COUGHLIN_TENSION_NCM2$mean - COUGHLIN_TENSION_NCM2$sd,

@@ -33,8 +33,35 @@
 #      -- this is a new, separate figure.
 #
 # =============================================================================
-# Coughlin (2000) largemouth bass, 20 C bath -- values extractable as TEXT
-# from the PDF (i.e., NOT read off a bar/scatter figure by eye):
+# Coughlin (2000) largemouth bass, 20 C bath.
+#
+# UPDATE 2026-07-24 (PI direction): "My bender data was simulating swimming
+# at 3 Hz (2 BL/s) at ~50% longitudinal position. The shaded area should be
+# around 2.4 J/kg and 7 W/kg [work, power] and isometric tension around
+# 180 kN/m^2 based on the Coughlin graphs." These PI-provided values,
+# graphically read off Coughlin (2000) Figs. 4/6/7/9 AT THE PI's OWN
+# protocol condition, REPLACE the prior values below:
+#   - Work per cycle:  2.4 J/kg  (was 3.56 J/kg)
+#   - Power:           7.2 W/kg = 2.4 J/kg x 3 Hz, Coughlin's own
+#                       "power = work x frequency" derivation (was 14.4 W/kg)
+#   - Tension:         180 kN/m^2 (was 186.4 kN/m^2 -- essentially the same
+#                       number; tension is position/speed-INDEPENDENT per
+#                       Coughlin's own stats, so this is a confirmation/
+#                       refinement, not a condition change)
+# No SEM is available for a value read off a graph (vs. the previous
+# point's on-figure TEXT mean+/-S.E.M.) -- work/power are therefore shown as
+# a single reference LINE (no shaded uncertainty band); tension keeps the
+# previously-reported +/-33.6 kN/m^2 S.E.M. (N=18, same pooled-position
+# value, magnitude essentially unchanged by the PI's re-read).
+#
+# WHY THIS MATTERS: the PREVIOUS work/power value was the only one
+# extractable as PDF TEXT, but it was at Coughlin's FASTEST tested speed
+# (2.4 L/s, 4.05 Hz) -- a condition MISMATCHED to this rig's actual protocol
+# (2 BL/s, 3 Hz). The new PI-provided values are read at the matching
+# condition instead, making this a true apples-to-apples speed/frequency
+# comparison (the submaximal-stimulation caveat below still applies).
+#
+# Original (2026-07-24, pre-update) provenance, kept for the record:
 #   - Tetanic isometric tension: 186.4 +/- 33.6 kN/m^2 (mean+/-S.E.M., N=18
 #     bundles), POOLED across all 6 longitudinal positions -- position had
 #     NO significant effect on tension (F=0.151, P=0.861), so there is no
@@ -46,16 +73,13 @@
 #     user's ~50%L; MID bundles were dissected from 0.55-0.70L) stimulated
 #     under in vivo conditions for swimming at 2.4 L/s (4.05 Hz tailbeat --
 #     the FASTEST bass swimming speed tested, not a full speed range).
-#   - Power is NOT given directly for this point; it is DERIVED here using
-#     Coughlin's own definition ("Power is the product of the net work per
-#     cycle and the oscillation frequency"): 3.56 J/kg * 4.05 Hz = 14.4 W/kg.
-#     The SD on power is likewise propagated (0.47 * 4.05 = 1.9 W/kg) --
-#     this is an approximation, not an independently reported error.
+#   - Power was DERIVED using Coughlin's own definition ("Power is the
+#     product of the net work per cycle and the oscillation frequency"):
+#     3.56 J/kg * 4.05 Hz = 14.4 W/kg; SD propagated (0.47 * 4.05 = 1.9 W/kg).
 #   - All other position x speed combinations for bass work/power (the full
 #     grids in Figs 6, 7, 9) exist ONLY as bar/scatter graphics in the PDF;
-#     PDF text extraction did not recover their values, so they are NOT
-#     used here. If a fuller position x speed grid is needed, it would have
-#     to be digitized from the original figures.
+#     PDF text extraction did not recover their values -- the PI has now
+#     read the correct-condition values directly off those graphics instead.
 #
 # CAVEATS shown on the figure:
 #   - Apples-to-oranges risk: Coughlin's numbers are muscle stimulated under
@@ -99,15 +123,19 @@ SPECIMEN_COLORS <- c(bass16 = "#1b9e77", bass17 = "#d95f02", bass18 = "#7570b3")
 PAD_S <- 0.2
 
 # =============================================================================
-# Coughlin (2000) bass reference values (see header for provenance/caveats)
+# Coughlin (2000) bass reference values (see header for provenance/caveats).
+# UPDATED 2026-07-24 per PI: graphically read at the PI's OWN protocol
+# condition (3 Hz tailbeat, 2 BL/s, ~50%L) instead of Coughlin's fastest
+# tested speed (2.4 L/s, 4.05 Hz). No SEM available for a graph-read value --
+# work/power sd = 0 (single reference line, no shaded band on the figure).
 # =============================================================================
 COUGHLIN2000 <- list(
-  tension_kNm2 = list(mean = 186.4, sd = 33.6, n = 18,
-                       note = "tetanic force, pooled across all 6 positions (no position effect)"),
-  work_Jkg     = list(mean = 3.56, sd = 0.47, n = 6,
-                       note = "MID bundle, 0.572L, swimming at 2.4 L/s (4.05 Hz) -- single point, not a range"),
-  power_Wkg    = list(mean = 3.56 * 4.05, sd = 0.47 * 4.05, n = 6,
-                       note = "DERIVED (work x frequency); SD propagated, not independently reported")
+  tension_kNm2 = list(mean = 180, sd = 33.6, n = 18,
+                       note = "tetanic force, pooled across all 6 positions (no position effect); PI-read value, ~same magnitude as the original 186.4 text value"),
+  work_Jkg     = list(mean = 2.4, sd = 0, n = NA_integer_,
+                       note = "PI-read from Fig. 6/7 at the PI's own condition: 0.572L (~50%L), 2 BL/s (3 Hz tailbeat) -- no SEM available from a graphical read"),
+  power_Wkg    = list(mean = 2.4 * 3, sd = 0, n = NA_integer_,
+                       note = "DERIVED (work x 3 Hz, Coughlin's own definition); no SEM available (propagated from a zero-SD work value)")
 )
 
 # =============================================================================
@@ -121,13 +149,21 @@ traces <- dplyr::filter(traces_all, .data$source == "dynamic L0 bookend")
 times  <- dplyr::filter(times_all,  .data$source == "dynamic L0 bookend")
 
 # representative activation/relaxation windows (pooled median, ms -> s) --
-# same TA/TR definitions as summary_isometric_l0_activation.R:
-#   activation = t(stim onset=0) -> t(rise to 90% of peak)
-#   relaxation = t(stim offset)  -> t(fall to 50% of peak)
+# same TA/TR definitions as summary_isometric_l0_activation.R (PI-updated
+# 2026-07-24 to match Coughlin (2000)'s own convention):
+#   activation = t(rise to 10% of peak) -> t(rise to 90% of peak)
+#   relaxation = t(fall to 90% of peak, post-peak) -> t(fall to 10% of peak)
 ta_med_s  <- stats::median(times$activation_ms, na.rm = TRUE) / 1000
 tr_med_s  <- stats::median(times$relaxation_ms, na.rm = TRUE) / 1000
 dur_med_s <- stats::median(times$stim_duration_s, na.rm = TRUE)
-cli::cli_alert_info("Bookend medians: stim duration {round(dur_med_s*1000)} ms, activation {round(ta_med_s*1000)} ms, relaxation {round(tr_med_s*1000)} ms (n={nrow(times)})")
+# window ANCHOR points for the shaded bands below -- medians of the actual
+# crossing timestamps (not just re-derived from ta_med_s/tr_med_s, since the
+# windows no longer start at t=0/dur).
+t10r_med <- stats::median(times$t10_rise_s, na.rm = TRUE)
+t90r_med <- stats::median(times$t90_rise_s, na.rm = TRUE)
+t90f_med <- stats::median(times$t90_fall_s, na.rm = TRUE)
+t10f_med <- stats::median(times$t10_fall_s, na.rm = TRUE)
+cli::cli_alert_info("Bookend medians: stim duration {round(dur_med_s*1000)} ms, activation {round(ta_med_s*1000)} ms (10-90%), relaxation {round(tr_med_s*1000)} ms (90-10%) (n={nrow(times)})")
 
 XLIM <- c(-PAD_S, 0.45)  # tightened -- bookends are ~54 ms twitches, fully decayed by ~0.4 s
 
@@ -145,22 +181,22 @@ mean_trend <- purrr::map_dfr(split(traces, traces$specimen), function(df) {
 
 pTop <- ggplot() +
   annotate("rect", xmin = 0, xmax = dur_med_s, ymin = -Inf, ymax = Inf, fill = "grey70", alpha = 0.25) +
-  annotate("rect", xmin = 0, xmax = ta_med_s, ymin = -Inf, ymax = Inf, fill = "#1b9e77", alpha = 0.15) +
-  annotate("rect", xmin = dur_med_s, xmax = dur_med_s + tr_med_s, ymin = -Inf, ymax = Inf, fill = "#d95f02", alpha = 0.15) +
-  geom_hline(yintercept = c(0, 0.9, 0.5, 1), linetype = "dotted", color = "grey80") +
+  annotate("rect", xmin = t10r_med, xmax = t90r_med, ymin = -Inf, ymax = Inf, fill = "#1b9e77", alpha = 0.15) +
+  annotate("rect", xmin = t90f_med, xmax = t10f_med, ymin = -Inf, ymax = Inf, fill = "#d95f02", alpha = 0.15) +
+  geom_hline(yintercept = c(0, 0.9, 0.1, 1), linetype = "dotted", color = "grey80") +
   geom_vline(xintercept = c(0, dur_med_s), linetype = "dashed", color = "grey50") +
   geom_line(data = traces, aes(x = t_rel, y = force_norm, group = unit_id, color = specimen),
             alpha = 0.20, linewidth = 0.3) +
   geom_line(data = mean_trend, aes(x = t_rel, y = force_norm, color = specimen), linewidth = 1.4) +
-  annotate("text", x = ta_med_s / 2, y = 1.08, label = sprintf("activation\n(median %.0f ms)", ta_med_s * 1000),
+  annotate("text", x = (t10r_med + t90r_med) / 2, y = 1.08, label = sprintf("activation\n(median %.0f ms)", ta_med_s * 1000),
            size = 2.6, color = "#1b9e77", fontface = "italic") +
-  annotate("text", x = dur_med_s + tr_med_s / 2, y = 1.08, label = sprintf("relaxation\n(median %.0f ms)", tr_med_s * 1000),
+  annotate("text", x = (t90f_med + t10f_med) / 2, y = 1.08, label = sprintf("relaxation\n(median %.0f ms)", tr_med_s * 1000),
            size = 2.6, color = "#d95f02", fontface = "italic") +
   annotate("text", x = dur_med_s / 2, y = -0.13, label = "stim ON", size = 2.4, color = "grey30") +
   scale_color_manual(values = SPECIMEN_COLORS, name = "individual") +
   coord_cartesian(xlim = XLIM, ylim = c(-0.18, 1.15)) +
   labs(title = "A. Isometric L0 bookend twitches: normalised force vs. time",
-       subtitle = sprintf("Same twitches as isometric_L0_activation_kinetics_bookendsOnly.png, x-axis tightened to the twitch itself.\nShaded: stim ON (grey), activation window (green, onset->90%% peak), relaxation window (orange, offset->50%% decay). n=%d twitches.", dplyr::n_distinct(traces$unit_id)),
+       subtitle = sprintf("Same twitches as isometric_L0_activation_kinetics_bookendsOnly.png, x-axis tightened to the twitch itself.\nShaded: stim ON (grey), activation window (green, 10%%->90%% of peak), relaxation window (orange, 90%%->10%% of peak, post-peak) --\nCoughlin (2000) convention, PI-directed 2026-07-24. n=%d twitches.", dplyr::n_distinct(traces$unit_id)),
        x = "Time relative to stim onset (s)", y = "Normalised force (F / peak)") +
   theme_bw(base_size = 12)
 
@@ -223,13 +259,13 @@ pB <- .coug_panel("Specific tension (kN/m^2)",
 p_c <- COUGHLIN2000$power_Wkg
 pC <- .coug_panel("Mean cycle power (W/kg)",
                    p_c$mean - p_c$sd, p_c$mean + p_c$sd, p_c$mean,
-                   "Coughlin 2000 bass, 20C\n(derived, 1 pt: 0.572L @ 2.4 L/s)",
+                   "Coughlin 2000 bass, 20C\n(derived, graph-read: 0.572L\n@ 2 BL/s / 3 Hz, no SEM)",
                    "Mean cycle power (W/kg)", "C. Dynamic power (right-stim cycles)")
 
 w_c <- COUGHLIN2000$work_Jkg
 pD <- .coug_panel("Mean work per cycle (J/kg)",
                    w_c$mean - w_c$sd, w_c$mean + w_c$sd, w_c$mean,
-                   sprintf("Coughlin 2000 bass, 20C\n(n=%d bundles, 1 pt: 0.572L @ 2.4 L/s)", w_c$n),
+                   "Coughlin 2000 bass, 20C\n(graph-read: 0.572L\n@ 2 BL/s / 3 Hz, no SEM)",
                    "Work per cycle (J/kg)", "D. Dynamic work (right-stim cycles)")
 
 fig <- pTop / (pB | pC | pD) +
@@ -237,12 +273,12 @@ fig <- pTop / (pB | pC | pD) +
   patchwork::plot_annotation(
     title = "Bass red muscle vs. Coughlin (2000): tension, power, work -- later/stable trials only",
     subtitle = paste0(
-      "Later (stable) trials only (dynamic_trial_precondition.R cutoffs); dynamic power/work use right-stim cycles only.\n",
-      "CAVEATS: (1) Coughlin's tension is position-pooled (no 50%L-specific value; position had no effect); work/power is a SINGLE data point at\n",
-      "0.572L, 2.4 L/s (fastest speed tested), not a full range -- power is DERIVED (work x freq), not directly reported.\n",
-      "(2) Coughlin's values are muscle under SUBMAXIMAL in-vivo swimming conditions; ours are closer to maximal characterization stimulation -- not a like-for-like comparison.\n",
-      "(3) Our tension uses MEASURED_RED_MUSCLE_CSA_CM2 (image-analysis CSA, reference specimen 'bass07', assumed ~50%L; muscle_geometry.R), not bass16/17/18's own CSA (never imaged) -- still ~11-20x below Coughlin's, so the gap is NOT fully explained by the earlier geometric-CSA guess alone.\n",
-      "(4) No bath/room temperature is logged on this rig; assumed ambient ~20-22C (uncontrolled) vs. Coughlin's controlled 20C bath."),
+      "Later (stable) trials only (dynamic_trial_precondition.R cutoffs); dynamic power/work use right-stim cycles only. Coughlin reference values (dashed\n",
+      "lines) are graphically read at the PI's OWN protocol condition (0.572L ~50%L, 2 BL/s / 3 Hz tailbeat) -- work/power have no reported SEM (single\n",
+      "reference line, no shaded band); tension keeps Coughlin's reported +/-33.6 kN/m^2 S.E.M. (position-pooled -- position had no effect on tension).\n",
+      "CAVEATS: (1) Coughlin's values are muscle under SUBMAXIMAL in-vivo swimming conditions; ours are closer to maximal characterization stimulation -- not a fully like-for-like comparison.\n",
+      "(2) Our tension uses MEASURED_RED_MUSCLE_CSA_CM2 (image-analysis CSA, reference specimen 'bass07', assumed ~50%L; muscle_geometry.R), not bass16/17/18's own CSA (never imaged) -- still ~11-20x below Coughlin's, so the gap is NOT fully explained by the earlier geometric-CSA guess alone.\n",
+      "(3) No bath/room temperature is logged on this rig; assumed ambient ~20-22C (uncontrolled) vs. Coughlin's controlled 20C bath."),
     theme = theme(plot.title = element_text(face = "bold", size = 13), plot.subtitle = element_text(size = 8.3)))
 
 fout <- file.path(OUT_DIR, "coughlin2000_bass_power_work_tension_comparison.png")
