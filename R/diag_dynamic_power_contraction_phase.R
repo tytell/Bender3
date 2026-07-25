@@ -166,10 +166,24 @@ SPECIMEN_SUBFOLDERS <- c(bass16 = BASS16_RAW_SUBFOLDER, bass17 = BASS17_RAW_SUBF
 #' rec_lidx = lidx_left/lidx_right; concentric when bend_lidx == rec_lidx,
 #' eccentric when bend_lidx == -rec_lidx. NA for zero/near-zero velocity
 #' samples (direction undefined) or samples with no resolved side.
+#' 2026-07-25 PI-confirmed fix: `stim_side` ("L"/"R", DAQ-recorded at
+#' acquisition time) and `daq_specimen_side_index_left`/`_right` (separate,
+#' independently-set rig-geometry metadata) do NOT agree on which physical
+#' muscle is "left" for single_finite/dynamic files. Verified directly
+#' against the raw commanded angle.deg trace, 3/3 specimens (bass16/17/18,
+#' same lidx_pos_motor=-1/lidx_left=-1/lidx_right=+1 attrs each): "L"-labeled
+#' stim pulses fire at mean angle.deg ~+2.0 to +2.4 deg (i.e. straddling the
+#' POSITIVE/lidx_left-side extremum), "R"-labeled pulses at ~-1.8 to -2.1 deg
+#' (the lidx_right-side extremum) -- exactly backward from the PI-confirmed
+#' intended design ("phase=0 = stim centered on the RECRUITED muscle's own
+#' peak STRETCH", analysis_muscle_force_vector_log.md 2026-07-25 addendum).
+#' A stim_side=="L" event's own peak stretch is therefore at the
+#' lidx_right-side extremum -- i.e. row_side=="L" resolves to lidx_right,
+#' not lidx_left. Swapped below (was lidx_left/lidx_right, unswapped).
 .classify_contraction <- function(stim, dist.rad, lidx_pos_motor, lidx_left, lidx_right) {
   rec_lidx <- dplyr::case_when(
-    stim == "L" ~ lidx_left,
-    stim == "R" ~ lidx_right,
+    stim == "L" ~ lidx_right,
+    stim == "R" ~ lidx_left,
     .default = NA_real_
   )
   bend_lidx <- dplyr::if_else(

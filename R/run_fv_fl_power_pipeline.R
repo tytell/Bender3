@@ -204,9 +204,29 @@ DEACTIVATION_WINDOW_S <- 0.5
         row_side[in_win] <- e$muscle_side
       }
     }
+    # FIXED 2026-07-25 (PI-confirmed): `stim_side` ("L"/"R", DAQ-recorded per
+    # sample) and `daq_specimen_side_index_left`/`_right` (independent
+    # rig-geometry metadata) do NOT agree on which physical muscle is "left"
+    # for single_finite/dynamic files. Verified against the raw commanded
+    # angle.deg trace, 3/3 specimens (bass16/17/18): "L"-labeled stim pulses
+    # fire at the POSITIVE-angle (lidx_left-side) extremum, "R"-labeled
+    # pulses at the NEGATIVE-angle (lidx_right-side) extremum -- backward
+    # from the PI-confirmed intended design ("phase=0 = stim centered on the
+    # RECRUITED muscle's own peak STRETCH": a muscle's own peak stretch is
+    # at the OPPOSITE-sign extremum from its own lidx side, so stim_side
+    # "L"'s own peak stretch is at the lidx_right extremum, not lidx_left).
+    # See analysis_muscle_force_vector_log.md 2026-07-25 addendum for the
+    # full empirical verification (mean angle.deg during the literal pulse,
+    # by side, all 3 specimens). Swapped below (was lidx_left/lidx_right,
+    # unswapped) -- changes td$muscle_force_Nm's sign attribution for
+    # dynamic trials; does NOT itself change msc$muscle_torque.Nm (still
+    # RAW, per the 2026-07-24 fix above) or any already-computed whole-cycle
+    # power/work number, which stays raw-sign pending a separate decision on
+    # porting the contraction-phase classification (diag_dynamic_power_
+    # contraction_phase.R) into production.
     rec_lidx <- dplyr::case_when(
-      row_side == "L" ~ lidx_left,
-      row_side == "R" ~ lidx_right,
+      row_side == "L" ~ lidx_right,
+      row_side == "R" ~ lidx_left,
       .default = NA_real_
     )
     force_sign <- rec_lidx * lidx_pos_motor

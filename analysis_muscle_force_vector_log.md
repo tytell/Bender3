@@ -2751,3 +2751,80 @@ this.
 Diagnostic outputs (not production figures): `data_processed/diag_
 dynamic_power_contraction_phase_{percycle,persample,check1_bysample,
 check2_percycle,check3_pulseVsTail}.csv`.
+
+### 2026-07-25 addendum (continued) -- CONFIRMED + FIXED: stim_side "L"/"R" is
+### swapped relative to daq_specimen_side_index_left/right for dynamic files
+
+PI confirmed the design intent directly: **"phase = 0 means 'stim centered
+on this muscle's own peak stretch.'"** That pins down which extremum the
+Part 3 finding above should be checked against, and it does NOT match:
+
+- Direct extrema inspection (`2026-07-14_bass16_bender_01_dynamic.h5`, a
+  real L-burst at t=[2.734, 2.854]s): the imposed sinusoid's nearest
+  extrema are a PEAK(+4.47 deg) at t=2.751s (inside this L burst) and
+  TROUGHs(-4.47 deg) on either side at t=2.584s/2.918s. Given this file's
+  attrs (`lidx_pos_motor=-1`, `lidx_left=-1`, `lidx_right=+1`), positive
+  `angle.deg` = bending toward the `lidx_left`-side extreme -- so this
+  "L"-labeled burst is centered on the LIDX_LEFT SIDE's OWN PEAK
+  (shortest-length extreme for that side, i.e. the LIDX_RIGHT side's own
+  peak STRETCH), not the lidx_left side's peak stretch.
+- Confirmed quantitatively across all 3 specimens (mean `angle.deg` DURING
+  the literal stim pulse itself, first 20 post-baseline events/side/file,
+  same `lidx_pos_motor=-1/lidx_left=-1/lidx_right=+1` attrs every time):
+  "L" pulses fire at mean angle +2.07 to +2.40 deg; "R" pulses fire at
+  mean angle -1.79 to -2.07 deg -- consistently the OPPOSITE-side
+  extremum from what `stim_side=="L"`/`"R"`'s own name would suggest, on
+  every specimen checked (bass16, bass17, bass18).
+- Ruled out an R-loader decode bug first: `00_load_bender_flat.R`'s stim
+  handling (~line 90-105) reads the raw HDF5 `stim_side` STRING dataset
+  directly (`"left"`/`"right"`/`"both"`, DAQ-recorded per sample at
+  acquisition time) and maps it 1:1 to `"L"`/`"R"`/`"B"` -- no index
+  lookup, no ambiguity, faithful transcription. `daq_specimen_side_index_
+  left`/`_right` are a SEPARATE, independently-set metadata attribute (rig
+  wiring documentation), not derived from `stim_side` at all. The
+  mismatch is a genuine disagreement between these two independently-
+  sourced conventions, not a decoding bug -- the fix belongs exactly where
+  they get crossed (the `rec_lidx <- case_when(row_side == "L" ~
+  lidx_left, ...)` line), not upstream.
+
+**FIX APPLIED** (both `R/run_fv_fl_power_pipeline.R`'s
+`.attach_dynamic_muscle_force()` and `R/diag_dynamic_power_contraction_
+phase.R`'s `.classify_contraction()`): swapped to `row_side == "L" ~
+lidx_right, row_side == "R" ~ lidx_left`. Re-ran the contraction-phase
+classification diagnostic with the swap: `frac_concentric` jumped from
+~14% (backward) to a consistent ~86-87% across all 3 specimens; per-
+sample classified mean power flipped from artificially-negative-both-
+sides (-0.039 W both L and R) to POSITIVE and still L/R-consistent
+(+0.039 W both sides, no reintroduced asymmetry); per-cycle pooled
+classified mean power went from -0.052 W (6% of cycles positive) to
++0.052 W (94% of cycles positive); holds per-specimen (bass16 +0.022,
+bass17 +0.089, bass18 +0.088 W, all positive, all consistent order of
+magnitude). This is now a coherent, physically sensible result.
+
+**SCOPE of what changed vs. what did NOT (yet):** the swap fixes
+`td$muscle_force_Nm`'s sign attribution (the per-sample display/tension
+channel) for every dynamic trial -- any already-generated dynamic
+force-vs-time figure/plot depending on that channel's sign for L-vs-R
+attribution is now stale and needs regeneration. It does NOT by itself
+change any already-reported whole-cycle RAW power/work number
+(`summarize_muscle_cycles()`'s `avg_power.W`/`work.J`, which stays RAW
+per the 2026-07-24 fix and does not depend on `rec_lidx` at all) --
+`run_fv_fl_power_pipeline.R`'s production power/work path still reflects
+the raw-sign convention, still net-negative, UNTIL/UNLESS the
+contraction-phase classification itself (not just the L/R swap) is
+ported into `calc_muscle_torque()`/`summarize_muscle_cycles()` as its own
+separate, explicitly-approved change -- not done in this pass.
+
+**FOLLOW-UP FOUND, NOT FIXED HERE (flagging, not bundling):**
+`R/compare_specimen_specific_properties.R` has its OWN, THIRD duplicate
+of `.attach_dynamic_muscle_force()` (~line 81) that was missed by BOTH
+the 2026-07-24 L/R sign-consistency fix (still mutates
+`msc$muscle_torque.Nm` in place with `force_sign`, the bug fix #2 fixed
+in the other two copies) AND this swap (still `row_side=="L"~lidx_left`,
+unswapped). This script is a live caller (`summarize_muscle_cycles()` on
+its own dynamic-cycle loop, feeding its own comparison output), not dead
+code. Needs its own explicit, standalone fix-and-verify pass -- two
+bundled issues, deliberately not touched in this commit.
+
+Diagnostic outputs updated in place (same CSV filenames as above, now
+reflecting the swap).
