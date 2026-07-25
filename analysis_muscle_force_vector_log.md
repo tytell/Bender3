@@ -2635,3 +2635,119 @@ intermittently timed out on `write.csv()`/`ggsave()` during regeneration
 of `diag_sono_vs_geometric_dynamic_power.R`'s three CSVs in particular
 (transient sync issue, not a code defect) -- retried (removing one stale
 locked CSV) until each output's mtime confirmed a fresh write.
+
+### 2026-07-25 addendum -- L/R sign-consistency fix committed; contraction-phase
+### classification prototype built and tested; open question found, PI input needed
+
+**Part 1 -- committed the L/R sign-consistency fix from the prior session
+(uncommitted at handoff).** `run_fv_fl_power_pipeline.R` and
+`diag_precondition_power_check.R`'s `.attach_dynamic_muscle_force()` no
+longer mutate `msc$muscle_torque.Nm` in place with the `force_sign`
+side-correction -- that correction now applies only to
+`run_fv_fl_power_pipeline.R`'s `td$muscle_force_Nm` (the continuous
+display/tension channel); `msc$muscle_torque.Nm` (which feeds
+`summarize_muscle_cycles()`'s power/work integral) stays RAW, matching
+`pos.rad`'s RAW angular-velocity derivative. Committed standalone
+(commit `5f1b602`, `PC_Bender`) -- see this file's previous addendum for
+the full bug description and empirical verification; not repeated here.
+NOT yet re-run: full production pipeline / Coughlin comparison figure /
+other power-dependent figures -- see Part 3 below for why.
+
+**Part 2 -- prototyped the PI's phase/contraction-type classification.**
+Per the PI's methodological critique (previous addendum): raw-sign
+per-sample averaging over a window mixing eccentric preload, concentric
+shortening, and post-stim residual decay is not trustworthy at face
+value. Built `R/diag_dynamic_power_contraction_phase.R` (diagnostic
+only, not wired into any production figure), porting the STRUCTURAL
+approach from `~/Desktop/bender_projects/scupBender/2025-08-13_bender_
+functions.R::calculate_muscle_time()`: classify each sample's
+concentric/eccentric contraction type from the COMMANDED motion, then
+force `muscle_torque`/`power`/`work`'s SIGN from that classification
+(magnitude-fold + impose sign) instead of trusting the raw signed
+torque*velocity product's own sign.
+
+Adaptation detail (does not reuse scup's hardcoded phase-quarter lookup,
+which assumed a fixed nominal sinusoid shape with no real per-sample
+data): "sideward" is derived directly from `sign(dist.rad)` (`dist.rad` =
+sample-to-sample delta of `pos.rad`, and `pos.rad` comes from `angle.deg`,
+which `00_load_bender_flat.R` populates from the HDF5
+`angle_commanded_degree` dataset -- i.e. genuinely commanded, deterministic,
+not a noisy measured signal), crossed with the event-resolved recruited
+side (`msc$stim`, "L"/"R"). The concentric/eccentric decision rule reuses
+the EXACT SAME rig-geometry convention already audited for isometric/
+isovelocity (`resolve_step_contraction()`, `muscle_geometry.R`): `bend_lidx
+= sign(bend direction) * lidx_pos_motor`; `rec_lidx` = `lidx_left`/
+`lidx_right` for the recruited side; concentric when `bend_lidx ==
+rec_lidx`. No new geometry constant invented. Because classification
+depends on commanded direction + resolved side rather than whether stim
+is literally "on" right now, post-stim relaxation-tail samples get
+classified the same way as the rest of that directional half-cycle --
+this naturally covers the PI's "continues producing force as it shortens
+even after the stimulus is removed" case with no separate windowing rule.
+
+**Part 3 -- empirical result: an OPEN QUESTION, not a clean resolution.**
+Ran the classification against all 3 specimens' dynamic trials (305
+active cycles, ~136k samples). Result was the OPPOSITE of what a "this
+resolves the sign ambiguity toward net-positive power" hypothesis would
+predict:
+
+- Pooled per-sample `%concentric` (this side's own commanded-velocity
+  direction matching its own shortening direction) was only ~10% (L) /
+  ~18% (R) of ALL samples in the recruited-side window (both the literal
+  stim-pulse portion AND the relaxation tail) -- i.e. classification says
+  most of BOTH sides' windows are eccentric, not concentric.
+- Critically, this was **not** a dilution artifact of the long relaxation
+  tail: restricting to ONLY the literal sparse stim-pulse samples
+  themselves (`stim_literal == stim`, n=4245 L / 3689 R) gave the SAME
+  pattern (~17% concentric for L, ~12% for R) -- properly isolating "this
+  side's own window, sub-phased" as the PI's critique specifically asked
+  for (rather than "literal pulse vs. everything else," which the PI
+  flagged as the flaw in the prior session's dilution test).
+- Directly inspected one real L-stim burst against the raw commanded
+  `angle.deg` trace (`2026-07-14_bass16_bender_01_dynamic.h5`, event at
+  t=[2.734, 2.854]s): the burst straddles the imposed sinusoid's PEAK
+  (angle.deg rising through +4.27 -> +4.47 at t=2.749s, then falling
+  through +4.02 -> +1.59 -> -1.70 by t=2.854s) -- i.e. only the first
+  ~15 ms of this ~120 ms burst occurs while angle is still rising toward
+  its own peak; the remaining ~105 ms occurs while angle is already
+  falling away from that peak. Given `lidx_pos_motor = -1`, `lidx_left =
+  -1`, `lidx_right = +1` (this file's attrs), positive `angle.deg` =
+  bending toward the LEFT (`sign(+1)*lidx_pos_motor = -1 = lidx_left`) --
+  so by the established convention, the LEFT muscle's own concentric
+  window is the RISING-toward-positive-peak portion, and this burst
+  spends ~90% of its own duration PAST that peak, already in the
+  falling/eccentric portion. This is a reproducible, geometrically exact
+  read of the data, not noise -- classification is doing exactly what it
+  was asked to do.
+- This corpus provides NO leverage to check whether that geometric fact
+  reflects a genuine (if unexpected) protocol design choice or a
+  convention/labeling mismatch specific to dynamic trials: EVERY dynamic
+  trial across all 3 specimens uses the identical fixed `phase = -0.05`,
+  `duty = 0.4` (confirmed via `table(round(phase,3))`/`table(round(duty,3))`
+  on the diagnostic's per-cycle CSV -- zero variation to correlate
+  against). `freq.Hz` does vary (1/2/3 Hz, matching the specimen's
+  frequency_sweep-style trial design) but that alone can't distinguish
+  "burst timed mostly during eccentric by design" from "a sign/labeling
+  issue specific to dynamic trials."
+
+**OPEN QUESTION handed to the PI (not resolved in this session):** is a
+work-loop burst landing mostly PAST this muscle's own shortening peak
+(i.e. mostly during re-stretch/eccentric by the audited geometry
+convention) the EXPECTED relationship for this rig's `phase=-0.05`
+convention (e.g. if `phase` is defined relative to the OVERALL cycle's
+zero-crossing rather than to the recruited muscle's own extremum, a
+small near-zero phase value could legitimately land the burst mostly
+past that muscle's peak) -- or does it indicate the `stim` "L"/"R"
+column's real-world side assignment is swapped relative to
+`daq_specimen_side_index_left`/`_right` specifically for `single_finite`
+(dynamic) files (unlike segmented_finite steps, where `recruitment`
+strings like `"left_unilateral"` are used instead and are already
+independently audited)? Do NOT resolve this by guessing/flipping a sign
+without the PI's confirmation -- per `.cursorrules` debugging protocol,
+flagged and handed back rather than silently "fixed." No change made to
+`03_analyze.R` / `run_fv_fl_power_pipeline.R` production code pending
+this.
+
+Diagnostic outputs (not production figures): `data_processed/diag_
+dynamic_power_contraction_phase_{percycle,persample,check1_bysample,
+check2_percycle,check3_pulseVsTail}.csv`.
