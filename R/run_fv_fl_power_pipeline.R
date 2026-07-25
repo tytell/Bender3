@@ -122,13 +122,44 @@ DEACTIVATION_WINDOW_S <- 0.5
 #' this recovers exact per-sample alignment without inventing new logic).
 #'
 #' Applies the SAME side-correction as resolve_step_contraction()
-#' (muscle_geometry.R) -- force_sign = rec_lidx * lidx_pos_motor -- BEFORE
-#' returning msc, so both the continuous td$muscle_force_Nm AND
-#' summarize_muscle_cycles() (called on this same msc downstream) see
-#' side-corrected values. Without this, dynamic muscle_force_Nm follows raw
+#' (muscle_geometry.R) -- force_sign = rec_lidx * lidx_pos_motor -- to
+#' td$muscle_force_Nm ONLY (the continuous TENSION/display channel, where
+#' "positive" should mean "this muscle producing force," independent of
+#' which side is active). Without this, dynamic muscle_force_Nm follows raw
 #' lab-frame torque, which flips sign with bend direction regardless of
 #' which muscle was actually recruited -- exactly the mirroring bug already
 #' fixed for isometric/isovelocity (see resolve_step_contraction() docstring).
+#'
+#' FIXED 2026-07-24 (PI-directed, whole-cycle power/work audit -- "left and
+#' right muscle will be producing positive power in opposite [torque]
+#' signs ... double check that you did it that way"): the RETURNED `msc`
+#' (which feeds summarize_muscle_cycles()'s POWER/WORK integral, torque x
+#' angular velocity) now keeps calc_muscle_torque()'s RAW (uncorrected)
+#' muscle_torque.Nm -- the force_sign side-correction above is applied only
+#' when writing td$muscle_force_Nm, never to the msc column power/work is
+#' computed from. Power = torque x angular velocity is sign-invariant under
+#' ANY consistent relabeling of the bending axis (multiplying torque alone
+#' by +-1 without also flipping the velocity it is multiplied against
+#' breaks that invariance). The PREVIOUS version applied force_sign to
+#' msc$muscle_torque.Nm in place, then handed that already side-corrected
+#' torque to summarize_muscle_cycles(), which multiplies it by pos.rad's
+#' RAW (never side-corrected) angular-velocity derivative -- correcting one
+#' factor of the torque*velocity product but not the other. Verified
+#' empirically (all 3 specimens, pooled dynamic active samples,
+#' /tmp/check_power_sign*.R): with the side-correction applied to torque
+#' only, mean per-sample power came out POSITIVE for R-driven cycles and
+#' NEGATIVE for L-driven cycles (a clean artifact of force_sign's own +-1
+#' pattern, not of real muscle mechanics) -- exactly the "opposite signs
+#' between L and R" the PI flagged. With BOTH factors left in the raw,
+#' mutually consistent lab-frame convention (this fix), that artificial
+#' L-vs-R asymmetry disappears; instantaneous power is CONSISTENTLY
+#' negative-leaning on both sides instead (median still well below zero --
+#' see the log for the residual, deeper caveat: this may reflect real
+#' excitation-contraction coupling delay + a relaxation window much longer
+#' than the active burst, diluting/reversing the correlation between the
+#' measured torque and the commanded motion's instantaneous direction, not
+#' a further sign-convention bug -- flagged for follow-up, not resolved
+#' here).
 #'
 #' rec_lidx is resolved from EVENT-level burst side (.detect_stim_events(),
 #' also used by build_dynamic_force_timeseries()), NOT the row's own
@@ -181,11 +212,15 @@ DEACTIVATION_WINDOW_S <- 0.5
     force_sign <- rec_lidx * lidx_pos_motor
     if (all(!is.finite(force_sign))) {
       cli::cli_warn("Dynamic force_sign side-correction unavailable (missing rig-geometry attrs or no stim events detected) -- muscle_force_Nm left in RAW lab-frame sign convention")
+      td$muscle_force_Nm[msc$.row_id] <- msc$muscle_torque.Nm
     } else {
-      msc$muscle_torque.Nm <- force_sign[msc$.row_id] * msc$muscle_torque.Nm
-      msc$stim <- row_side[msc$.row_id]  # event-resolved side, for downstream (summarize_muscle_cycles groups by `stim`)
+      # Side-corrected DISPLAY/TENSION channel only -- msc$muscle_torque.Nm
+      # itself stays RAW so the power/work integral below multiplies torque
+      # and angular velocity on the SAME (uncorrected) axis convention. See
+      # the FIXED 2026-07-24 docstring note above.
+      td$muscle_force_Nm[msc$.row_id] <- force_sign[msc$.row_id] * msc$muscle_torque.Nm
     }
-    td$muscle_force_Nm[msc$.row_id] <- msc$muscle_torque.Nm
+    msc$stim <- row_side[msc$.row_id]  # event-resolved side, for downstream (summarize_muscle_cycles groups by `stim`)
   }
   # msc (the return value below) stays restricted to active cycles
   # (cycletype == "act") -- summarize_muscle_cycles()'s per-cycle work/power

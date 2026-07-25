@@ -127,6 +127,21 @@ cli::cli_h1("Part B: per-cycle muscle power output, all dynamic trials bass16/17
 #' left-window row and a right-window row (see that function's docstring) --
 #' each row below is one whole active cycle, both muscles' contribution
 #' included.
+#'
+#' FIXED 2026-07-24 (PI-directed, same day, same audit -- "left and right
+#' muscle will be producing positive power in opposite [torque] signs ...
+#' double check that you did it that way"): this diagnostic (no display
+#' channel, unlike run_fv_fl_power_pipeline.R's copy of this function) used
+#' to apply the muscle_geometry.R side-correction (force_sign = rec_lidx *
+#' lidx_pos_motor) to msc$muscle_torque.Nm in place BEFORE handing it to
+#' summarize_muscle_cycles(), which multiplies torque by pos.rad's angular-
+#' velocity derivative -- RAW, never side-corrected. Correcting torque's
+#' sign but not velocity's breaks power's sign-invariance under axis
+#' relabeling and flips power's sign oppositely between L- and R-driven
+#' cycles (verified empirically, all 3 specimens -- see
+#' analysis_muscle_force_vector_log.md). REMOVED: msc$muscle_torque.Nm now
+#' stays RAW (as calc_muscle_torque() returns it), matching the RAW
+#' pos.rad used downstream.
 .attach_dynamic_muscle_force <- function(td, torque_col, lidx_pos_motor, lidx_left, lidx_right,
                                           relaxation_s = RELAXATION_WINDOW_S) {
   td$.row_id <- seq_len(nrow(td))
@@ -146,12 +161,7 @@ cli::cli_h1("Part B: per-cycle muscle power output, all dynamic trials bass16/17
       row_side[in_win] <- e$muscle_side
     }
   }
-  rec_lidx <- dplyr::case_when(row_side == "L" ~ lidx_left, row_side == "R" ~ lidx_right, .default = NA_real_)
-  force_sign <- rec_lidx * lidx_pos_motor
-  if (!all(!is.finite(force_sign))) {
-    msc$muscle_torque.Nm <- force_sign[msc$.row_id] * msc$muscle_torque.Nm
-    msc$stim <- row_side[msc$.row_id]
-  }
+  msc$stim <- row_side[msc$.row_id]  # event-resolved side, QA/sides_present only -- torque itself left RAW, see FIXED note above
   if ("cycletype" %in% names(msc)) msc <- dplyr::filter(msc, .data$cycletype == "act")
   msc
 }
