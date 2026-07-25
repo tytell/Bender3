@@ -187,13 +187,21 @@ DEACTIVATION_WINDOW_S <- 0.5
     }
     td$muscle_force_Nm[msc$.row_id] <- msc$muscle_torque.Nm
   }
-  # msc (the return value below) stays restricted to DESIGNED-active cycles
-  # (cycletype == "act"), same scope as before this fix -- summarize_muscle_cycles()'s
-  # per-cycle work/power table is a property of one designed activation, not
-  # of the relaxation tail. Only td$muscle_force_Nm (the continuous per-sample
-  # column, above) benefits from the full phase_match_all_rows = TRUE scope,
-  # since that is what feeds the compound-plot and force_vs_time relaxation
-  # display.
+  # msc (the return value below) stays restricted to active cycles
+  # (cycletype == "act") -- summarize_muscle_cycles()'s per-cycle work/power
+  # table is a property of one real activation, not of the relaxation tail.
+  # cycletype == "act" is now OBSERVED-stim-based (03_analyze.R
+  # set_cycle_types() fix, 2026-07-24), not the is_active_by_cycle DESIGN
+  # flag it used before -- that flag is attached via cycle_index, a
+  # different, unsynchronized cycle counter from `cycle`, and mislabelled
+  # the active window (~5 cycles / ~1.7s off) on every dynamic trial
+  # audited. summarize_muscle_cycles() also no longer splits one physical
+  # cycle into a left-window row and a right-window row -- each row is one
+  # whole active cycle, both muscles' contribution included (fixes the
+  # "right-stim cycles only" undercount, PI-directed 2026-07-24). Only
+  # td$muscle_force_Nm (the continuous per-sample column, above) benefits
+  # from the full phase_match_all_rows = TRUE scope, since that is what
+  # feeds the compound-plot and force_vs_time relaxation display.
   msc_active <- if (!is.null(msc) && "cycletype" %in% names(msc)) dplyr::filter(msc, .data$cycletype == "act") else msc
   list(td = td, msc = msc_active)
 }

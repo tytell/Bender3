@@ -31,23 +31,27 @@ library(rlang)
 # =============================================================================
 
 #' Label bending cycles and half-cycles for muscle analysis.
+#'
+#' Cycle-level act/pass is determined from OBSERVED stim (does `stim != "0"`
+#' occur ANYWHERE within this physical `cycle`, i.e. `floor(t.norm)`), never
+#' from the `is_active_by_cycle` design flag, even when that column is
+#' present. FIXED 2026-07-24 (PI-directed dynamic-power audit): `cycle`
+#' (`00_load_bender_flat.R`'s `floor(t.norm)`) and `cycle_index` (the raw
+#' HDF5 `/metadata/index_cycle_*` design-table index that `is_active_by_cycle`
+#' is actually attached against) are TWO INDEPENDENT counters with no shared
+#' time origin -- collapsing is_active_by_cycle to a per-`cycle` label via
+#' `first()` silently mislabelled the active window by ~5 cycles (~1.7 s) on
+#' EVERY active dynamic trial audited across bass16/17/18 (real stim
+#' delivery ran ~1.7 s LATER and ~1.7 s LONGER than the design flag claimed,
+#' every time -- not a one-off). Observed stim is authoritative regardless
+#' of any such design/delivery timing offset. See
+#' analysis_muscle_force_vector_log.md, "dynamic-cycle act/pass
+#' cycle/cycle_index misalignment" for the audit.
 set_cycle_types <- function(df) {
-  if ("is_active_by_cycle" %in% names(df)) {
-    df1 <- df |>
-      dplyr::group_by(dplyr::across(dplyr::any_of(c("fishcode", "trial", "cycle")))) |>
-      dplyr::mutate(
-        cycletype = dplyr::if_else(
-          dplyr::first(.data$is_active_by_cycle %in% TRUE),
-          "act", "pass"
-        )
-      ) |>
-      dplyr::ungroup()
-  } else {
-    df1 <- df |>
-      dplyr::group_by(dplyr::across(dplyr::any_of(c("fishcode", "trial", "cycle")))) |>
-      dplyr::mutate(cycletype = dplyr::if_else(any(.data$stim != "0"), "act", "pass")) |>
-      dplyr::ungroup()
-  }
+  df1 <- df |>
+    dplyr::group_by(dplyr::across(dplyr::any_of(c("fishcode", "trial", "cycle")))) |>
+    dplyr::mutate(cycletype = dplyr::if_else(any(.data$stim != "0"), "act", "pass")) |>
+    dplyr::ungroup()
 
   halfcycdata <- df1 |>
     dplyr::group_by(dplyr::across(dplyr::any_of(c("fishcode", "trial", "halfcycle")))) |>
@@ -580,6 +584,21 @@ add_muscle_instantaneous <- function(muscletorque, mass_col = "muscle_mass.kg") 
 }
 
 #' Per-cycle muscle work (trapz) and mean power.
+#'
+#' ONE ROW PER PHYSICAL CYCLE (FIXED 2026-07-24, PI-directed: "it is NOT
+#' accurate to quantify cycle power/work for only the duration of the right
+#' stimulus ... you have to take the average difference over the full range
+#' of active cycles, which includes the left-right pairs working together").
+#' Previously grouped by `cycle` AND `stim` together, which SPLIT every
+#' physical bending cycle into up to 2 fragments (an L-window row and an
+#' R-window row), each integrated over only that side's own
+#' `[stim_onset, stim_offset + relaxation_s]` slice -- never the whole
+#' stroke both muscles drive together. `stim` is no longer a grouping key;
+#' work/power now integrate over every non-NA sample of the whole cycle
+#' (both the L- and R-attributed portions, phase-matched act-minus-passive
+#' torque from calc_muscle_torque()). `sides_present` replaces the old
+#' single-valued `stim` output column so which side(s) actually contributed
+#' to a given cycle stays visible for QA.
 summarize_muscle_cycles <- function(muscletorque, cycles_keep = NULL,
                                     mass_normalize = TRUE, mass_col = "muscle_mass.kg") {
   df <- muscletorque
@@ -590,7 +609,7 @@ summarize_muscle_cycles <- function(muscletorque, cycles_keep = NULL,
     dplyr::filter(!is.na(.data$muscle_torque.Nm), !is.na(.data$pos.rad)) |>
     dplyr::group_by(dplyr::across(dplyr::any_of(c(
       "filename", "fishcode", "trial", "cycle", "duty", "phase",
-      "freq.Hz", "curvature.invm", "stim"
+      "freq.Hz", "curvature.invm"
     )))) |>
     dplyr::summarise(
       work.J         = calc_work(.data$pos.rad, .data$muscle_torque.Nm),
@@ -598,6 +617,9 @@ summarize_muscle_cycles <- function(muscletorque, cycles_keep = NULL,
       peak_power.W   = max(abs(.data$insta_power.W), na.rm = TRUE),
       peak_torque.Nm = max(abs(.data$muscle_torque.Nm), na.rm = TRUE),
       muscle_mass.kg = if (mass_col %in% names(df)) dplyr::first(.data[[mass_col]]) else NA_real_,
+      sides_present  = if ("stim" %in% names(df))
+        paste(sort(unique(stats::na.omit(as.character(.data$stim)))), collapse = "+")
+        else NA_character_,
       .groups        = "drop"
     ) |>
     dplyr::mutate(

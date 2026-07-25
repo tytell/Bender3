@@ -331,6 +331,33 @@ load_bender_flat <- function(
     }
   }
 
+  # Fill freq/amp/duty/phase/curvature BEYOND cycle_index's own coverage
+  # (FIXED 2026-07-24, PI-directed dynamic-power audit): real recordings run
+  # well past the design table's last indexed cycle on every dynamic trial
+  # checked (bass16/17/18) -- e.g. index_cycle_* covers only t<=3.33s while
+  # real stim delivery/recording continues to ~5-9s. Without this, rows past
+  # that coverage carry NA freq.Hz/curvature.invm/duty/phase, which breaks
+  # calc_muscle_torque()'s phase-matched act/pass join for those samples
+  # (NA join keys never match) even after they are correctly identified as
+  # active cycles. Only safe to fill when the WHOLE design table already
+  # agrees on a single constant value (single_condition trials, the common
+  # case) -- genuine multi-condition combo trials (frequency/amplitude
+  # varies per cycle in the table) are left NA past their own coverage
+  # rather than guessing which condition continued to apply.
+  .fill_if_constant <- function(col_vec, design_vals) {
+    uniq <- unique(design_vals[is.finite(design_vals)])
+    if (length(uniq) == 1L) {
+      missing <- is.na(col_vec) & !is.na(td$t.s) & td$t.s > 0
+      col_vec[missing] <- uniq
+    }
+    col_vec
+  }
+  td$freq.Hz        <- .fill_if_constant(td$freq.Hz, freq_cyc)
+  if (!is.null(amp_cyc))   td$amp.deg <- .fill_if_constant(td$amp.deg, amp_cyc)
+  if (!is.null(duty_cyc))  td$duty    <- .fill_if_constant(td$duty, duty_cyc)
+  if (!is.null(phase_cyc)) td$phase   <- .fill_if_constant(td$phase, phase_cyc)
+  td$curvature.invm <- .fill_if_constant(td$curvature.invm, curv_cyc)
+
   # blank design cols outside the bending window
   outside <- !is.na(td$t.s) & td$t.s <= 0
   td$freq.Hz[outside] <- NA_real_; td$amp.deg[outside] <- NA_real_

@@ -248,7 +248,17 @@ cli::cli_alert_info("activation/relaxation available for n={sum(is.finite(times$
 
 # ---- build + save one full kinetics figure from a traces/times subset ----
 build_kinetics_fig <- function(traces_in, times_in, fout, top_source_note) {
-  grid <- seq(-PAD_S, 1.2, by = 0.005)
+  # Top-panel x-axis upper bound is DATA-DRIVEN (PI direction, 2026-07-24:
+  # "fix the x-axis limits ... so the traces span the full width, remove
+  # the empty white spaced") -- was a fixed 1.2 s regardless of how far this
+  # subset's traces actually extend. Bookend twitches decay by ~0.4-0.6 s
+  # (BOOKEND_RELAX_S = 0.35 s tail), so the fixed 1.2 s bound left the right
+  # half of isometric_L0_activation_kinetics_bookendsOnly.png blank; the
+  # full-sources figure's longer isometric/isovelocity holds still reach
+  # close to 1.2 s, so this is a no-op there. Small pad (0.05 s) so the
+  # rightmost trace sample isn't clipped at the panel edge.
+  top_xlim_hi <- min(1.2, max(traces_in$t_rel, na.rm = TRUE) + 0.05)
+  grid <- seq(-PAD_S, top_xlim_hi, by = 0.005)
   mean_trend <- purrr::map_dfr(split(traces_in, traces_in$specimen), function(df) {
     units_here <- dplyr::n_distinct(df$unit_id)
     m <- purrr::map(split(df, df$unit_id), function(u)
@@ -267,7 +277,7 @@ build_kinetics_fig <- function(traces_in, times_in, fout, top_source_note) {
               alpha = 0.20, linewidth = 0.3) +
     geom_line(data = mean_trend, aes(x = t_rel, y = force_norm, color = specimen), linewidth = 1.4) +
     scale_color_manual(values = SPECIMEN_COLORS, name = "individual") +
-    coord_cartesian(xlim = c(-PAD_S, 1.2), ylim = c(-0.15, 1.1)) +
+    coord_cartesian(xlim = c(-PAD_S, top_xlim_hi), ylim = c(-0.15, 1.1)) +
     labs(title = "A. Isometric near-zero (L0) contractions: normalised force vs. time",
          subtitle = sprintf("Peak-normalised, baseline-subtracted, sign-folded. Thin = individual contractions (%s); thick = per-specimen mean (>=50%% support). n=%d contractions.", top_source_note, dplyr::n_distinct(traces_in$unit_id)),
          x = "Time relative to stim onset (s)", y = "Normalised force (F / peak)") +

@@ -566,8 +566,10 @@ the point-selection design this feeds:
   power_vs_offset.R` (dynamic, `dynamic_precondition_{mean,max}power_
   vs_offset.png` + 2 by-specimen facet versions) -- power DIRECTLY
   correlated against offset (not just both against trial order): pooled
-  r=0.73 (mean)/0.63 (max), n=30, holds WITHIN every specimen individually
-  (r=0.55-0.98), i.e. not a between-fish confound. `diag_precondition_
+  r=0.805 (mean)/0.655 (max), n=30 (UPDATED 2026-07-24, whole-cycle dynamic
+  power/work fix -- see addendum below; was r=0.73/0.63 pre-fix, same n,
+  conclusion unchanged), holds WITHIN every specimen individually
+  (r=0.74-0.95), i.e. not a between-fish confound. `diag_precondition_
   power_vs_offset_isovelocity.R` (`isovelocity_{mean,max}power_
   vs_offset.png`) -- independent confirmation in a 2nd protocol, per-step
   torque x angular-velocity power (same conversion muscle_geometry.R
@@ -619,23 +621,35 @@ the point-selection design this feeds:
   continuous series -- "condition the sono signal" per PI direction,
   2026-07-24, using the best-justified candidate from `diag_sono_
   smoothing.R`'s earlier comparison -- THEN decimated to the true
-  ~241-247 Hz DS3 rate before differentiating), RIGHT-STIM cycles only, ALL
-  trials (early + later, no exclusion applied here). RESULT: the early-trial
-  power "inflation" (geometric median 38.3 W/kg early vs. 0.22 W/kg later,
-  ~170x) nearly VANISHES under the sono method (-2.49 vs. -0.02 W/kg) --
-  strong evidence the inflation is a geometric-model artifact, not real
-  muscle output; unchanged by the filtering follow-up. The 40 Hz filter DID
-  fix the peak-power noise flagged in the first pass (bass17 trial 4:
+  ~241-247 Hz DS3 rate before differentiating), RIGHT-STIM cycles only
+  (deliberate scope for THIS diagnostic, unrelated to the whole-cycle fix
+  below: sono only instruments the right muscle, so left-stim cycles have
+  no independent length measurement to validate against -- see the
+  "right-stim only" note in the module header), ALL trials (early + later,
+  no exclusion applied here). RESULT: the early-trial power "inflation"
+  (geometric median 23.7 W/kg early vs. 0.35 W/kg later, ~67x) nearly
+  VANISHES under the sono method (-3.73 vs. -0.11 W/kg) -- strong evidence
+  the inflation is a geometric-model artifact, not real muscle output;
+  unchanged by the filtering follow-up. The 40 Hz filter DID fix the
+  peak-power noise flagged in the first pass (bass17 trial 4:
   sono max_peak 1,059 -> 151.8 W/kg, now comparable to geometric's 167 W/kg;
-  per-cycle peak-power r rises to 0.965 in later trials). REMAINING CAVEAT:
+  per-cycle peak-power r rises to 0.966 in later trials). REMAINING CAVEAT:
   per-cycle AVG-power agreement between the two methods stays weak-to-
-  negative even in later trials (r=-0.27 early, r=-0.68 later) -- filtering
+  negative even in later trials (r=-0.36 early, r=-0.87 later) -- filtering
   fixed peak-power noise but not cycle-by-cycle mean-power tracking; both
   methods independently sit near a shared near-zero floor in later trials.
   The boxplot (`_power_boxplot.png`, 2x2: mean/peak rows x geometric/sono
-  columns, n=34 early / 89 later cycles) visualizes the trial-median table
+  columns, n=112 early / 186 later cycles) visualizes the trial-median table
   directly -- still a first-pass comparison, not a finished replacement
-  pipeline. UPDATE 2026-07-24 (PI: "some early trials have much higher cycle
+  pipeline. UPDATED 2026-07-24 (whole-cycle dynamic power/work fix, see
+  addendum below): sample counts and medians above are POST-fix
+  (`set_cycle_types()`'s observed-stim cycle classification + the
+  `00_load_bender_flat.R` design-table fill-forward together roughly
+  TRIPLED the eligible right-stim cycle count per trial vs. the pre-fix
+  version of this figure, mostly by recovering cycles/samples past the
+  design table's own indexed coverage that were previously dropped as NA --
+  the qualitative conclusion, geometric inflation vanishes under sono, is
+  UNCHANGED, only the magnitudes/n shifted). UPDATE 2026-07-24 (PI: "some early trials have much higher cycle
   power, much closer to Coughlin -- look into that"): added a red Coughlin
   (2000) bass power reference LINE (14.4 W/kg, derived -- see
   `summary_coughlin2000_bass_comparison.R`) to all 4 facets. SUPERSEDED
@@ -871,7 +885,16 @@ the point-selection design this feeds:
   (drops the isometric-protocol steps + isovelocity V=0 tetani). Same two
   reference bands (C&C red slow + white/fast). The traces are now all ~54 ms
   twitches ending near 0.4 s, and the boxplots are on a matched (compressed)
-  y-scale instead of being squashed by the long tetani tails.
+  y-scale instead of being squashed by the long tetani tails. FIXED
+  2026-07-24 (PI: "fix the x-axis limits of the top panel so the traces
+  span the full width, remove the empty white space"): panel A's x-axis
+  upper limit is now DYNAMIC (`top_xlim_hi = min(1.2, max(t_rel of the
+  traces actually plotted) + 0.05)`) instead of a fixed 1.2 s bound sized
+  for the longer full-sources figure above -- the bookends-only traces end
+  near 0.4 s, so this panel now stops there instead of leaving ~0.8 s of
+  blank space on the right. `isometric_L0_activation_kinetics.png` (the
+  full-sources figure) is unaffected: its longer isometric/isovelocity
+  holds already reach close to 1.2 s, so the dynamic bound is a no-op there.
   `isometric_L0_activation_earlyVsLater.png` (BUILT 2026-07-24,
   `R/summary_activation_early_vs_later.R`) -- PI request: compare L0 activation
   (and relaxation) time between EARLY (preconditioning) and LATER (stable)
@@ -943,9 +966,12 @@ the point-selection design this feeds:
   plus their median durations. Panels B/C/D: boxplots (+ points) of,
   respectively, isometric specific tension (trial-max, N/cm^2 -> kN/m^2),
   dynamic mean cycle power (W/kg) and dynamic mean work per cycle (J/kg) --
-  LATER (stable) trials only, dynamic power/work restricted to right-stim
-  cycles (this repo's "active" convention) -- each with a red Coughlin
-  (2000) reference. UPDATE 2026-07-24 (PI: "My bender data was simulating
+  LATER (stable) trials only, dynamic power/work integrated over the WHOLE
+  active cycle (both left+right muscle pairs working together, FIXED
+  2026-07-24 -- see the "whole-cycle dynamic power/work fix" addendum
+  below), NOT right-stim-window-only as an earlier version of this figure
+  did -- each with a red Coughlin (2000) reference. UPDATE 2026-07-24 (PI:
+  "My bender data was simulating
   swimming at 3 Hz (2 BL/s) at ~50% longitudinal position. The shaded area
   should be around 2.4 J/kg and 7 W/kg and isometric tension around
   180 kN/m^2 based on the Coughlin graphs"): work/power/tension reference
@@ -970,16 +996,32 @@ the point-selection design this feeds:
   because our tension uses a GEOMETRIC whole-body-oval-derived CSA
   reference (`MEASURED_RED_MUSCLE_CSA_CM2`, see addendum below) rather than
   Coughlin's HISTOLOGICAL live-fiber-area measurement on an isolated
-  single-myotome bundle. Dynamic mean cycle power (n=16: median 1.16 W/kg,
-  max 2.53) and mean work per cycle (n=16: median 0.18 J/kg, max 1.31) now
-  ALSO sit clearly BELOW the corrected (much lower) 7.2 W/kg / 2.4 J/kg
+  single-myotome bundle. Dynamic mean cycle power and mean work per cycle
+  now ALSO sit clearly BELOW the corrected (much lower) 7.2 W/kg / 2.4 J/kg
   reference lines for every trial -- UNLIKE the pre-2026-07-24 comparison
   against the mismatched fastest-speed reference, where some trials looked
   "close to or above" the (much higher, 14.4/3.56) benchmark. All three
   metrics now show the SAME consistent below-Coughlin pattern once compared
   at the correct condition -- do not cite the old "power/work land close to
   Coughlin" language, it was an artifact of the wrong reference speed, not
-  a real result. No bath/room temperature is logged anywhere in this rig's
+  a real result. UPDATED AGAIN 2026-07-24 (SAME day, whole-cycle fix -- PI:
+  "it is NOT accurate to quantify cycle power/work for only the duration of
+  the right stimulus ... you have to take the average difference over the
+  full range of active cycles, which includes the left-right pairs working
+  together"): power/work now integrate the WHOLE active cycle (both muscles'
+  contribution, `03_analyze.R::summarize_muscle_cycles()` no longer splits
+  a cycle into an L-window row and an R-window row) instead of only the
+  right-stim-window slice the numbers above were computed from. New medians
+  (n=16 later/stable trials, unchanged trial set): mean cycle power
+  -0.28 W/kg (mean -0.51, range -2.90 to +0.54) and mean work per cycle
+  -0.10 J/kg (mean -0.21, range -1.11 to +0.20) -- both METRICS FLIP from
+  small-positive to near-zero/slightly-NEGATIVE, still far below the
+  7.2 W/kg / 2.4 J/kg reference, and the conclusion (well below Coughlin)
+  is unchanged and if anything strengthened. Isometric tension (panel B) is
+  UNAFFECTED by this fix (isometric was never split by stim/cycle). Do not
+  cite the pre-fix "median 1.16 W/kg / 0.18 J/kg" numbers, they undercounted
+  real muscle mechanics by only integrating the right-stim slice of each
+  cycle. No bath/room temperature is logged anywhere in this rig's
   HDF5 metadata; assumed ambient ~20-22 C (uncontrolled) vs. Coughlin's
   controlled 20 C bath. Comparison data in
   `data_processed/coughlin2000_bass_comparison_data.csv`.

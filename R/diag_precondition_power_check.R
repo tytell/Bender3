@@ -119,6 +119,14 @@ cli::cli_h1("Part B: per-cycle muscle power output, all dynamic trials bass16/17
        lidx_right     = dbl1(m_attrs[["daq_specimen_side_index_right"]]))
 }
 
+#' cycletype == "act" filtering below is now OBSERVED-stim-based (03_analyze.R
+#' set_cycle_types() fix, 2026-07-24) -- previously relied on a design flag
+#' (is_active_by_cycle) that used a different, unsynchronized cycle counter
+#' and mislabelled the active window on every dynamic trial. summarize_
+#' muscle_cycles() also no longer splits one physical cycle into a
+#' left-window row and a right-window row (see that function's docstring) --
+#' each row below is one whole active cycle, both muscles' contribution
+#' included.
 .attach_dynamic_muscle_force <- function(td, torque_col, lidx_pos_motor, lidx_left, lidx_right,
                                           relaxation_s = RELAXATION_WINDOW_S) {
   td$.row_id <- seq_len(nrow(td))

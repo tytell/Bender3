@@ -2538,3 +2538,100 @@ All four regenerated figures verified visually before commit; OneDrive
 intermittently timed out on `ggsave()`/`write.csv()` during regeneration
 (transient sync issue, not a code defect) -- retried until each output's
 mtime confirmed a fresh write.
+
+### 2026-07-24 addendum -- whole-cycle dynamic power/work fix (right-stim-window undercount)
+
+PI caveat: "I am concerned by 'dynamic power (right-stim cycles only)'
+because it is NOT accurate to quantify cycle power (or work for that
+matter) for only the duration of the right stimulus. Muscle forces exist
+before and after the application of the stimulus under active dynamic
+oscillations. Instead you have to take the average difference over the
+full range of active cycles (5 cycles per trial), which includes the
+left-right pairs working together."
+
+ROOT CAUSE (two compounding bugs, both fixed together): (1)
+`03_analyze.R::set_cycle_types()` previously labelled a physical `cycle`
+(from `00_load_bender_flat.R`'s `floor(t.norm)`) active/passive using the
+HDF5 `is_active_by_cycle` DESIGN flag, which is attached against a
+DIFFERENT counter (`cycle_index`, the raw `/metadata/index_cycle_*`
+table index) with no shared time origin against `cycle`. Auditing
+bass16/17/18 dynamic trials showed real stim delivery ran ~1.7 s LATER
+and ~1.7 s LONGER than the design flag claimed, EVERY time -- not a
+one-off -- silently mislabelling the active window by ~5 cycles on every
+dynamic trial. Fixed to classify `cycletype` from OBSERVED stim (does
+`stim != "0"` occur ANYWHERE within the physical `cycle`), never the
+design flag. (2) `03_analyze.R::summarize_muscle_cycles()` previously
+grouped by `cycle` AND `stim` together, which SPLIT every physical
+bending cycle into up to 2 fragments (an L-window row and an R-window
+row), each integrated over only that side's own
+`[stim_onset, stim_offset + relaxation_s]` slice -- never the whole
+stroke both muscles drive together, exactly the undercount the PI
+flagged. `stim` removed from the grouping key; work/power now integrate
+every non-NA sample of the whole cycle (both L- and R-attributed
+portions); a new `sides_present` column (replacing the old single-valued
+`stim` output column) keeps which side(s) actually contributed to a given
+cycle visible for QA. A related gap in `00_load_bender_flat.R`'s
+`.bfl_attach_cycle_design()` was fixed in the same pass: real recordings
+run well past the design table's last indexed cycle on every dynamic
+trial checked (e.g. `index_cycle_*` covers only t<=3.33s while real
+stim/recording continues to ~5-9s) -- rows past that coverage previously
+carried NA `freq.Hz`/`curvature.invm`/`duty`/`phase`, which breaks
+`calc_muscle_torque()`'s phase-matched act/pass join for those samples
+even after they are correctly identified as active. Now fill-forwarded
+from the design table's own single constant value, ONLY when the whole
+table already agrees on one value (single_condition trials -- the common
+case); genuine multi-condition trials are left NA past their own coverage
+rather than guessing.
+
+SCOPE: affects every dynamic-protocol power/work number derived through
+`calc_muscle_torque()` + `summarize_muscle_cycles()` -- i.e. the
+production `run_fv_fl_power_pipeline.R` output and everything downstream
+of it. Re-ran the full pipeline (bass16/17/18) plus every diagnostic/
+summary script that consumes dynamic per-cycle power/work:
+`diag_precondition_power_check.R`, `diag_precondition_power_vs_offset.R`,
+`diag_sono_vs_geometric_dynamic_power.R`,
+`summary_precondition_power_tension_earlyVsLater.R`, and
+`summary_coughlin2000_bass_comparison.R` (which also had its
+`stim == "R"` pre-filter on the per-cycle CSV removed -- that filter was
+now redundant/wrong once cycles stopped being split by stim side).
+Eligible active-cycle counts roughly TRIPLED per dynamic trial (e.g. 8
+active cycles now recovered per trial vs. 2-5 before, mostly from the
+design-table fill-forward recovering cycles/samples past the table's own
+indexed coverage that were previously dropped as NA).
+
+RESULT: the qualitative conclusions already documented for every affected
+figure are UNCHANGED (early-trial power inflation under the geometric
+method, its near-disappearance under the sono method, dynamic power/work
+sitting below the Coughlin reference, power directly correlated with
+sono-strain offset) -- but the underlying NUMBERS shifted materially now
+that a full cycle (both muscles) is counted instead of one side's stim
+window. Selected before/after examples (see `FIGURES_README.md` entries
+for the full updated numbers): `dynamic_precondition_meanpower_vs_offset.png`
+pooled r 0.73->0.805 (mean power) / 0.63->0.655 (max power), n=30
+unchanged; `dynamic_sonoVsGeometric_power_boxplot.png` n 34 early/89 later
+cycles -> 112 early/186 later; `coughlin2000_bass_power_work_tension_
+comparison.png` dynamic mean cycle power median 1.16 W/kg -> -0.28 W/kg
+and mean work per cycle median 0.18 J/kg -> -0.10 J/kg (both flip from
+small-positive to near-zero/slightly-negative, still far below the
+7.2 W/kg / 2.4 J/kg reference -- conclusion unchanged, if anything
+strengthened). Isometric tension figures/numbers are UNAFFECTED (isometric
+was never split by stim/cycle in the first place). Treat any dynamic
+power/work number in this log or `FIGURES_README.md` dated before
+2026-07-24 (this addendum) as referring to the right-stim-window-only
+undercount and superseded by the whole-cycle numbers now in each figure's
+entry.
+
+Also fixed in the same PI request: `isometric_L0_activation_kinetics_
+bookendsOnly.png`'s panel A x-axis upper limit is now computed
+dynamically from the actual bookend-twitch trace range (`min(1.2,
+max(t_rel) + 0.05)`) instead of a fixed 1.2 s bound sized for the longer
+full-sources figure -- removes the ~0.8 s of blank space that had been
+left on the right since the bookend traces end near 0.4 s. The
+full-sources `isometric_L0_activation_kinetics.png` is unaffected (its
+longer isometric/isovelocity holds already reach close to 1.2 s).
+
+All regenerated figures verified visually before commit. OneDrive
+intermittently timed out on `write.csv()`/`ggsave()` during regeneration
+of `diag_sono_vs_geometric_dynamic_power.R`'s three CSVs in particular
+(transient sync issue, not a code defect) -- retried (removing one stale
+locked CSV) until each output's mtime confirmed a fresh write.

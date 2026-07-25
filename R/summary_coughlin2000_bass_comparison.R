@@ -15,8 +15,12 @@
 #      dynamic protocol -- see caveats below), refined per the "except"
 #      requests (tighter x-axis; explicit activation/relaxation windows).
 #   3. Power & work computed from DYNAMIC trials only (true work-loop match
-#      to Coughlin's method), right-muscle-stim cycles only (stim=="R"),
-#      matching this repo's "active = right stim" convention throughout.
+#      to Coughlin's method), over WHOLE active cycles (both left+right
+#      muscle pairs working together across the full stroke) -- UPDATED
+#      2026-07-24 (PI-directed): the original right-stim-cycles-only
+#      convention undercounted real muscle force/work, since force exists
+#      before/after the stimulus pulse and is driven by both sides across
+#      one cycle. See 03_analyze.R::summarize_muscle_cycles() docstring.
 #   4. LATER (stable) trials only (dynamic_trial_precondition.R cutoffs) --
 #      avoids the known early-trial sono/geometric power-inflation artifact.
 #   5. The work/power benchmark is a SINGLE literature data point (no
@@ -201,9 +205,15 @@ pTop <- ggplot() +
   theme_bw(base_size = 12)
 
 # =============================================================================
-# PANEL B/C/D data: LATER (stable) trials only, right-muscle-stim cycles
-# (stim=="R") for dynamic power/work, right-muscle isometric steps for
-# tension (already restricted upstream).
+# PANEL B/C/D data: LATER (stable) trials only. Dynamic power/work now use
+# WHOLE active cycles (left+right muscle pairs working together over the
+# full stroke), NOT right-muscle-stim cycles only (FIXED 2026-07-24,
+# PI-directed -- see 03_analyze.R::summarize_muscle_cycles() docstring and
+# analysis_muscle_force_vector_log.md: quantifying cycle power/work from
+# only the right-stim window undercounts real muscle force, which exists
+# before/after the stimulus and is driven by BOTH sides across one full
+# cycle). Right-muscle isometric steps for tension (already restricted
+# upstream, unaffected by this fix -- isometric never split by stim/cycle).
 # =============================================================================
 tension <- readr::read_csv(file.path(DATA_OUT_DIR, "isometric_tension_vs_offset_by_trial.csv"), show_col_types = FALSE) |>
   dplyr::mutate(precondition = classify_session_precondition(.data$specimen, .data$trial_num)) |>
@@ -212,7 +222,7 @@ tension <- readr::read_csv(file.path(DATA_OUT_DIR, "isometric_tension_vs_offset_
                     value = .data$max_tension_Ncm2 * 10)  # N/cm^2 -> kN/m^2 (x10)
 
 percycle <- readr::read_csv(file.path(DATA_OUT_DIR, "dynamic_precondition_power_percycle.csv"), show_col_types = FALSE) |>
-  dplyr::filter(.data$precondition == "later (stable)", .data$stim == "R")
+  dplyr::filter(.data$precondition == "later (stable)")
 
 power <- percycle |>
   dplyr::group_by(.data$specimen, .data$trial_id) |>
@@ -260,20 +270,21 @@ p_c <- COUGHLIN2000$power_Wkg
 pC <- .coug_panel("Mean cycle power (W/kg)",
                    p_c$mean - p_c$sd, p_c$mean + p_c$sd, p_c$mean,
                    "Coughlin 2000 bass, 20C\n(derived, graph-read: 0.572L\n@ 2 BL/s / 3 Hz, no SEM)",
-                   "Mean cycle power (W/kg)", "C. Dynamic power (right-stim cycles)")
+                   "Mean cycle power (W/kg)", "C. Dynamic power (whole active cycle)")
 
 w_c <- COUGHLIN2000$work_Jkg
 pD <- .coug_panel("Mean work per cycle (J/kg)",
                    w_c$mean - w_c$sd, w_c$mean + w_c$sd, w_c$mean,
                    "Coughlin 2000 bass, 20C\n(graph-read: 0.572L\n@ 2 BL/s / 3 Hz, no SEM)",
-                   "Work per cycle (J/kg)", "D. Dynamic work (right-stim cycles)")
+                   "Work per cycle (J/kg)", "D. Dynamic work (whole active cycle)")
 
 fig <- pTop / (pB | pC | pD) +
   patchwork::plot_layout(heights = c(1.15, 1)) +
   patchwork::plot_annotation(
     title = "Bass red muscle vs. Coughlin (2000): tension, power, work -- later/stable trials only",
     subtitle = paste0(
-      "Later (stable) trials only (dynamic_trial_precondition.R cutoffs); dynamic power/work use right-stim cycles only. Coughlin reference values (dashed\n",
+      "Later (stable) trials only (dynamic_trial_precondition.R cutoffs); dynamic power/work integrate the WHOLE active cycle (both left+right muscle pairs\n",
+      "working together, not right-stim-window-only -- fixed 2026-07-24, see 03_analyze.R::summarize_muscle_cycles()). Coughlin reference values (dashed\n",
       "lines) are graphically read at the PI's OWN protocol condition (0.572L ~50%L, 2 BL/s / 3 Hz tailbeat) -- work/power have no reported SEM (single\n",
       "reference line, no shaded band); tension keeps Coughlin's reported +/-33.6 kN/m^2 S.E.M. (position-pooled -- position had no effect on tension).\n",
       "CAVEATS: (1) Coughlin's values are muscle under SUBMAXIMAL in-vivo swimming conditions; ours are closer to maximal characterization stimulation -- not a fully like-for-like comparison.\n",
