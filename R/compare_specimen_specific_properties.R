@@ -79,6 +79,20 @@ src("plot_force_vs_time.R")  # .detect_stim_events(), RELAXATION_WINDOW_S
 }
 
 # Duplicated from run_fv_fl_power_pipeline.R -- see module header note above.
+#
+# STALE, FLAGGED, NOT FIXED HERE (found 2026-07-25, see
+# analysis_muscle_force_vector_log.md "FOLLOW-UP FOUND, NOT FIXED HERE"):
+# this copy still has the 2026-07-24 L/R sign-consistency bug (mutates
+# msc$muscle_torque.Nm in place with force_sign, then hands that
+# side-corrected torque to summarize_muscle_cycles(), which multiplies by
+# RAW angular velocity -- breaks power's sign-invariance) AND the unswapped
+# (pre-2026-07-25) row_side->lidx mapping, AND does not attach `contraction`
+# (the 2026-07-25 contraction-phase classification port -- see
+# muscle_geometry.R::classify_dynamic_contraction()). The cross-specimen
+# power/work comparison this script produces is therefore not yet
+# consistent with run_fv_fl_power_pipeline.R's or diag_precondition_power_
+# check.R's copies. Needs its OWN explicit, standalone fix-and-verify pass
+# (all three issues together) -- deliberately not bundled into this commit.
 .attach_dynamic_muscle_force <- function(td, torque_col, lidx_pos_motor, lidx_left, lidx_right,
                                           relaxation_s = RELAXATION_WINDOW_S) {
   td$.row_id <- seq_len(nrow(td))

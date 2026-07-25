@@ -142,6 +142,15 @@ cli::cli_h1("Part B: per-cycle muscle power output, all dynamic trials bass16/17
 #' analysis_muscle_force_vector_log.md). REMOVED: msc$muscle_torque.Nm now
 #' stays RAW (as calc_muscle_torque() returns it), matching the RAW
 #' pos.rad used downstream.
+#'
+#' PORT, 2026-07-25 (PI-approved -- see analysis_muscle_force_vector_log.md):
+#' this script's OWN output (dynamic_precondition_power_percycle.csv) feeds
+#' summary_coughlin2000_bass_comparison.R's live deliverable figure, so it
+#' MUST stay in sync with run_fv_fl_power_pipeline.R's copy of this
+#' function, not just diag_dynamic_power_contraction_phase.R's diagnostic --
+#' attaches `msc$contraction` the same way so summarize_muscle_cycles()
+#' (03_analyze.R) imposes the contraction-phase sign on avg_power.W/work.J
+#' here too, instead of silently staying on the pre-port raw-sign fallback.
 .attach_dynamic_muscle_force <- function(td, torque_col, lidx_pos_motor, lidx_left, lidx_right,
                                           relaxation_s = RELAXATION_WINDOW_S) {
   td$.row_id <- seq_len(nrow(td))
@@ -161,7 +170,9 @@ cli::cli_h1("Part B: per-cycle muscle power output, all dynamic trials bass16/17
       row_side[in_win] <- e$muscle_side
     }
   }
-  msc$stim <- row_side[msc$.row_id]  # event-resolved side, QA/sides_present only -- torque itself left RAW, see FIXED note above
+  msc$stim <- row_side[msc$.row_id]  # event-resolved side, QA/sides_present AND classification input, torque itself left RAW, see FIXED note above
+  msc$contraction <- classify_dynamic_contraction(msc$stim, msc$dist.rad,
+                                                   lidx_pos_motor, lidx_left, lidx_right)
   if ("cycletype" %in% names(msc)) msc <- dplyr::filter(msc, .data$cycletype == "act")
   msc
 }

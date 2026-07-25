@@ -136,6 +136,82 @@ resolve_step_contraction <- function(recruitment, operating_point,
 
 
 # =============================================================================
+# Dynamic-trial (single_finite) contraction-phase classification
+# =============================================================================
+
+#' Map a dynamic-trial event-resolved recruited side ("L"/"R") to the
+#' rig-geometry lidx_left/lidx_right constant for that side.
+#'
+#' TEMPORARY COMPENSATION (2026-07-25, PI-confirmed -- see
+#' analysis_muscle_force_vector_log.md "2026-07-25 addendum -- root cause
+#' found: make_stimuli() metadata/config-consistency bug"). For
+#' single_finite/dynamic HDF5 files recorded before that Python-side bug is
+#' fixed at the source (bender_functions.py::make_stimuli() -- follow-up
+#' TODO, not yet done), the DAQ-recorded `stim_side` ("L"/"R") and the
+#' independently-set rig-geometry attrs `daq_specimen_side_index_left`/
+#' `_right` do NOT agree on which physical muscle is "left." Verified
+#' directly against the raw commanded angle.deg trace, 3/3 specimens
+#' (bass16/17/18): a `stim_side == "L"` event's own peak STRETCH sits at
+#' the lidx_right extremum, not lidx_left -- backward from the intended
+#' design. This function applies the SWAPPED mapping to compensate at the
+#' point of use.
+#'
+#' SINGLE POINT OF TRUTH: every dynamic-trial caller that resolves a
+#' recruited side to its rig-geometry lidx constant (force_sign display
+#' correction in run_fv_fl_power_pipeline.R::.attach_dynamic_muscle_force(),
+#' contraction-phase classification below) MUST go through this function --
+#' do not re-inline the row_side -> lidx mapping elsewhere. The PI's planned
+#' fix is to repair the raw HDF5 files directly (rather than leave this as a
+#' permanent post-hoc compensation); once that lands, THIS is the one place
+#' to update -- either restore the direct (unswapped) mapping, or gate it
+#' behind a per-file acquisition-date/rig-software-version check if only
+#' some files get repaired.
+dynamic_recruited_side_to_lidx <- function(row_side, lidx_left, lidx_right) {
+  dplyr::case_when(
+    row_side == "L" ~ lidx_right,
+    row_side == "R" ~ lidx_left,
+    .default = NA_real_
+  )
+}
+
+#' Per-sample concentric/eccentric contraction-phase classification for a
+#' dynamic trial, from the COMMANDED bend direction (sign(dist.rad) --
+#' dist.rad derives from `angle_commanded_degree` via 00_load_bender_flat.R,
+#' so its sign is deterministic by construction, unlike raw torque) crossed
+#' with the event-resolved recruited side (row_side, "L"/"R" -- the burst
+#' window side from .detect_stim_events(), NOT the sparse per-sample stim
+#' pulse column).
+#'
+#' Reuses the EXACT SAME convention resolve_step_contraction() (above)
+#' already applies for isometric/isovelocity: concentric when
+#' bend_lidx == rec_lidx (bend direction toward the recruited muscle's own
+#' shortening extreme), eccentric when bend_lidx == -rec_lidx. NA when
+#' velocity is zero/near-zero (direction undefined) or no side is resolved
+#' for that sample.
+#'
+#' PI-approved 2026-07-25 port into production (see
+#' analysis_muscle_force_vector_log.md) of the diagnostic prototyped in
+#' R/diag_dynamic_power_contraction_phase.R -- consumed by
+#' add_muscle_instantaneous()/summarize_muscle_cycles() (03_analyze.R) via
+#' the `contraction` column a caller (currently only
+#' run_fv_fl_power_pipeline.R::.attach_dynamic_muscle_force()) attaches to
+#' the calc_muscle_torque() output before summarizing.
+classify_dynamic_contraction <- function(row_side, dist.rad, lidx_pos_motor, lidx_left, lidx_right) {
+  rec_lidx <- dynamic_recruited_side_to_lidx(row_side, lidx_left, lidx_right)
+  bend_lidx <- dplyr::if_else(
+    !is.finite(dist.rad) | dist.rad == 0, NA_real_,
+    sign(dist.rad) * lidx_pos_motor
+  )
+  dplyr::case_when(
+    !is.finite(rec_lidx) | !is.finite(bend_lidx) ~ NA_character_,
+    bend_lidx == rec_lidx  ~ "concentric",
+    bend_lidx == -rec_lidx ~ "eccentric",
+    .default = NA_character_
+  )
+}
+
+
+# =============================================================================
 # Per-sample predicted strain, split into ACTIVE / PASSIVE columns
 # =============================================================================
 

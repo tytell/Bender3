@@ -64,6 +64,20 @@
 # no L-vs-R artifact), that is the signal to port this into production
 # next, as its own separate, explicitly-approved change.
 #
+# PORTED TO PRODUCTION 2026-07-25 (PI-approved -- see
+# analysis_muscle_force_vector_log.md): the classification logic below
+# (.classify_contraction()) is now duplicated in muscle_geometry.R::
+# classify_dynamic_contraction()/dynamic_recruited_side_to_lidx(), consumed
+# by 03_analyze.R::add_muscle_instantaneous()/summarize_muscle_cycles() via
+# a `contraction` column that run_fv_fl_power_pipeline.R's and
+# diag_precondition_power_check.R's copies of .attach_dynamic_muscle_force()
+# now attach. This script is KEPT AS-IS (own standalone, independently-
+# computed copy) as a regression/audit check -- its RAW vs. CLASSIFIED
+# comparison tables remain a useful sanity check that production's ported
+# numbers still match. Not refactored to call the production functions, to
+# preserve it as an independent cross-check rather than a thin wrapper that
+# could silently start agreeing with production even if production broke.
+#
 # Run with:  Rscript R/diag_dynamic_power_contraction_phase.R
 
 suppressPackageStartupMessages({

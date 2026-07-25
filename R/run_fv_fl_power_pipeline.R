@@ -152,14 +152,19 @@ DEACTIVATION_WINDOW_S <- 0.5
 #' pattern, not of real muscle mechanics) -- exactly the "opposite signs
 #' between L and R" the PI flagged. With BOTH factors left in the raw,
 #' mutually consistent lab-frame convention (this fix), that artificial
-#' L-vs-R asymmetry disappears; instantaneous power is CONSISTENTLY
-#' negative-leaning on both sides instead (median still well below zero --
-#' see the log for the residual, deeper caveat: this may reflect real
-#' excitation-contraction coupling delay + a relaxation window much longer
-#' than the active burst, diluting/reversing the correlation between the
-#' measured torque and the commanded motion's instantaneous direction, not
-#' a further sign-convention bug -- flagged for follow-up, not resolved
-#' here).
+#' L-vs-R asymmetry disappeared; instantaneous power was still CONSISTENTLY
+#' negative-leaning on both sides at that point, though -- RESOLVED
+#' 2026-07-25 (see msc$contraction below + analysis_muscle_force_vector_log.md):
+#' the raw signed torque*velocity product's sign was never itself
+#' trustworthy (torque-calibration-axis sign vs. commanded-motion sign
+#' agreement isn't guaranteed sample by sample) -- production now imposes
+#' avg_power.W/work.J's sign STRUCTURALLY from a concentric/eccentric
+#' contraction-phase classification (classify_dynamic_contraction(),
+#' muscle_geometry.R) instead of trusting that raw product's sign. This
+#' also resolves the PI's methodological point that a muscle continues
+#' producing (positive, concentric) force while shortening even after
+#' stimulation ends, for free -- classification depends on commanded bend
+#' direction + event-resolved side, not on whether stim is literally on.
 #'
 #' rec_lidx is resolved from EVENT-level burst side (.detect_stim_events(),
 #' also used by build_dynamic_force_timeseries()), NOT the row's own
@@ -207,28 +212,11 @@ DEACTIVATION_WINDOW_S <- 0.5
     # FIXED 2026-07-25 (PI-confirmed): `stim_side` ("L"/"R", DAQ-recorded per
     # sample) and `daq_specimen_side_index_left`/`_right` (independent
     # rig-geometry metadata) do NOT agree on which physical muscle is "left"
-    # for single_finite/dynamic files. Verified against the raw commanded
-    # angle.deg trace, 3/3 specimens (bass16/17/18): "L"-labeled stim pulses
-    # fire at the POSITIVE-angle (lidx_left-side) extremum, "R"-labeled
-    # pulses at the NEGATIVE-angle (lidx_right-side) extremum -- backward
-    # from the PI-confirmed intended design ("phase=0 = stim centered on the
-    # RECRUITED muscle's own peak STRETCH": a muscle's own peak stretch is
-    # at the OPPOSITE-sign extremum from its own lidx side, so stim_side
-    # "L"'s own peak stretch is at the lidx_right extremum, not lidx_left).
-    # See analysis_muscle_force_vector_log.md 2026-07-25 addendum for the
-    # full empirical verification (mean angle.deg during the literal pulse,
-    # by side, all 3 specimens). Swapped below (was lidx_left/lidx_right,
-    # unswapped) -- changes td$muscle_force_Nm's sign attribution for
-    # dynamic trials; does NOT itself change msc$muscle_torque.Nm (still
-    # RAW, per the 2026-07-24 fix above) or any already-computed whole-cycle
-    # power/work number, which stays raw-sign pending a separate decision on
-    # porting the contraction-phase classification (diag_dynamic_power_
-    # contraction_phase.R) into production.
-    rec_lidx <- dplyr::case_when(
-      row_side == "L" ~ lidx_right,
-      row_side == "R" ~ lidx_left,
-      .default = NA_real_
-    )
+    # for single_finite/dynamic files -- see muscle_geometry.R::
+    # dynamic_recruited_side_to_lidx() docstring for the full empirical
+    # verification and the SINGLE POINT OF TRUTH this mapping now lives at
+    # (do not re-inline it here or anywhere else).
+    rec_lidx <- dynamic_recruited_side_to_lidx(row_side, lidx_left, lidx_right)
     force_sign <- rec_lidx * lidx_pos_motor
     if (all(!is.finite(force_sign))) {
       cli::cli_warn("Dynamic force_sign side-correction unavailable (missing rig-geometry attrs or no stim events detected) -- muscle_force_Nm left in RAW lab-frame sign convention")
@@ -241,6 +229,19 @@ DEACTIVATION_WINDOW_S <- 0.5
       td$muscle_force_Nm[msc$.row_id] <- force_sign[msc$.row_id] * msc$muscle_torque.Nm
     }
     msc$stim <- row_side[msc$.row_id]  # event-resolved side, for downstream (summarize_muscle_cycles groups by `stim`)
+    # PORT, 2026-07-25 (PI-approved -- see analysis_muscle_force_vector_log.md):
+    # attach the per-sample concentric/eccentric classification BEFORE the
+    # cycletype=="act" filter below -- add_muscle_instantaneous()/
+    # summarize_muscle_cycles() (03_analyze.R) use this `contraction` column,
+    # when present, to STRUCTURALLY impose avg_power.W/work.J's sign instead
+    # of trusting the raw signed torque*velocity product (which was
+    # confirmed net-negative -- physiologically backward for an actively
+    # driven work loop -- see diag_dynamic_power_contraction_phase.R and the
+    # log's "root cause found" addendum). msc$dist.rad already exists from
+    # calc_muscle_torque()'s own mutate(); msc$stim is the event-resolved
+    # side just set above (NOT the sparse literal stim-pulse column).
+    msc$contraction <- classify_dynamic_contraction(msc$stim, msc$dist.rad,
+                                                     lidx_pos_motor, lidx_left, lidx_right)
   }
   # msc (the return value below) stays restricted to active cycles
   # (cycletype == "act") -- summarize_muscle_cycles()'s per-cycle work/power

@@ -564,16 +564,53 @@ calc_muscle_torque <- function(data, torque_col = NULL, sample_freq.Hz = NULL,
 # add_muscle_instantaneous / summarize_muscle_cycles
 # =============================================================================
 
-#' Instantaneous muscle power per sample. Normalizes by muscle_mass.kg when present.
+#' Instantaneous muscle power (and, PI-approved 2026-07-25, per-sample work
+#' increment) per sample. Normalizes by muscle_mass.kg when present.
+#'
+#' Contraction-phase sign imposition (PORT, 2026-07-25 -- see
+#' analysis_muscle_force_vector_log.md "canonical dynamic-force plots
+#' regenerated" addendum and the diagnostic this replaces,
+#' R/diag_dynamic_power_contraction_phase.R): if the input already carries a
+#' `contraction` column ("concentric"/"eccentric"/NA -- attached by a caller
+#' via muscle_geometry.R::classify_dynamic_contraction() for dynamic trials;
+#' currently only run_fv_fl_power_pipeline.R::.attach_dynamic_muscle_force()
+#' does this), `insta_power.W`/`work_increment.J` are STRUCTURALLY
+#' sign-imposed from that classification -- magnitude of the raw
+#' torque*velocity (resp. torque*dist.rad) product, sign FORCED
+#' +concentric/-eccentric -- instead of trusting the raw signed product's
+#' sign sample by sample. The raw product's sign is not itself trustworthy
+#' here: it depends on whether the (possibly axis-ambiguous) torque
+#' calibration sign happens to agree with the commanded-motion sign at each
+#' instant, not on any physiologically meaningful convention.
+#'
+#' Rows with `contraction` NA (no resolved side, near-zero commanded
+#' velocity) fall back to the raw signed product. Callers that never attach
+#' a `contraction` column (isometric/isovelocity -- calc_muscle_torque()
+#' itself does not add one) get an all-NA column added here and are
+#' therefore numerically UNCHANGED by this port: every row falls back to the
+#' pre-2026-07-25 raw signed product, exactly as before.
 add_muscle_instantaneous <- function(muscletorque, mass_col = "muscle_mass.kg") {
   grp <- intersect(c("trial", "cycle", "filename"), names(muscletorque))
+  if (!"contraction" %in% names(muscletorque)) muscletorque$contraction <- NA_character_
   out <- muscletorque |>
     dplyr::group_by(dplyr::across(dplyr::any_of(grp))) |>
     dplyr::mutate(
-      insta_power.W = .data$muscle_torque.Nm *
-        ((.data$pos.rad - dplyr::lag(.data$pos.rad)) / .data$t.interval.s)
+      .dist.rad             = .data$pos.rad - dplyr::lag(.data$pos.rad),
+      insta_power_raw.W     = .data$muscle_torque.Nm * (.data$.dist.rad / .data$t.interval.s),
+      work_increment_raw.J  = .data$muscle_torque.Nm * .data$.dist.rad,
+      insta_power.W = dplyr::case_when(
+        .data$contraction == "concentric" ~  abs(.data$insta_power_raw.W),
+        .data$contraction == "eccentric"  ~ -abs(.data$insta_power_raw.W),
+        .default = .data$insta_power_raw.W
+      ),
+      work_increment.J = dplyr::case_when(
+        .data$contraction == "concentric" ~  abs(.data$work_increment_raw.J),
+        .data$contraction == "eccentric"  ~ -abs(.data$work_increment_raw.J),
+        .default = .data$work_increment_raw.J
+      )
     ) |>
     dplyr::ungroup()
+  out$.dist.rad <- NULL
   if (mass_col %in% names(out) && any(is.finite(out[[mass_col]]))) {
     out <- out |>
       dplyr::mutate(insta_power.Wkg = .data$insta_power.W / .data[[mass_col]])
@@ -599,6 +636,19 @@ add_muscle_instantaneous <- function(muscletorque, mass_col = "muscle_mass.kg") 
 #' torque from calc_muscle_torque()). `sides_present` replaces the old
 #' single-valued `stim` output column so which side(s) actually contributed
 #' to a given cycle stays visible for QA.
+#'
+#' `work.J` (PORT, 2026-07-25 -- see add_muscle_instantaneous() docstring):
+#' when a group has ANY classified (`contraction` non-NA) sample, `work.J`
+#' is `sum(work_increment.J)` -- the same contraction-phase sign-imposed
+#' quantity `avg_power.W` already uses, so the two stay internally
+#' consistent -- instead of `calc_work()`'s raw-signed trapz. Groups with NO
+#' classified samples (isometric/isovelocity; calc_muscle_torque() never
+#' attaches `contraction`) are UNCHANGED: `calc_work()` (trapz) exactly as
+#' before. `frac_concentric` (new QA column) surfaces what fraction of a
+#' dynamic cycle's classified samples were concentric, NA when unclassified
+#' (isometric/isovelocity) -- low values (near/below detect_passive_mode's
+#' expected majority) flag a cycle whose sign classification is dominated by
+#' noise/near-zero-velocity samples rather than real work-loop structure.
 summarize_muscle_cycles <- function(muscletorque, cycles_keep = NULL,
                                     mass_normalize = TRUE, mass_col = "muscle_mass.kg") {
   df <- muscletorque
@@ -612,7 +662,9 @@ summarize_muscle_cycles <- function(muscletorque, cycles_keep = NULL,
       "freq.Hz", "curvature.invm"
     )))) |>
     dplyr::summarise(
-      work.J         = calc_work(.data$pos.rad, .data$muscle_torque.Nm),
+      work.J         = if (any(!is.na(.data$contraction)))
+        sum(.data$work_increment.J, na.rm = TRUE)
+        else calc_work(.data$pos.rad, .data$muscle_torque.Nm),
       avg_power.W    = mean(.data$insta_power.W, na.rm = TRUE),
       peak_power.W   = max(abs(.data$insta_power.W), na.rm = TRUE),
       peak_torque.Nm = max(abs(.data$muscle_torque.Nm), na.rm = TRUE),
@@ -620,6 +672,10 @@ summarize_muscle_cycles <- function(muscletorque, cycles_keep = NULL,
       sides_present  = if ("stim" %in% names(df))
         paste(sort(unique(stats::na.omit(as.character(.data$stim)))), collapse = "+")
         else NA_character_,
+      frac_concentric = if (any(!is.na(.data$contraction)))
+        sum(.data$contraction == "concentric", na.rm = TRUE) /
+          pmax(sum(.data$contraction %in% c("concentric", "eccentric"), na.rm = TRUE), 1L)
+        else NA_real_,
       .groups        = "drop"
     ) |>
     dplyr::mutate(

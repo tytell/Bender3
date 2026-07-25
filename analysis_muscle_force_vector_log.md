@@ -2913,3 +2913,80 @@ under `proj_crittergripper`):
 
 These are the CANONICAL versions as of this pass. See run log/timestamps
 below for confirmation of the regeneration and any per-specimen notes.
+
+### 2026-07-25 addendum -- contraction-phase classification PORTED TO
+### PRODUCTION (PI-approved). Whole-cycle power/work is now net POSITIVE.
+
+Per the earlier addendum's open question ("why is power uniformly
+NEGATIVE?"), PI approved porting the diagnostic's contraction-phase
+classification into production, replacing raw-signed-product trust with a
+STRUCTURAL sign imposition (magnitude of the raw torque*velocity/
+torque*dist product, sign FORCED +concentric/-eccentric from commanded
+bend direction vs. the recruited muscle's own side) for `avg_power.W`/
+`work.J`. PI direction: replace (not keep side-by-side), proceed with the
+multi-function scope as one change, rerun immediately -- PI also flagged
+the L/R metadata swap this depends on as a TEMPORARY compensation: plan
+is to repair the raw HDF5 files directly in the near future, at which
+point these post-hoc R-side fixes should no longer be necessary.
+
+**Architecture (kept the swap-dependency to ONE place, per the above):**
+- `muscle_geometry.R::dynamic_recruited_side_to_lidx()` (NEW) -- the
+  SINGLE POINT OF TRUTH for the row_side->lidx swapped mapping. Both
+  `.attach_dynamic_muscle_force()` (force_sign display correction) and
+  the new classification function now call this instead of inlining the
+  mapping -- when the HDF5 files get repaired, this is the one place to
+  update.
+- `muscle_geometry.R::classify_dynamic_contraction()` (NEW) -- promoted
+  from `diag_dynamic_power_contraction_phase.R`'s `.classify_contraction()`
+  into a shared, documented function alongside `resolve_step_contraction()`
+  (same convention).
+- `03_analyze.R::add_muscle_instantaneous()` -- if a `contraction` column
+  is present, `insta_power.W`/new `work_increment.J` are sign-imposed
+  (magnitude-fold + forced sign) instead of the raw signed product.
+  Backward-compatible: callers that never attach `contraction` (isometric/
+  isovelocity -- `calc_muscle_torque()` itself still never adds one) get
+  an all-NA column added here and are numerically UNCHANGED.
+- `03_analyze.R::summarize_muscle_cycles()` -- `work.J` uses
+  `sum(work_increment.J)` when any sample in the cycle is classified,
+  else falls back to `calc_work()` (trapz) exactly as before. New QA
+  column `frac_concentric`.
+- `run_fv_fl_power_pipeline.R::.attach_dynamic_muscle_force()` and
+  `diag_precondition_power_check.R`'s copy (the latter feeds
+  `dynamic_precondition_power_percycle.csv` ->
+  `summary_coughlin2000_bass_comparison.R`'s live deliverable figure, so
+  it needed the SAME port, not just the diagnostic) now attach
+  `msc$contraction` via `classify_dynamic_contraction()` right after
+  resolving the event-window side, before the cycletype=="act" filter.
+- `compare_specimen_specific_properties.R`'s THIRD, still-stale duplicate
+  (flagged 2026-07-25 above, not fixed) now ALSO explicitly flagged as
+  needing this port whenever its standalone fix-and-verify pass happens.
+- `calc_muscle_torque()` itself: UNCHANGED (classification needs the
+  event-resolved side, which only exists after that function returns).
+
+**Verified with `diag_dynamic_power_contraction_phase.R` (kept as an
+independent, non-refactored regression/audit check, not wired to call
+the production functions) before porting:** pooled mean cycle power
+flipped from -0.025 W (9.2% of cycles positive) to +0.052 W (93.8%
+positive); frac_concentric 86.6% pooled; by specimen: bass16 -0.017 ->
++0.022 W, bass17 -0.019 -> +0.089 W, bass18 -0.073 -> +0.088 W; L vs. R
+sample-mean power both flip to +0.0389/+0.0388 W (no reintroduced
+asymmetry).
+
+**Verified end-to-end after porting** (full `run_fv_fl_power_pipeline.R`
+re-run, all 3 specimens, exit 0, all trials "ok"; `diag_precondition_
+power_check.R` and `summary_coughlin2000_bass_comparison.R` re-run after):
+`powerDynamic.png` (all 3 specimens) now shows power consistently
+POSITIVE across nearly every cycle (previously net-negative), matching
+the diagnostic's numbers. `coughlin2000_bass_power_work_tension_
+comparison.png` panels C/D (dynamic power/work vs. Coughlin (2000))
+now show a coherent, physiologically sensible comparison -- several
+bass18 points now sit near/above the Coughlin reference band, instead of
+being clipped at/near zero.
+
+All figures downstream of `summarize_muscle_cycles()`'s dynamic-trial
+output (`powerDynamic.png` per specimen,
+`coughlin2000_bass_power_work_tension_comparison.png`) are CANONICAL as
+of this pass. `forceTime_dynamic_*.png` (previous addendum) is UNCHANGED
+by this port (that channel's own sign logic was already fixed by the L/R
+swap and does not go through `add_muscle_instantaneous()`/
+`summarize_muscle_cycles()`).
