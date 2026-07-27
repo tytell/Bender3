@@ -7,6 +7,23 @@ troubleshooting data). This file is the decision trail: what was asked, what
 was tried, what changed and why, and what's still open. Update it (don't
 replace it) the next time this analysis line moves.
 
+## Current status / read this before starting new work (updated 2026-07-27)
+
+**Passive-baseline method for isometric/isovelocity active muscle force:**
+`legacy` (pre-only static baseline) is ABANDONED (direction-dependent bias,
+confirmed all 3 specimens). For ANY new analysis or figure, use
+`muscle_force_Nm_optimizedbaseline` / `passive_force_Nm_optimizedbaseline`
+(computed automatically by `build_segmented_step_summary()` in
+`R/03_analyze.R`, inherited for free by `analyze_isovelocity()`) instead of
+the plain `muscle_force_Nm`. No separate function call is required -- just
+read that column instead of `muscle_force_Nm` after building the step
+summary as usual. Decision tree:
+`figs_diagnostic/passiveSubtraction_decisionTree_optimizedbaseline.png`.
+Full trail: search this file for "2026-07-27 addendum -- `legacy`
+ABANDONED". Old legacy-baseline figures/scripts were NOT deleted or
+rewired -- they still exist for reference but should not be used as a
+template for new work.
+
 ## Why this started
 QC plots showed a stim-locked DC shift in **yTorque** correlated with muscle
 shortening (sono length decreasing), even though FL/FV force had always been
@@ -2990,3 +3007,591 @@ of this pass. `forceTime_dynamic_*.png` (previous addendum) is UNCHANGED
 by this port (that channel's own sign logic was already fixed by the L/R
 swap and does not go through `add_muscle_instantaneous()`/
 `summarize_muscle_cycles()`).
+
+### 2026-07-25 addendum -- isometric specific-tension gap: passive-baseline
+### method sensitivity + data-inclusion audit (`diag_isometric_passive_baseline_methods.R`)
+
+Follow-on to the specific-tension investigation above. PI asked two
+questions: (1) are there alternative ways to compute the passive baseline
+that might close the ~10-20x gap vs. Coughlin (2000)'s 180 +/- 33.6 kN/m^2?
+(2) exactly what data feeds the tension panel (n, filters)?
+
+**Question 2 -- data audit (read-only, no code changed):** exactly 5
+isometric-protocol trials exist in the WHOLE corpus (bass16: `bender_09`,
+`bender_15`; bass17: `bender_15`; bass18: `bender_04`, `bender_11`). All 5
+process successfully and all 5 have valid right-stim sono-strain coverage
+(the sono inner-join in `diag_precondition_tension_vs_offset_isometric.R`
+drops NOTHING in this corpus, contrary to that script's own defensive
+warning text). The ONLY filters that actually remove trials before the
+Coughlin panel are: (a) `muscle_side == "right"` (right/sono-instrumented
+muscle only -- silently drops every LEFT-side step from `trial_tension`,
+even though `isometric_tension_percycle.csv` computes and stores both
+sides), and (b) `classify_session_precondition() == "later (stable)"`
+(drops `bass18_bender_04`, "early"). Net: **4 trials, right-side-only,
+one trial-max point each**, in `coughlin2000_bass_power_work_tension_
+comparison.png` panel B. (a) is inherited from the sono-correlation
+script this panel reuses, not a deliberate choice for a Coughlin
+comparison specifically -- worth revisiting if more n is needed later,
+since Coughlin's own reference pools across both sides/positions.
+
+**Question 1 -- passive-baseline method comparison:** new diagnostic
+`R/diag_isometric_passive_baseline_methods.R` (read-only; does not modify
+`build_segmented_step_summary()` or any production file) computes 6
+candidate passive-baseline methods per step, all from the SAME raw trace
+-- `pre_static` (current production), `post_static`, `interp_linear`
+(current production alternate), `pre_last0.3s` (NEW: mean of just the last
+0.3s of the pre-window, closest to stim onset), `interp_closest` (NEW:
+same linear-interpolation construction as `interp_linear` but anchored on
+narrow closest-in-time sub-windows instead of full pre/post means), and
+`raw_no_subtraction` (NOT a baseline method -- zero baseline, diagnostic
+upper-bound anchor only). All 46 right-side steps, all 5 trials (all
+preconditioning phases, precondition kept as a plot facet/color not a
+filter, to maximize n for this comparison).
+
+**Result: baseline-WINDOW choice is not the driver of the gap.** All 5
+real subtraction methods land in the same ~1-2x-of-each-other cluster,
+5-8 kN/m^2 mean-|tension| pooled (range ~4.5-7.8), all ~25-35x BELOW
+Coughlin's band regardless of which window/interpolation scheme is used.
+Only `raw_no_subtraction` (72.8 kN/m^2 mean, up to 321 kN/m^2 trial-max)
+approaches/enters Coughlin's band -- 3 of 5 trials' raw trial-max sit
+at/inside the 180 +/- 33.6 kN/m^2 band. This confirms (does not just
+suggest) the 2026-07-25 tension-investigation addendum's conclusion:
+the active-minus-passive SUBTRACTION ITSELF is what suppresses tension by
+an order of magnitude, because the true active signal is a small fraction
+of ANY passive reference's own magnitude/noise -- not a poor choice of
+*which* window to use as that reference. Re-windowing the passive
+baseline (this diagnostic's whole search space) cannot fix this; a
+different approach to isolating active force (e.g. borrowing more
+statistical power across steps, or a fundamentally different
+active-signal extraction) would be needed, and is NOT attempted here.
+
+**Outputs (`FIGS_DIAGNOSTIC_DIR`, i.e. `02_processed/figs_diagnostic/`):**
+`isometric_passive_baseline_methods_perstep.png` (per-step "ladder" across
+methods vs. strain, faceted by specimen), `isometric_passive_baseline_
+methods_distribution.png` (pooled |tension| boxplot by method, log scale,
+vs. Coughlin band), `isometric_passive_baseline_methods_trialmax.png`
+(per-trial trial-max, same aggregation as the production Coughlin panel,
+by method, log scale). Data: `data_processed/isometric_passive_baseline_
+method_comparison.csv` (per step x method) and `..._trialmax.csv`
+(per trial x method). These are DIAGNOSTIC ONLY -- not canonical, not
+wired into any production script or the Coughlin comparison figure.
+
+### 2026-07-25 addendum -- expanded isometric-tension sources: isovelocity
+### v=0 steps + dynamic L0 pre/post bookends (`diag_isometric_tension_expanded_sources.R`)
+
+PI directive: "You MUST include the isometric pre-post stim in dynamic as
+well as the V=0 form isovelocity [in the isometric tension analysis],
+provided they pass all the other inclusion criteria." Confirmed the two
+sources against real data before building:
+
+- **isovelocity v=0 steps**: every isovelocity trial commands
+  `operating_point==0` deg/s for both unilateral sides (11 files,
+  bass16/17/18) -- a genuine isometric contraction embedded in an
+  isovelocity file. `analyze_isovelocity()` (03_analyze.R) already computes
+  `muscle_force_Nm` for these rows with its normal, unmodified,
+  PI-validated `muscle_side` -> `force_sign` mapping; just filtered down to
+  `abs(shortening_value) < 1e-6`. No sign-convention risk (same metadata
+  source -- `index_step_recruitment` -- as genuine isometric steps).
+- **dynamic L0 pre/post bookends**: every dynamic (single_finite) trial
+  brackets its active cycling with up to 4 static, commanded-0-deg
+  stimulated bursts (left+right BEFORE cycling, left+right AFTER) --
+  exactly the "isometric pre-/post-stim in dynamic" the PI meant. Detected
+  via the EXISTING, unmodified `detect_dynamic_l0_bookends()`
+  (`extract_dynamic_l0_bookends.R`), already used in production to feed
+  `plot_fatigue_timeline.R`; force computed fresh here with the same
+  scalar zTorque static-pre-baseline method as isometric/isovelocity (not
+  the separate 6-axis vector-force method already computed for these
+  bookends elsewhere, to avoid mixing two different force-extraction
+  algorithms in one comparison).
+
+**Sign-convention finding (tested empirically, not assumed):** initially
+assumed the L0 bookends' `muscle_side` needed the SAME row_side->lidx swap
+already confirmed for dynamic CYCLING bursts (2026-07-25 "root cause
+found" addendum), since both come from the same per-sample stim_side
+detection on the same dynamic file. Directly tested against 36 bookends
+across 9 files, all 3 specimens: the SWAPPED mapping gave 36/36 NEGATIVE
+muscle_force_Nm (physiologically backward); the UNSWAPPED mapping (same
+convention as genuine isometric/isovelocity) gave 36/36 POSITIVE. **This
+narrows the scope of the original stim_side mislabeling bug**: it is
+specific to `make_stimuli()`'s CYCLING-phase sine-burst logic (which
+extremum of the oscillation a burst is centered on), NOT the separate,
+non-cyclic pre-/post-stim bookend triggering -- apparently a different
+code path inside `make_stimuli()`. CORRECTION to a hypothesis raised while
+investigating this: `muscle_force_vector.R::.mfv_finalize_step()`'s
+force_zTorque_N side-correction and `run_fv_fl_power_pipeline.R`'s
+L0-bookend block (~line 548, feeding `plot_fatigue_timeline.R`) already use
+this same unswapped mapping for bookend rows -- CONFIRMED correct, not a
+bug (an earlier draft of this addendum incorrectly flagged it as one
+before the empirical test was run).
+
+**Result:** trial/burst-level tension points expand from n=4
+(isometric-only) to **n=30** (11 isometric, 8 isovelocity_v0, 11
+dynamic_l0_bookend trial/file rows; right side, "later (stable)" only, same
+filters as the production panel). All 3 sources land in the SAME low range
+(~0.01-0.55 N/cm^2, i.e. ~0.1-5.5 kN/m^2) -- consistent with, not
+independent of, the active-minus-passive subtraction problem documented in
+the baseline-method-sensitivity addendum above: more genuine isometric-type
+contractions were found, but they do not change the underlying tension
+magnitude, since all 3 sources use the same (small-residual-prone)
+subtraction. 29/30 points are the physiologically-expected sign; one
+outlier (bass16 trial 10 dynamic_l0_bookend, -0.0272 N/cm^2) is small in
+magnitude and consistent with the residual being noise-dominated at this
+scale.
+
+**Outputs:** `figs_diagnostic/isometric_tension_expanded_sources_trialmax.png`,
+`..._distribution.png`; `data_processed/isometric_tension_expanded_sources_
+allsteps.csv` (every step/burst, all sides, all preconditioning phases) and
+`..._trialtension.csv` (trial-level, right side, later/stable only).
+DIAGNOSTIC ONLY -- not yet wired into `summary_coughlin2000_bass_
+comparison.R`'s production panel B; promoting it would require deciding
+whether to pool all 3 sources into one trial-max distribution or keep them
+as separate strata, a PI call not made here.
+
+### 2026-07-25 addendum -- which passive-baseline alternative is most likely
+### to resolve true muscle force? (`diag_isometric_strongest_contraction_baseline_visual.R`)
+
+Checked whether isometric trials have a matched-no-stim-control rep (the
+gold-standard alternative, already used for isovelocity's bilateral_
+simultaneous calibration steps): **no** -- every isometric step is
+stimulated (left_/right_unilateral only, verified directly against
+bass17_bender_15's full step table), so that option is unavailable for this
+protocol as currently run.
+
+Implemented and visualized the pooled/model-based alternative instead:
+regressed EVERY step's own pre-/post-baseline window mean (all 32 steps of
+bass17's trial) on elapsed REAL session time (wall_clock_start-based --
+`t.s` resets per step and cannot be compared across steps) AND commanded
+operating_point (quadratic term). R^2=0.938 -- passive torque depends
+strongly and smoothly on bend angle, confirming this is real signal worth
+modeling, not noise. A first NAIVE version of this idea (loess on elapsed
+time alone, no position term) gave a nonsense answer, because this ramped
+FL protocol changes operating_point systematically with elapsed time --
+time-only smoothing rides straight through that confound. Logged as a
+caught methodological error, fixed before use.
+
+**Result on the single largest-signal step in the corpus** (bass17,
+`2026-07-15_bass17_bender_15_isometric`, step 16, 28.4% strain, raw
+tension -321 kN/m^2): `pre_static`=11.4, `post_static`=-22.3,
+`interp_linear`=6.35, `interp_closest`=1.34, **`pooled_regression`=-68.1**
+kN/m^2. The pooled method, despite using ~16x more data and a
+statistically well-supported model, does NOT converge with the simpler
+methods -- it lands closer in magnitude (though still ~2.6x below) to the
+raw estimate, with the OPPOSITE sign from pre_static/interp_linear/
+interp_closest. This is not a bug; it is the same core problem re-
+expressed: the passive baseline is measurably still decaying at the time
+of the stim window, and different defensible ways of extrapolating that
+decay through the ~0.8s stim+deactivation window give answers spanning a
+~50x range (1.3 to 68 kN/m^2), all still below Coughlin's 180 +/- 33.6.
+**No subtraction-based method, however data-rich, can be fully trusted
+here** -- the ambiguity is in which passive TRAJECTORY (not which window)
+is correct through the very interval the active signal occupies, and torque
+alone cannot distinguish them. Alternative #3 (onset-kinetics / signature
+detection, or sonomicrometry-based force) remains untested and is the most
+likely path to actually resolve this, since it does not depend on
+extrapolating a passive trend through the contested interval at all.
+
+**Output:** `figs_diagnostic/isometric_strongest_contraction_baseline_
+methods_visual.png` (3-panel: position-dependence justification, zoomed
+step trace with all method anchors, resulting tension by method).
+
+### 2026-07-25 addendum -- FL/FV/isometric-tension summary figures drawn using the pooled-regression baseline (EXPLORATORY, figs_summary)
+
+PI directive: "let's draw FL and FV and isometric tension plots
+(figs_summary) using the pooled model data." Caveat given and accepted
+before building: the pooled position+time regression baseline disagreed
+with simpler methods (opposite sign, ~6x magnitude) on the one step tested
+above -- using more data does not prove the method is more ACCURATE, only
+that it is better-powered statistically. These are exploratory figures, not
+replacements for the canonical static-baseline FL/FV (`run_fv_fl_power_
+pipeline.R`, `plot_summary_profiles.R`) or tension (`summary_coughlin2000_
+bass_comparison.R`) outputs.
+
+**New script:** `R/summary_fl_fv_tension_pooled_regression_baseline.R`.
+Generalizes the single-step `pooled_regression` method from the addendum
+above into a reusable per-trial fit (`fit_trial_pooled_passive_model()`):
+for EACH trial independently, regress `torque ~ elapsed_session_time_s +
+operating_point + I(operating_point^2)` on that trial's own step pre-/post-
+baseline window means, then predict the passive reference at each step's
+own active-window time. Applied uniformly to BOTH isometric and
+isovelocity protocols (isovelocity's own better-motivated velocity-matched
+baseline is deliberately NOT used here, so all three outputs share one
+method for a clean comparison). Reuses the existing, UNMODIFIED
+`build_summary_plot_isometric()`/`build_summary_plot_isovelocity()`
+builders via the documented "swap in a different `muscle_force_Nm` column"
+pattern (same mechanism as the pre-existing `_baselineInterp` variant).
+
+NOTE on terminology collision: "pooled" here means the PASSIVE-BASELINE
+METHOD (regression pooling one trial's own steps), NOT "pooled across
+specimens" the way `superplot_fl_pooled.R` uses the word (that script pools
+3 different V=0 sources across FISH using the vector-force method with
+F/F0 normalization -- unrelated, untouched by this addendum).
+
+**Fit quality:** isometric per-trial R^2 = 0.94-1.00 (5 trials, strong --
+operating_point explains passive torque well within a ramped-position
+protocol). Isovelocity per-trial R^2 = 0.40-0.69 (11 trials, much weaker --
+isovelocity holds fewer distinct operating points per trial, giving the
+regression less to work with).
+
+**Result:** all three outputs still show forces/tensions far below Coughlin
+(2000)'s 180 +/- 33.6 kN/m^2 band -- isometric tension (right side, all
+trials) mostly 0-25 kN/m^2 with several negative values (bass17 in
+particular ranges -68 to +55 across trials). This is consistent with the
+step-16 finding: switching passive-baseline METHOD alone, however
+data-rich, does not close the gap to literature.
+
+**Outputs** (`figs_summary/`, all titled/captioned "EXPLORATORY" +
+"POOLED-REGRESSION passive baseline", not to be confused with any canonical
+figure):
+- `FL_isometric_pooledRegressionBaseline.png`
+- `FV_isovelocity_pooledRegressionBaseline.png`
+- `isometricTension_pooledRegressionBaseline.png`
+
+### 2026-07-27 addendum -- anchoredPooledRate QC check, all 5 isometric trials (does NOT override legacy yet)
+
+PI directive: test a hybrid passive-baseline method across all 5 isometric
+trials (bass16 x2, bass17 x1, bass18 x2), goal = best muscle-force signal,
+sign-flips/symmetry "very important but not non-negotiable." Explicitly
+scoped to isometric only (isovelocity deferred -- it already has a
+self-contained `velocity_matched` no-stim comparison for most steps, a
+different problem). PI decision rule: any future override of `legacy` in a
+production figure requires (a) a comparison plot, (b) this log entry,
+BOTH before the switch -- this addendum satisfies that requirement for the
+record, but does NOT itself flip the switch.
+
+**Method tested: `anchoredPooledRate`.** Keeps `baselineInterp`'s anchor
+(each step's OWN pre-stim window as the intercept -- why interp stays
+reliable) but replaces the per-step 2-point relaxation RATE with a POOLED,
+same-TRIAL (never cross-trial), smoothed rate-vs-operating_point model
+(`local_rate ~ operating_point + I(operating_point^2)`, fit on all of that
+trial's own steps). Rationale: a 2-point rate estimate is noisy; pooling
+should reduce that noise without pooled_regression's failure mode (which
+predicted the ABSOLUTE passive value from cross-step data, letting
+session-wide drift contaminate one step's estimate -- anchoring to the
+step's own pre-value avoids that). New script:
+`R/diag_isometric_anchoredPooledRate_qc.R`.
+
+**Result 1 -- sign-flip rate** (legacy vs. interp vs. anchoredPooledRate,
+74 concentric/eccentric steps, all 3 methods available): 5/74 (6.8%)
+overall, concentrated in 2 of 5 trials -- bass17_bender_15 (4/28, 14.3%)
+and bass16_bender_15 (1/12, 8.3%); the other 3 trials (bass16_bender_09,
+bass18_bender_04, bass18_bender_11) show 0 flips. Consistent with the PI's
+prediction that some trials would show "funky" behavior as a minority.
+
+**Result 2 -- concentric/eccentric asymmetry vs. baselineInterp** (the
+within-trial drift-corrected reference): `legacy` is badly asymmetric --
+bigger than interp in 92.5% of concentric steps but only 11.8% of
+eccentric steps (mean diff +0.00129 N*m concentric, -0.00019 N*m
+eccentric) -- reproducing the PI-confirmed bias direction from the
+single-trial check. `anchoredPooledRate` nearly ELIMINATES the concentric
+bias (52.5% bigger-than-interp, i.e. a coin flip; mean diff
+-0.0000025 N*m, essentially zero) but leaves a smaller RESIDUAL asymmetry
+on the eccentric side (88.2% bigger-than-interp; mean diff +0.0003 N*m --
+small in absolute terms, same order as the sign-flip noise floor, but
+notably the asymmetry's DIRECTION flips sides relative to legacy rather
+than disappearing outright).
+
+**Interpretation:** anchoredPooledRate is a real improvement over legacy
+on the metric the PI cares about (concentric bias almost fully resolved)
+without reintroducing pooled_regression's sign-disagreement failure mode
+(flip rate stayed low, 6.8%, and confined to 2/5 trials). It has NOT fully
+matched interp everywhere -- a small eccentric-side residual remains,
+worth understanding before promotion (candidate causes: quadratic rate
+model may not fully capture eccentric-side relaxation shape; untested
+whether interp itself, not anchoredPooledRate, is the one with residual
+eccentric bias here).
+
+**Output:** `figs_diagnostic/isometric_anchoredPooledRate_qc_comparison.png`
+(6-panel: legacy/interp/anchoredPooledRate scatter, sign-flip-rate bar by
+trial, concentric/eccentric asymmetry bar). Per-step data:
+`data_processed/isometric_anchoredPooledRate_qc_allsteps.csv`.
+
+**Status: NOT promoted.** `legacy` remains the production default
+everywhere; `anchoredPooledRate` exists only in this QC script. No
+production figure changed by this addendum.
+
+### 2026-07-27 addendum -- cross-trial rate pooling test (does eccentric residual survive more data?)
+
+PI follow-up: compare the per-trial `anchoredPooledRate` against a
+cross-trial variant, to diagnose whether the small eccentric-side residual
+found above is a small-sample artifact (should shrink with more data) or a
+real structural effect (should persist/hold steady). Same script
+(`diag_isometric_anchoredPooledRate_qc.R`), extended with a 4th method:
+
+**`anchoredPooledRate_crossTrial`:** identical anchor (each step's own
+pre-window), but the relaxation-rate model now pools `local_rate ~
+operating_point + I(operating_point^2)` across ALL of one SPECIMEN's
+isometric trials (never across different fish) -- bass16 (2 trials/24
+steps), bass18 (2 trials/26 steps) get real pooling; bass17 has only 1
+isometric trial so this is a no-op there (used as an internal check --
+bass17's numbers should be identical to the per-trial version, confirmed).
+
+**Fit quality held up well with more data:** per-specimen R^2 = 0.906
+(bass17, unchanged, single-trial) / 0.929 (bass18) / 0.970 (bass16) --
+comparable to or better than the per-trial fits.
+
+**Result: the eccentric residual did NOT shrink -- it got slightly MORE
+consistent.** Concentric bias stayed effectively zero either way (per-trial
+52.5% bigger-than-interp / mean diff -0.0000025 N*m; cross-trial 42.5% /
+-0.0000030 N*m). Eccentric bias, however, went from 88.2% bigger-than-interp
+(mean diff +0.0003 N*m) per-trial to 94.1% (mean diff +0.00034 N*m)
+cross-trial -- MORE steps agree on the same direction with more pooled
+data, not fewer. Sign-flip rate was unchanged by adding the cross-trial
+method (same 5/74 flips, same 2 trials, bass17_bender_15 and
+bass16_bender_15).
+
+**Interpretation:** more data pooling made the eccentric-side residual
+more consistent, not less -- evidence AGAINST "small-sample noise" as the
+explanation. This points toward either (a) a real, structural difference
+in eccentric-side relaxation shape that a quadratic-in-operating_point
+rate model doesn't capture (still side-agnostic in principle, but the
+FUNCTIONAL FORM of decay-rate-vs-angle may differ for extension vs.
+flexion in a way {a purely even/quadratic term can't represent -- an odd
+term, or a genuinely different rate depending on bend direction, would be
+the next thing to test), or (b) `baselineInterp` itself (the reference
+used for all these comparisons) is the one carrying a small eccentric-side
+bias, not anchoredPooledRate. Neither is resolved yet.
+
+**Output:** figure and CSV overwritten in place (now 4-method comparison):
+`figs_diagnostic/isometric_anchoredPooledRate_qc_comparison.png`,
+`data_processed/isometric_anchoredPooledRate_qc_allsteps.csv`.
+
+**Status: still NOT promoted.** Legacy remains the production default.
+
+### 2026-07-27 addendum -- H1/H2 hypothesis tests: eccentric residual explained (direction asymmetry + session-order rate decay)
+
+PI directive: test both hypotheses left open by the cross-trial pooling
+result, with a clear figure. New script:
+`R/diag_isometric_baseline_hypothesis_tests.R`. Output:
+`figs_diagnostic/isometric_baseline_hypothesis_tests.png` (4 panels),
+`data_processed/isometric_baseline_hypothesis_tests_matchedbend.csv`.
+
+**H1 (rate-vs-bend-angle is direction-asymmetric): SUPPORTED, decisively,
+in all 3 specimens.** Compared the current symmetric model
+(`local_rate ~ operating_point + I(operating_point^2)`) against a
+direction-split model (separate quadratic per bend direction):
+
+| specimen | R2 symmetric | R2 split | dAIC | F-test p |
+|---|---|---|---|---|
+| bass16 | 0.970 | 0.981 | -8.9  | 6.5e-3 |
+| bass17 | 0.906 | 0.990 | -64.8 | 1.3e-12 |
+| bass18 | 0.929 | 0.981 | -31.5 | 1.3e-6 |
+
+Residuals of the CURRENT model (Panel B) are equal-and-opposite by bend
+direction -- positive-mean on negative bends, negative-mean on positive
+bends, in all 3 specimens -- the exact signature of a real asymmetry being
+absorbed by a model that cannot represent it. IMPORTANT: bend direction is
+COUNTERBALANCED in session time by the protocol's block order (bass17:
+block1 +op, block2 -op, block3 -op, block4 +op), so this asymmetry is NOT
+a session-order artifact.
+
+**H2 (baselineInterp is the biased reference): the test as designed is
+COMPLETELY CONFOUNDED and cannot answer the question as posed -- but it
+revealed the actual cause of the eccentric residual.** The matched-bend
+test (34 pairs: same signed bend, same trial, opposite labels) found a
+significant label difference (mean rate_ecc - rate_conc = +1.6e-4 N*m/s,
+p = 0.0016). However, the protocol runs ALL concentric blocks BEFORE all
+eccentric blocks, so in 34 of 34 pairs the eccentric member came LATER in
+the session. Label and session order are perfectly confounded here; no
+label-vs-order attribution is possible from this protocol as run.
+
+Digging into the DIRECTION of that difference resolves it anyway: the
+later (eccentric) member has a SMALLER-MAGNITUDE relaxation rate in 27/34
+pairs, mean |rate| ratio 0.831 (a ~17% shrink), paired t-test on |rate|
+p = 1.6e-5, and the signed difference anti-correlates with operating_point
+at r = -0.881 (exactly what a pure magnitude-shrink produces, since rate
+flips sign with bend direction). That is not a label effect at all -- it
+is PROGRESSIVE SESSION-LEVEL RELAXATION: the tissue's relaxation RATE
+itself decays over the session, and because eccentric blocks always run
+late, that decay masquerades as an eccentric-side bias.
+
+**Synthesis -- the eccentric residual has two separable causes, neither of
+them "eccentric mechanics":**
+1. the rate model's functional form is direction-symmetric when the real
+   rate-vs-angle relationship is not (H1), and
+2. the rate model has no session-time term, while the real rate decays
+   ~17% over a session (H2's confound, reinterpreted).
+Both are fixable in the rate model itself. Neither implicates
+`baselineInterp` as a biased yardstick, and neither is a property of
+eccentric contraction.
+
+**Arbiter (reference-free repeatability) does NOT discriminate.** Mean
+within-condition SD of muscle force across 14 repeated conditions
+(bass16/bass18, same side/mode/strain measured in two separate trials):
+legacy 3.71e-3, baselineInterp 3.65e-3, anchoredPooledRate 3.74e-3,
+anchoredPooledRate_crossTrial 3.71e-3 N*m. All four within ~2% of each
+other -- as predicted in the script header, this metric is dominated by
+real between-trial fatigue, not by baseline-method noise, so it cannot
+rank the methods. Do not cite it as evidence for or against any method.
+
+**Implied next step (NOT yet done, needs PI approval):** re-fit the
+anchored rate model with (a) a direction-split term and (b) an
+elapsed-session-time term, then re-run the QC comparison. Expect the
+eccentric residual to shrink toward the concentric one if this diagnosis
+is right -- which is itself the test.
+
+**Status: still NOT promoted.** Legacy remains the production default;
+nothing in production changed.
+
+### 2026-07-27 addendum -- anchoredRate_dirTime (v2): diagnosis CONFIRMED, eccentric residual essentially eliminated
+
+PI directive: refit the anchored rate model with the two terms the H1/H2
+tests identified as missing, and re-run the QC comparison. New script:
+`R/diag_isometric_anchoredRate_v2_dirTime.R`. Output:
+`figs_diagnostic/isometric_anchoredRate_v2_dirTime.png`,
+`data_processed/isometric_anchoredRate_v2_dirTime_allsteps.csv`.
+
+**Model `anchoredRate_dirTime` (v2).** Anchor unchanged (each step's own
+pre-stim window supplies the absolute passive level -- cross-step data can
+never contaminate it). Rate model only:
+  v1: `local_rate ~ operating_point + I(operating_point^2)`
+  v2: `local_rate ~ bend_dir * (operating_point + I(operating_point^2))
+                    + elapsed_in_trial_s + trial_id`
+Fit per specimen (pooled across that specimen's own isometric trials).
+`trial_id` drops automatically for bass17 (single isometric trial).
+`elapsed_in_trial_s` is WITHIN-trial elapsed time, the correct covariate
+for a block-order effect.
+
+**Score (a), REFERENCE-FREE (RMSE of predicted rate vs. each step's OWN
+measured local rate -- needs no ground truth and no reference method):**
+
+| specimen | R2 v1 | R2 v2 | RMSE v1 | RMSE v2 | RMSE reduction |
+|---|---|---|---|---|---|
+| bass16 | 0.970 | 0.983 | 1.78e-4 | 1.36e-4 | -24% |
+| bass17 | 0.906 | 0.990 | 7.21e-4 | 2.34e-4 | -68% |
+| bass18 | 0.929 | 0.982 | 3.58e-4 | 1.81e-4 | -50% |
+
+v2 reproduces the actually-measured relaxation rates far better in all 3
+specimens. This score does not reference interp at all, so it is not
+circular.
+
+**Score (b), divergence from baselineInterp by contraction mode -- the
+asymmetry collapsed, as predicted:**
+
+| method | conc mean diff | ecc mean diff | asymmetry GAP |
+|---|---|---|---|
+| legacy | +1.29e-3 (92.5% bigger) | -1.92e-4 (11.8%) | 80.7 pct-pts / 1.48e-3 N*m |
+| anchoredPooledRate_crossTrial (v1) | -3.0e-6 (42.5%) | +3.39e-4 (94.1%) | 51.6 pct-pts / 3.42e-4 N*m |
+| **anchoredRate_dirTime (v2)** | **+9.4e-5 (75.0%)** | **+5.5e-5 (58.8%)** | **16.2 pct-pts / 3.94e-5 N*m** |
+
+The concentric-vs-eccentric gap fell 80.7 -> 51.6 -> 16.2 percentage
+points, and in mean terms 1.48e-3 -> 3.42e-4 -> 3.94e-5 N*m (a 37x
+reduction vs legacy, 8.7x vs v1). Both modes now sit near zero. Divergence
+SCATTER dropped too (SD, conc/ecc): legacy 1.42e-3/1.45e-3, v1
+4.92e-4/3.26e-4, v2 1.88e-4/1.60e-4 -- v2 tracks interp tightly
+step-by-step, not just on average.
+
+**Conclusions.**
+1. The H1+H2 diagnosis is CONFIRMED. The eccentric residual was a
+   direction-asymmetric rate shape plus an unmodelled within-session rate
+   decay, not eccentric muscle mechanics and not a defect of interp.
+2. **H2 is effectively REJECTED**: v2 CONVERGES on `baselineInterp` in both
+   modes. If interp had been the biased yardstick, a better rate model
+   would have moved away from it, not toward it. Interp was right all
+   along.
+3. Consequently v2's advantage over interp is NOT bias correction (they now
+   agree) -- it is noise smoothing: a pooled, structurally-informed rate
+   estimate instead of each step's own 2-point rate. That benefit is
+   plausible but NOT independently demonstrated; the reference-free
+   repeatability arbiter could not resolve differences this small (see
+   previous addendum).
+4. Sign-flip rate is UNCHANGED by v2 (still 5/74, same 2 trials:
+   bass17_bender_15 4/28, bass16_bender_15 1/12). Those steps are
+   therefore genuine weak-signal/low-SNR cases, not baseline-method
+   artifacts -- consistent with the PI's expectation that a minority of
+   trials would have "funky" stimulation.
+
+**Practical implication for the promotion decision:** the real choice is
+now `legacy` (clearly worst -- large, direction-flipping bias) vs.
+`baselineInterp` vs. `anchoredRate_dirTime`, with the latter two agreeing
+closely. interp is far simpler (no model, no fitting, already implemented
+in production as `muscle_force_Nm_interp`); v2 is defensible but adds
+machinery for a benefit that is real in the rate domain (score (a)) yet
+unproven in the force domain.
+
+**Status: still NOT promoted.** Legacy remains the production default;
+nothing in production changed by this addendum.
+
+### 2026-07-27 addendum -- `legacy` ABANDONED, `optimizedbaseline` added to production (PI directive)
+
+**PI directive (verbatim):** "Let's abandon legacy and move forward with
+best practice. Don't delete figs yet. Just append 'optimizedbaseline' [to]
+the summary and diagnostic figures."
+
+**Decision.** Per the two addenda immediately above, `legacy` (pre-only
+static baseline) is abandoned: it has a confirmed, direction-dependent bias
+(overestimates concentric |force|, underestimates eccentric |force|) with
+no counteracting benefit. `anchoredRate_dirTime` (v2) was defensible but
+converged onto `baselineInterp` rather than beating it (H2 rejected,
+addendum above) -- so **`baselineInterp` is the new endorsed default**,
+not the more complex v2 model. Per PI instruction, existing legacy-baseline
+figures are **NOT deleted** -- new, parallel figures are added alongside
+them, suffixed `_optimizedbaseline`.
+
+**Decision tree** (reflects the new logic; saved as a figure, see below):
+- DYNAMIC: unchanged (phase-matched halfcycle subtraction; self-contained,
+  never used legacy).
+- ISOMETRIC: no no-stim control exists by protocol design (unchanged) ->
+  **now `baselineInterp`** (was `legacy`).
+- ISOVELOCITY: `velocity_matched` unchanged where a real no-stim match
+  exists; **fallback is now `baselineInterp`** (was `legacy`, i.e.
+  `static_baseline_fallback`).
+
+**Production code change (`R/03_analyze.R::build_segmented_step_summary()`,
+additive only -- no existing column touched):** two new columns,
+`passive_force_Nm_optimizedbaseline` / `muscle_force_Nm_optimizedbaseline`:
+- `velocity_matched` (isovelocity, real no-stim step at the same commanded
+  velocity) when it exists and is finite -- identical to the existing
+  `passive_force_Nm`/`muscle_force_Nm` in this case.
+- else `passive_force_Nm_interp` / `muscle_force_Nm_interp` (already
+  existed, unused by production until now) -- replaces the old fallback to
+  the pre-only static baseline.
+- `passive_force_source_optimizedbaseline` records which of the two was
+  used per step, for QA.
+- Verified (isovelocity, bass16/17/18, all trials): 20 real (non-NA-active)
+  steps across the corpus actually took the interp fallback instead of
+  static (the other 8 nominal "fallback" rows are the no-stim reference
+  steps themselves, trivially self-unmatched and NA regardless of baseline
+  choice) -- shifts of 1e-4 to 0.09 N*m in `muscle_force_Nm`, concentrated
+  in the bass18 single-velocity trials that lack an in-trial no-stim match.
+  Isometric: 100% of steps take the interp path (no `velocity_matched`
+  option ever exists for that protocol), confirmed identical to the
+  pre-existing `muscle_force_Nm_interp`.
+
+**New figures (all additive, nothing deleted):**
+- `figs_diagnostic/passiveSubtraction_decisionTree_optimizedbaseline.png`
+  (`R/plot_passive_subtraction_decision_tree.R`) -- the updated decision
+  tree above, rendered as a flowchart (green = method used, yellow = rare
+  fallback, red = abandoned).
+- `figs_summary/FL_isometric_optimizedbaseline.png`,
+  `figs_summary/FV_isovelocity_optimizedbaseline.png`,
+  `figs_summary/isometricTension_optimizedbaseline.png`
+  (`R/summary_fl_fv_tension_optimizedbaseline.R`) -- same cross-trial
+  pooling/plot-builder pattern as the existing `_baselineInterp` and
+  `_pooledRegressionBaseline` variants, with `muscle_force_Nm` swapped for
+  `muscle_force_Nm_optimizedbaseline`. The isometric tension panel still
+  sits well below the Coughlin (2000) band -- this promotion changes WHICH
+  baseline is used, it does not resolve the separate specific-tension gap
+  documented earlier in this log (small-signal/large-passive-baseline
+  problem, CSA assumption, etc.).
+
+**What did NOT change in this pass (explicitly out of scope, one-fix-at-a-
+time):**
+- The existing `muscle_force_Nm`/`passive_force_Nm` columns (still
+  `legacy`-based) are untouched -- any script currently reading them is
+  unaffected until it is separately migrated.
+- The canonical legacy-baseline figures (`run_fv_fl_power_pipeline.R`'s
+  per-trial outputs, `plot_summary_profiles.R`-based summary figures,
+  `summary_coughlin2000_bass_comparison.R`'s Coughlin panel) are NOT
+  regenerated or altered -- only new `_optimizedbaseline`-suffixed siblings
+  were added for the cross-trial FL/FV/tension summary figures. The
+  per-trial figures produced inside `run_fv_fl_power_pipeline.R`'s own loop
+  were NOT touched in this pass (would require editing that pipeline's
+  main loop, a larger change than "append a figure") -- flagged as a
+  follow-up if the PI wants every per-trial figure re-rendered under
+  `optimizedbaseline` too.
+- `R/compare_specimen_specific_properties.R`'s stale duplicate
+  `.attach_dynamic_muscle_force()` (flagged 2026-07-25) is unrelated to
+  this (isometric/isovelocity-only) change and remains a separate
+  follow-up.
+- The underlying `stim_side` metadata bug (Python rig code) is unrelated
+  and remains a separate follow-up, as previously noted.

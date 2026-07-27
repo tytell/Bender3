@@ -1004,6 +1004,24 @@ LEGACY_PEAK_WINDOW_S <- 0.15
 #'   moving, i.e. isometric) or "velocity_matched" (isovelocity: passive
 #'   torque taken from a same-operating_point no-stim step instead; falls
 #'   back to the static baseline for any step lacking a no-stim match).
+#'
+#' RECOMMENDED FORCE COLUMN FOR NEW WORK (PI directive 2026-07-27, "abandon
+#' legacy and move forward with best practice" -- see
+#' analysis_muscle_force_vector_log.md "2026-07-27 addendum -- `legacy`
+#' ABANDONED..." for the full decision trail and the decision-tree figure,
+#' figs_diagnostic/passiveSubtraction_decisionTree_optimizedbaseline.png):
+#' use `muscle_force_Nm_optimizedbaseline` / `passive_force_Nm_optimizedbaseline`,
+#' NOT the plain `muscle_force_Nm`/`passive_force_Nm` above (kept only for
+#' backward compatibility / legacy-figure reproducibility -- it still falls
+#' back to the direction-biased static baseline). `_optimizedbaseline`
+#' prefers a real `velocity_matched` no-stim step where one exists, else
+#' `baselineInterp` (pre+post linear interpolation) -- computed automatically
+#' by THIS function (and inherited for free by `analyze_isovelocity()`,
+#' which calls this function internally). No separate call is needed: build
+#' the step_summary as usual, then read/plot `muscle_force_Nm_optimizedbaseline`
+#' instead of `muscle_force_Nm` (same swap-in pattern already used for the
+#' `_baselineInterp`/`_pooledRegressionBaseline` figure variants -- see
+#' `R/summary_fl_fv_tension_optimizedbaseline.R` for a worked example).
 build_segmented_step_summary <- function(td, filename = attr(td, "Filename"),
                                          torque_col = "torque_inertia_corrected_Nm",
                                          deactivation_window_s = 0.5,
@@ -1117,6 +1135,10 @@ build_segmented_step_summary <- function(td, filename = attr(td, "Filename"),
     steps$passive_force_Nm_matched <- unname(matched[as.character(steps$step_number)])
     # fall back to the static baseline for any step lacking a same-velocity
     # no-stim match, rather than silently dropping it from the FL/FV data.
+    # NOTE (2026-07-27, kept for reproducibility/backward compat -- see
+    # `passive_force_Nm_optimizedbaseline` below for the endorsed fallback):
+    # this is `legacy`'s pre-only static baseline, PI-confirmed to have a
+    # direction-dependent bias (analysis_muscle_force_vector_log.md).
     steps$passive_force_Nm <- dplyr::if_else(
       is.finite(steps$passive_force_Nm_matched),
       steps$passive_force_Nm_matched, steps$passive_force_Nm_static
@@ -1127,6 +1149,34 @@ build_segmented_step_summary <- function(td, filename = attr(td, "Filename"),
   } else {
     steps$passive_force_Nm <- steps$passive_force_Nm_static
     steps$passive_force_source <- "static_baseline"
+  }
+
+  # `optimizedbaseline` (PI-directed 2026-07-27, "abandon legacy and move
+  # forward with best practice" -- see analysis_muscle_force_vector_log.md
+  # for the full investigation): the single best-available passive estimate
+  # per step, preferring a REAL matched no-stim measurement over any
+  # extrapolation, and preferring interpolation (`passive_force_Nm_interp`)
+  # over the plain pre-only static baseline whenever extrapolation is the
+  # only option. This changes ONLY the fallback used when no matched no-stim
+  # step exists (isovelocity) or none can exist by protocol design
+  # (isometric) -- `static_baseline`/`velocity_matched` themselves, and the
+  # existing `passive_force_Nm`/`muscle_force_Nm` columns above, are
+  # UNCHANGED, so nothing that already reads them is affected.
+  #   velocity_matched exists and is finite -> use it (unchanged, best case)
+  #   otherwise                              -> passive_force_Nm_interp
+  #                                              (replaces the old
+  #                                              static-baseline fallback)
+  has_matched <- "passive_force_Nm_matched" %in% names(steps)
+  steps$passive_force_Nm_optimizedbaseline <- if (has_matched) {
+    dplyr::if_else(is.finite(steps$passive_force_Nm_matched),
+                   steps$passive_force_Nm_matched, steps$passive_force_Nm_interp)
+  } else {
+    steps$passive_force_Nm_interp
+  }
+  steps$passive_force_source_optimizedbaseline <- if (has_matched) {
+    dplyr::if_else(is.finite(steps$passive_force_Nm_matched), "velocity_matched", "interp")
+  } else {
+    "interp"
   }
 
   steps <- steps |>
@@ -1144,6 +1194,13 @@ build_segmented_step_summary <- function(td, filename = attr(td, "Filename"),
       # isovelocity steps too even though only the isometric path currently
       # surfaces it in plots/fits.
       muscle_force_Nm_interp = .data$force_sign * (.data$active_force_Nm - .data$passive_force_Nm_interp),
+      # `optimizedbaseline` counterpart -- see passive_force_Nm_optimizedbaseline
+      # comment above. Isometric: identical to muscle_force_Nm_interp (no
+      # velocity_matched option exists for that protocol). Isovelocity:
+      # identical to muscle_force_Nm wherever a real velocity_matched no-stim
+      # step exists; differs only on the steps that used to fall back to the
+      # static baseline, which now fall back to interp instead.
+      muscle_force_Nm_optimizedbaseline = .data$force_sign * (.data$active_force_Nm - .data$passive_force_Nm_optimizedbaseline),
       muscle_depth_mm_used  = depth$depth_mm,
       muscle_depth_assumed  = depth$assumed
     )
