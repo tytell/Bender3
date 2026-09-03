@@ -4152,6 +4152,206 @@ def _seed_cfg_build_from_source_config(source_config: str) -> None:
     st.session_state['gui_cfg_bld_poststim_time'] = float(d['poststim_time'])
 
 
+def _apply_cfg_bld_fields_to_bender(b: Bender) -> Optional[str]:
+    """Copy ``gui_cfg_bld_*`` widget values onto the live ``Bender`` instance.
+
+    Called by **Apply setup** so operator edits to Step-1 fields take effect
+    without requiring a "Write config file and load" round-trip. Returns an
+    error message string on validation failure, or ``None`` on success.
+    """
+    # --- metadata-only labels (no hardware consequence) ---
+    b.session_apparatus_id = str(st.session_state.get('gui_cfg_bld_apparatus_id') or '')
+    b.positive_motor_direction = str(st.session_state.get('gui_cfg_bld_positive_motor_direction') or 'left')
+    b.motor_axis = str(st.session_state.get('gui_cfg_bld_motor_axis') or '')
+    b.bending_axis_sensor = str(st.session_state.get('gui_cfg_bld_bending_axis_sensor') or 'z')
+    b.bending_axis_specimen = str(st.session_state.get('gui_cfg_bld_bending_axis_specimen') or 'dorsoventral')
+    b.primary_bending_axis = str(st.session_state.get('gui_cfg_bld_primary_bending_axis') or 'zTorque')
+    b.S1side = str(st.session_state.get('gui_cfg_bld_S1side') or 'left')
+    b.S2side = str(st.session_state.get('gui_cfg_bld_S2side') or 'right')
+
+    # --- specimen lateral index (re-derive side indices) ---
+    try:
+        lat_idx = int(st.session_state.get('gui_cfg_bld_specimen_lateral_index') or -1)
+    except (TypeError, ValueError):
+        lat_idx = -1
+    if lat_idx == 0:
+        return 'Specimen lateral index must be non-zero (signed index for the anatomical side on positive motor direction).'
+    b.specimen_lateral_index_on_positive_motor_side = lat_idx
+    pm = str(b.positive_motor_direction).lower()
+    if pm == 'left':
+        b.specimen_side_index_left = lat_idx
+        b.specimen_side_index_right = -lat_idx
+    elif pm == 'right':
+        b.specimen_side_index_right = lat_idx
+        b.specimen_side_index_left = -lat_idx
+
+    # --- DAQ rates (validate before writing) ---
+    try:
+        ai_sr = float(st.session_state.get('gui_cfg_bld_daq_ai_sr') or 1000.0)
+    except (TypeError, ValueError):
+        ai_sr = 0.0
+    if not np.isfinite(ai_sr) or ai_sr < b.DAQ_AI_RATE_FLOOR_HZ:
+        return f'AI sample rate must be >= {b.DAQ_AI_RATE_FLOOR_HZ} Hz; got {ai_sr}.'
+    try:
+        ao_sr = float(st.session_state.get('gui_cfg_bld_daq_ao_sr') or 60000.0)
+    except (TypeError, ValueError):
+        ao_sr = 0.0
+    if not np.isfinite(ao_sr) or ao_sr <= 0:
+        return f'AO/DO sample rate must be > 0 Hz; got {ao_sr}.'
+    b._config_daq_ai_sample_rate_hz = ai_sr
+    b.daq_ai_sample_rate_hz = ai_sr
+    b.daq_ao_do_sample_rate_hz = ao_sr
+
+    # --- motor ---
+    try:
+        motor_steps = int(st.session_state.get('gui_cfg_bld_motor_steps') or 1600)
+    except (TypeError, ValueError):
+        motor_steps = 1600
+    if motor_steps < 1:
+        return 'Motor full steps per rev must be >= 1.'
+    try:
+        motor_gear = int(st.session_state.get('gui_cfg_bld_motor_gear') or 5)
+    except (TypeError, ValueError):
+        motor_gear = 5
+    if motor_gear < 1:
+        return 'Motor gear ratio must be >= 1.'
+    b.motor_full_steps_per_rev = motor_steps
+    b.motor_gear_ratio = motor_gear
+
+    # --- encoder ---
+    try:
+        enc_ppr = int(st.session_state.get('gui_cfg_bld_encoder_ppr') or 10000)
+    except (TypeError, ValueError):
+        enc_ppr = 10000
+    if enc_ppr < 1:
+        return 'Encoder pulses per rev must be >= 1.'
+    b.encoder_pulses_per_rev = enc_ppr
+
+    # --- device ---
+    b.device_name = str(st.session_state.get('gui_cfg_bld_device_name') or 'Dev1')
+
+    # --- channels (motor, encoder, stim) ---
+    b.motor_port = str(st.session_state.get('gui_cfg_bld_motor_port') or '')
+    b.encoder_chan = str(st.session_state.get('gui_cfg_bld_encoder_chan') or 'ctr0')
+    stim_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_channels') or ''))
+    if not stim_ch:
+        return 'Stim channels must not be empty.'
+    b.stim_channels = stim_ch
+    b.S1stim_chan = stim_ch[0] if len(stim_ch) >= 1 else ''
+    b.S2stim_chan = stim_ch[1] if len(stim_ch) >= 2 else ''
+
+    # --- SG channels ---
+    sg_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_chan') or ''))
+    sg_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_name') or ''))
+    if sg_ch and sg_nm and len(sg_ch) == len(sg_nm):
+        b.sg_channels = sg_ch
+        b.sg_names = sg_nm
+
+    # --- stim monitor ---
+    sm_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_chan') or ''))
+    sm_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_name') or ''))
+    b.stim_monitor_chan = sm_ch
+    b.stim_monitor_name = sm_nm
+
+    # --- sonomicrometry ---
+    b.use_sono = bool(st.session_state.get('gui_cfg_bld_use_sono'))
+    sono_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_channel') or ''))
+    sono_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_name') or ''))
+    b.sono_channels = sono_ch
+    b.sono_names = sono_nm
+    try:
+        b.sono_internal_rate = int(st.session_state.get('gui_cfg_bld_sono_internal_samplefreq') or 241)
+    except (TypeError, ValueError):
+        b.sono_internal_rate = 241
+    try:
+        b.sono_cal_left = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_left') or ''))
+    except ValueError:
+        b.sono_cal_left = None
+    try:
+        b.sono_cal_right = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_right') or ''))
+    except ValueError:
+        b.sono_cal_right = None
+    b.sono_transmit_pulse = float(st.session_state.get('gui_cfg_bld_sono_transmit_pulse') or 0.0)
+    b.sono_inhibit_delay = float(st.session_state.get('gui_cfg_bld_sono_inhibit_delay') or 0.0)
+    b.sono_distance = str(st.session_state.get('gui_cfg_bld_sono_distance') or '')
+
+    # --- timing defaults ---
+    b.waitbefore = float(st.session_state.get('gui_cfg_bld_waitbefore') or 3.0)
+    b.waitafter = float(st.session_state.get('gui_cfg_bld_waitafter') or 4.0)
+    b.rampdur = float(st.session_state.get('gui_cfg_bld_rampdur') or 0.25)
+    b.prepoststim_dur = float(st.session_state.get('gui_cfg_bld_prepoststim_dur') or 0.06)
+    b.prepoststim_sep = float(st.session_state.get('gui_cfg_bld_prepoststim_sep') or 1.0)
+    b.prestim_time = float(st.session_state.get('gui_cfg_bld_prestim_time') or -2.0)
+    b.poststim_time = float(st.session_state.get('gui_cfg_bld_poststim_time') or 2.0)
+    b.amp_step_vel = int(st.session_state.get('gui_cfg_bld_amp_step_vel') or 10)
+    rm = str(st.session_state.get('gui_cfg_bld_ramp_mode_default') or 'linear')
+    b.ramp_mode_default = rm if rm in ('linear', 'exponential') else 'linear'
+
+    # --- calibration file (metadata provenance only; actual matrix already loaded) ---
+    b.forcetorque_calibration_file = str(
+        st.session_state.get('gui_cfg_bld_forcetorque_calibration_file') or ''
+    )
+    b.apparatus_inertia_calibration_file = str(
+        st.session_state.get('gui_cfg_bld_apparatus_inertia_calibration_file') or ''
+    )
+
+    # Normalize primary bending axis after applying.
+    b._normalize_primary_bending_axis()
+
+    return None
+
+
+def _seed_cfg_bld_from_bender(b: Bender) -> None:
+    """Re-seed ``gui_cfg_bld_*`` widget keys from the live ``Bender`` so fields reflect the applied state."""
+    st.session_state['gui_cfg_bld_apparatus_id'] = str(getattr(b, 'session_apparatus_id', '') or '')
+    st.session_state['gui_cfg_bld_forcetorque_calibration_file'] = str(getattr(b, 'forcetorque_calibration_file', '') or '')
+    st.session_state['gui_cfg_bld_apparatus_inertia_calibration_file'] = str(getattr(b, 'apparatus_inertia_calibration_file', '') or '')
+    st.session_state['gui_cfg_bld_positive_motor_direction'] = str(getattr(b, 'positive_motor_direction', 'left') or 'left')
+    st.session_state['gui_cfg_bld_specimen_lateral_index'] = int(getattr(b, 'specimen_lateral_index_on_positive_motor_side', -1) or -1)
+    st.session_state['gui_cfg_bld_primary_bending_axis'] = str(getattr(b, 'primary_bending_axis', 'zTorque') or 'zTorque')
+    st.session_state['gui_cfg_bld_device_name'] = str(getattr(b, 'device_name', 'Dev1') or 'Dev1')
+    st.session_state['gui_cfg_bld_daq_ai_sr'] = float(getattr(b, 'daq_ai_sample_rate_hz', 1000.0) or 1000.0)
+    st.session_state['gui_cfg_bld_daq_ao_sr'] = float(getattr(b, 'daq_ao_do_sample_rate_hz', 60000.0) or 60000.0)
+    st.session_state['gui_cfg_bld_motor_steps'] = int(getattr(b, 'motor_full_steps_per_rev', 1600) or 1600)
+    st.session_state['gui_cfg_bld_motor_gear'] = int(getattr(b, 'motor_gear_ratio', 5) or 5)
+    st.session_state['gui_cfg_bld_stim_channels'] = ', '.join(str(x) for x in (getattr(b, 'stim_channels', []) or []))
+    st.session_state['gui_cfg_bld_motor_port'] = str(getattr(b, 'motor_port', '') or '')
+    st.session_state['gui_cfg_bld_encoder_chan'] = str(getattr(b, 'encoder_chan', 'ctr0') or 'ctr0')
+    st.session_state['gui_cfg_bld_SG_chan'] = ', '.join(str(x) for x in (getattr(b, 'sg_channels', []) or []))
+    st.session_state['gui_cfg_bld_SG_name'] = ', '.join(str(x) for x in (getattr(b, 'sg_names', []) or []))
+    st.session_state['gui_cfg_bld_S1side'] = str(getattr(b, 'S1side', 'left') or 'left')
+    st.session_state['gui_cfg_bld_S2side'] = str(getattr(b, 'S2side', 'right') or 'right')
+    st.session_state['gui_cfg_bld_use_sono'] = bool(getattr(b, 'use_sono', True))
+    st.session_state['gui_cfg_bld_sono_channel'] = ', '.join(str(x) for x in (getattr(b, 'sono_channels', []) or []))
+    st.session_state['gui_cfg_bld_sono_name'] = ', '.join(str(x) for x in (getattr(b, 'sono_names', []) or []))
+    st.session_state['gui_cfg_bld_encoder_ppr'] = int(getattr(b, 'encoder_pulses_per_rev', 10000) or 10000)
+    st.session_state['gui_cfg_bld_motor_axis'] = str(getattr(b, 'motor_axis', '') or '')
+    st.session_state['gui_cfg_bld_bending_axis_sensor'] = str(getattr(b, 'bending_axis_sensor', 'z') or 'z')
+    st.session_state['gui_cfg_bld_bending_axis_specimen'] = str(getattr(b, 'bending_axis_specimen', 'dorsoventral') or 'dorsoventral')
+    st.session_state['gui_cfg_bld_stim_monitor_chan'] = ', '.join(str(x) for x in (getattr(b, 'stim_monitor_chan', []) or []))
+    st.session_state['gui_cfg_bld_stim_monitor_name'] = ', '.join(str(x) for x in (getattr(b, 'stim_monitor_name', []) or []))
+    st.session_state['gui_cfg_bld_sono_internal_samplefreq'] = int(getattr(b, 'sono_internal_rate', 241) or 241)
+    scl = getattr(b, 'sono_cal_left', None)
+    st.session_state['gui_cfg_bld_sono_cal_left'] = ', '.join(str(x) for x in scl) if scl else ''
+    scr = getattr(b, 'sono_cal_right', None)
+    st.session_state['gui_cfg_bld_sono_cal_right'] = ', '.join(str(x) for x in scr) if scr else ''
+    st.session_state['gui_cfg_bld_sono_transmit_pulse'] = float(getattr(b, 'sono_transmit_pulse', 0.0) or 0.0)
+    st.session_state['gui_cfg_bld_sono_inhibit_delay'] = float(getattr(b, 'sono_inhibit_delay', 0.0) or 0.0)
+    st.session_state['gui_cfg_bld_sono_distance'] = str(getattr(b, 'sono_distance', '') or '')
+    st.session_state['gui_cfg_bld_amp_step_vel'] = int(getattr(b, 'amp_step_vel', 10) or 10)
+    rm = str(getattr(b, 'ramp_mode_default', 'linear') or 'linear')
+    st.session_state['gui_cfg_bld_ramp_mode_default'] = rm if rm in ('linear', 'exponential') else 'linear'
+    st.session_state['gui_cfg_bld_waitbefore'] = float(getattr(b, 'waitbefore', 3.0) or 3.0)
+    st.session_state['gui_cfg_bld_waitafter'] = float(getattr(b, 'waitafter', 4.0) or 4.0)
+    st.session_state['gui_cfg_bld_rampdur'] = float(getattr(b, 'rampdur', 0.25) or 0.25)
+    st.session_state['gui_cfg_bld_prepoststim_dur'] = float(getattr(b, 'prepoststim_dur', 0.06) or 0.06)
+    st.session_state['gui_cfg_bld_prepoststim_sep'] = float(getattr(b, 'prepoststim_sep', 1.0) or 1.0)
+    st.session_state['gui_cfg_bld_prestim_time'] = float(getattr(b, 'prestim_time', -2.0) if getattr(b, 'prestim_time', None) is not None else -2.0)
+    st.session_state['gui_cfg_bld_poststim_time'] = float(getattr(b, 'poststim_time', 2.0) if getattr(b, 'poststim_time', None) is not None else 2.0)
+    # Mark the seed tracker so _maybe_seed_cfg_build_fields does not overwrite from the .py file.
+    st.session_state['gui_cfg_build_seeded_for'] = str(st.session_state.get('gui_cfg_build_base') or '')
+
+
 def _maybe_seed_cfg_build_fields() -> None:
     source_config = str(st.session_state.get('gui_cfg_build_base') or 'jimenez_bender_config_A')
     if st.session_state.get('gui_cfg_build_seeded_for') == source_config:
@@ -7405,6 +7605,18 @@ def main():
                     err,
                 )
                 return
+            # Copy gui_cfg_bld_* widget values onto the live Bender so operator
+            # edits take effect without writing a new config file first.
+            b_live = st.session_state.get('bender')
+            if b_live is not None:
+                cfg_err = _apply_cfg_bld_fields_to_bender(b_live)
+                if cfg_err:
+                    _st_error_detail(
+                        'Config field validation failed.',
+                        ['Fix the value shown in Details', 'Click Apply setup again'],
+                        cfg_err,
+                    )
+                    return
             perr = _sec1_apply_composed_path_to_bender()
             if perr:
                 # A folder alone is enough (the file name is auto-composed at save time), so the
@@ -7434,6 +7646,11 @@ def main():
                 st.success(f'Loaded `{_normalize_config_module_name(eff)}`')
             else:
                 st.success('Data file path set on the experiment object.')
+            # Re-seed config builder widgets from the live Bender so fields
+            # reflect exactly what was applied (not the .py file on disk).
+            _b_applied = st.session_state.get('bender')
+            if _b_applied is not None:
+                _seed_cfg_bld_from_bender(_b_applied)
             st.session_state['gui_setup_confirmed'] = True
             st.rerun()
             return
