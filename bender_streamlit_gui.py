@@ -134,7 +134,7 @@ def _get_app_version_label() -> str:
 
 
 from bender_json_persistent import JsonPersistTypeError, to_json_persistent  # noqa: E402
-from bender_daq_kill import daq_emergency_stop  # noqa: E402
+from bender_daq_kill import daq_emergency_stop, probe_nidaq_status  # noqa: E402
 from bender_config_builder import (  # noqa: E402
     default_configs_dir,
     discover_config_modules,
@@ -6971,6 +6971,38 @@ def _render_h5_explorer() -> None:
     _render_h5_attribute_editor(loaded)
 
 
+def _render_nidaq_preflight_banner() -> None:
+    """Show NI-DAQ package / driver / device status once per session (real probe, not a static label).
+
+    Cached in ``gui_nidaq_preflight`` so widget reruns do not re-hit the driver every time.
+    """
+    cached = st.session_state.get('gui_nidaq_preflight')
+    if not (
+        isinstance(cached, tuple)
+        and len(cached) == 3
+        and isinstance(cached[0], str)
+        and isinstance(cached[1], str)
+        and isinstance(cached[2], list)
+    ):
+        status, message, devices = probe_nidaq_status()
+        st.session_state['gui_nidaq_preflight'] = (status, message, list(devices))
+    else:
+        status, message, devices = cached
+
+    if status == 'ok':
+        return
+    if status == 'drivers_missing':
+        st.error(f'**NI-DAQ drivers not detected.** {message}')
+        return
+    if status == 'package_missing':
+        st.warning(f'**NI-DAQ Python package missing.** {message}')
+        return
+    if status == 'no_devices':
+        st.warning(f'**No NI-DAQ devices found.** {message}')
+        return
+    st.warning(f'**NI-DAQ check failed.** {message}')
+
+
 def _trigger_emergency_stop() -> tuple[bool, str]:
     """Run NI-DAQ emergency stop and return `(ok, message)`.
 
@@ -7531,6 +7563,7 @@ def main():
     st.session_state.setdefault('gui_protocol_confirmed', False)
     _announce_disk_recovery_snapshot()
     _inject_accessibility_theme()
+    _render_nidaq_preflight_banner()
     _ensure_gui_data_path_session_keys()
     if 'gui_post_notes' not in st.session_state:
         st.session_state['gui_post_notes'] = ''

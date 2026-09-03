@@ -2,10 +2,101 @@
 Emergency hardware stop for NI-DAQ: reset device(s) to cease AI/AO/DO activity.
 
 Used by the Streamlit **kill switch**. Safe to call when nidaqmx is missing (no-op message).
+
+Also provides ``probe_nidaq_status`` for GUI preflight (package vs drivers vs devices).
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+
+
+def probe_nidaq_status() -> Tuple[str, str, List[str]]:
+    """Probe NI-DAQmx availability without resetting hardware.
+
+    Distinguishes:
+      - ``package_missing``: Python ``nidaqmx`` import failed
+      - ``drivers_missing``: package imports but the NI-DAQmx driver/runtime is not usable
+      - ``no_devices``: drivers respond but no local devices are listed
+      - ``ok``: drivers respond and at least one device name is present
+      - ``error``: unexpected failure while probing
+
+    Returns ``(status, message, device_names)``. ``device_names`` is empty unless status is
+    ``ok`` (or rarely ``no_devices`` stays empty by definition).
+    """
+    try:
+        import nidaqmx.system as nisys
+    except ImportError:
+        return (
+            'package_missing',
+            'Python package nidaqmx is not installed. Install it in this environment, '
+            'or use simulation / non-DAQ routes. NI-DAQmx Runtime drivers are separate '
+            'system software from National Instruments.',
+            [],
+        )
+    except Exception as e:
+        # Rare: import-time DLL failure can surface as OSError / DaqError, not ImportError.
+        msg = f'{type(e).__name__}: {e}'
+        low = msg.lower()
+        if any(
+            token in low
+            for token in (
+                'daqmx',
+                'nidaq',
+                'nicaiu',
+                'dll',
+                'driver',
+                'library',
+                'shared object',
+            )
+        ):
+            return (
+                'drivers_missing',
+                'NI-DAQmx drivers were not detected (Python package present, but the '
+                f'driver/runtime failed to load: {msg}). Install NI-DAQmx Runtime from '
+                'National Instruments, then restart the app. Simulation / non-DAQ routes '
+                'still work without drivers.',
+                [],
+            )
+        return 'error', f'Unexpected NI-DAQ probe failure during import: {msg}', []
+
+    try:
+        local = nisys.System.local()
+        names = [str(d.name) for d in local.devices]
+    except Exception as e:
+        msg = f'{type(e).__name__}: {e}'
+        low = msg.lower()
+        if any(
+            token in low
+            for token in (
+                'daqmx',
+                'nidaq',
+                'nicaiu',
+                'dll',
+                'driver',
+                'library',
+                'not installed',
+                'not found',
+                'shared object',
+            )
+        ):
+            return (
+                'drivers_missing',
+                'NI-DAQmx drivers were not detected (Python package present, but the '
+                f'driver/runtime is not usable: {msg}). Install NI-DAQmx Runtime from '
+                'National Instruments, then restart the app. Simulation / non-DAQ routes '
+                'still work without drivers.',
+                [],
+            )
+        return 'error', f'Could not query local NI-DAQ system: {msg}', []
+
+    if not names:
+        return (
+            'no_devices',
+            'NI-DAQmx drivers responded, but no local devices were found. Check USB '
+            'connection / device power, then confirm the device appears in NI MAX.',
+            [],
+        )
+    return 'ok', f'NI-DAQmx OK — devices: {", ".join(names)}', names
 
 
 def daq_emergency_stop(
