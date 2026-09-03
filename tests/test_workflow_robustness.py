@@ -113,6 +113,60 @@ def _clear_streamlit_session_state():
         st.session_state.pop(k, None)
 
 
+def test_config_replacement_carries_only_applied_downstream_state():
+    _clear_streamlit_session_state()
+    old_b = gui.Bender('jimenez_bender_config_A')
+    new_b = gui.Bender('config_bender_jimenez_2026_06_17')
+
+    old_b.specimen_id = 'bass17'
+    old_b.specimen_genusspecies = 'Micropterus salmoides'
+    old_b.dclamp = 42.0
+    old_b.test_segment_length_mm = 42.0
+    old_b.xsec_width = 8.5
+    old_b.h5_protocol_metadata = {
+        'specimen_id': 'bass17',
+        'specimen_genusspecies': 'Micropterus salmoides',
+        'xsec_width': 8.5,
+    }
+    old_b.test_type = 'dynamic'
+    old_b.all_freqs = [1.0, 3.0, 5.0]
+    old_b.all_amps = [2.0, 4.0, 6.0]
+    old_b.all_amps_mode = 'curvature'
+    old_b.cycles_per_step = 4
+    old_b.n_end_cycles = 1
+    old_b.randomize = False
+    old_b.random_seed = None
+    old_b.stim_cycles_in_step = [2, 3]
+    old_b.is_stim = True
+    old_b.stim_pulse_rate = 75.0
+    old_b.left_stim_voltage = 3.0
+    old_b.right_stim_voltage = 4.0
+    old_b.all_stimduties = [0.3]
+    old_b.all_stimphases = [0.25]
+    old_b.pulse_width_ms = 2.0
+
+    morpho_sig = ('last-applied-morpho',)
+    proc_sig = ('last-applied-procedure',)
+    st.session_state['gui_morpho_applied_sig'] = morpho_sig
+    st.session_state['gui_proc_applied_sig'] = proc_sig
+    st.session_state['gui_apply_tracking_bender_id'] = id(old_b)
+
+    gui._carry_applied_downstream_state(old_b, new_b)
+
+    assert new_b.specimen_id == 'bass17'
+    assert new_b.dclamp == 42.0
+    assert new_b.xsec_width == 8.5
+    assert new_b.h5_protocol_metadata['specimen_id'] == 'bass17'
+    assert new_b.test_type == 'dynamic'
+    assert new_b.all_freqs == [1.0, 3.0, 5.0]
+    assert new_b.left_stim_voltage == 3.0
+    assert new_b.right_stim_voltage == 4.0
+    assert new_b.pulse_width_ms == 2.0
+    assert st.session_state['gui_morpho_applied_sig'] == morpho_sig
+    assert st.session_state['gui_proc_applied_sig'] == proc_sig
+    assert st.session_state['gui_apply_tracking_bender_id'] == id(new_b)
+
+
 def test_autosave_roundtrip_and_start_fresh_cleanup(tmp_path, monkeypatch):
     _clear_streamlit_session_state()
     monkeypatch.setattr(gui, '_ROOT', str(tmp_path))

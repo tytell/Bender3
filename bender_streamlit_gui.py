@@ -13,6 +13,7 @@ when hardware is ready.
 from __future__ import annotations
 
 import base64
+import copy
 from datetime import datetime
 import hashlib
 import importlib
@@ -166,6 +167,7 @@ from bender_protocol_templates import (  # noqa: E402
     default_templates_dir,
     list_template_files,
     load_protocol_template,
+    snapshot_bender_procedure,
     save_protocol_template,
     sanitize_template_filename_stem,
     template_display_label,
@@ -4556,6 +4558,67 @@ def _apply_form_updates(b: Bender, updates: dict, tt: str):
     b.test_type = tt
 
 
+def _carry_applied_downstream_state(old_b: Bender, new_b: Bender) -> None:
+    """Carry the old Bender's last-applied sections 3-5 state onto its replacement.
+
+    The old Bender is authoritative here: session widgets may contain newer edits that
+    the operator has not applied. Applied-signature presence determines whether each
+    section has committed state worth carrying, even when later edits made it dirty.
+    """
+    if old_b is new_b:
+        return
+
+    if 'gui_morpho_applied_sig' in st.session_state:
+        morpho_attrs = (
+            'specimen_id', 'specimen_genusspecies', 'specimen_prep_condition',
+            'specimen_sex', 'specimen_muscle_type', 'session_analyst', 'segment',
+            'fishlen_TL', 'fishlen_SL', 'fishmass', 'temp_C_room', 'temp_C_tank',
+            'dclamp', 'test_segment_length_mm', 'dbend', 'test_segment_position_mm',
+            'xsec_width', 'xsec_height', 'dvert', 'dhoriz', 'target_muscle_depth_mm',
+            'clamp_plate_extension_mm', 'specimen_profile_clamp_offset_mm',
+            'specimen_profile_stations', 'specimen_profile_length_mm',
+            'specimen_profile_density_g_per_mm3', 'specimen_profile_num_samples',
+            'specimen_geometry_heights_mm', 'specimen_geometry_depths_mm',
+            'specimen_geometry_positions_mm', 'specimen_moi_specimen',
+            'specimen_moi_profile', 'specimen_moi_frustum', 'frustum_inputs',
+            'use_frustum_inertial_model',
+        )
+        for name in morpho_attrs:
+            if hasattr(old_b, name):
+                setattr(new_b, name, copy.deepcopy(getattr(old_b, name)))
+        has_calibration = getattr(new_b, 'inertial_calibration_profile', None) is not None
+        has_geometry = bool(getattr(new_b, 'specimen_geometry_heights_mm', None))
+        new_b.use_theoretical_inertial_correction = has_calibration or has_geometry
+
+        old_meta = dict(getattr(old_b, 'h5_protocol_metadata', {}) or {})
+        new_meta = dict(getattr(new_b, 'h5_protocol_metadata', {}) or {})
+        for key in (
+            'specimen_id', 'specimen_genusspecies', 'specimen_prep_condition',
+            'segment', 'temp_C_room', 'temp_C_tank', 'dvert', 'dhoriz',
+            'target_muscle_depth_mm', 'clamp_plate_extension_mm',
+            'specimen_profile_clamp_offset_mm', 'xsec_width', 'xsec_height',
+        ):
+            if key in old_meta:
+                new_meta[key] = copy.deepcopy(old_meta[key])
+        new_b.h5_protocol_metadata = new_meta
+
+    if 'gui_proc_applied_sig' in st.session_state:
+        tt = str(getattr(old_b, 'test_type', '') or st.session_state.get('test_type_select') or 'dynamic')
+        procedure = snapshot_bender_procedure(old_b, old_b.get_dispatch_schema(), tt)
+        if tt in MOTION_TYPES:
+            procedure['S1volts'] = copy.deepcopy(getattr(old_b, 'left_stim_voltage', 5.0))
+            procedure['S2volts'] = copy.deepcopy(getattr(old_b, 'right_stim_voltage', 5.0))
+            procedure['pulse_width_ms'] = copy.deepcopy(getattr(old_b, 'pulse_width_ms', 2.0))
+        _apply_form_updates(new_b, procedure, tt)
+        for name in ('starting_angle_deg', 'post_trial_notes'):
+            if hasattr(old_b, name):
+                setattr(new_b, name, copy.deepcopy(getattr(old_b, name)))
+
+    # Preserve the existing applied baselines across the intentional object swap.
+    # Dirty widget edits remain dirty because their fingerprints are not changed.
+    st.session_state['gui_apply_tracking_bender_id'] = id(new_b)
+
+
 def _apply_procedure_form_to_bender(b: Bender, updates: dict, tt: str) -> None:
     """Sync morphometrics flags, copy procedure fields onto ``b``, and mirror any QC note text from session."""
     _sync_morphometric_flags_from_session(b)
@@ -7593,6 +7656,27 @@ def main():
                 return
             b0 = st.session_state.get('bender')
             need_hw_reload = b0 is None or not _selected_config_matches_bender(b0, eff)
+            # Preserve visible downstream form state across a config replacement. The
+            # Bender carry-over below restores only last-applied values; keeping these
+            # widget values separately also preserves newer edits as visibly dirty.
+            _downstream_widget_state: dict[str, Any] = {}
+            if need_hw_reload and b0 is not None:
+                _has_morpho_apply = 'gui_morpho_applied_sig' in st.session_state
+                _has_proc_apply = 'gui_proc_applied_sig' in st.session_state
+                for _key in list(st.session_state.keys()):
+                    _keep_morpho = _has_morpho_apply and (
+                        _key.startswith('morpho_')
+                        or _key in {
+                            'gui_genus_species', 'gui_specimen_id', 'gui_specimen_sex',
+                            'gui_specimen_muscle_type', 'gui_session_analyst',
+                        }
+                    )
+                    _keep_proc = _has_proc_apply and (
+                        _key.startswith('fld_')
+                        or _key in {'test_type_select', 'gui_starting_angle_deg', 'gui_post_notes'}
+                    )
+                    if _keep_morpho or _keep_proc:
+                        _downstream_widget_state[_key] = copy.deepcopy(st.session_state[_key])
             err = (
                 _apply_loaded_config_module(_raw_mod_for_hardware_config_load(module_stem=eff))
                 if need_hw_reload
@@ -7605,6 +7689,12 @@ def main():
                     err,
                 )
                 return
+            if need_hw_reload and b0 is not None:
+                for _key, _value in _downstream_widget_state.items():
+                    st.session_state[_key] = _value
+                # A different config replaces Bender. Carry only values already committed
+                # through sections 3-5; leave newer, un-applied widget edits untouched/dirty.
+                _carry_applied_downstream_state(b0, st.session_state['bender'])
             # FIX (commit 4204b2d): Apply Setup previously re-instantiated Bender
             # from the .py config file on disk, silently ignoring all operator edits
             # in gui_cfg_bld_* widgets (shadow-state bug). Now we copy those widget
