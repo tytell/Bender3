@@ -202,6 +202,77 @@ def test_index_cycle_arrays_single_finite_only(tmp_path):
         assert 'protocol_cycle_count' not in meta.attrs, 'segmented has no per-cycle scalar block'
 
 
+def test_dynamic_protocol_step_arrays_use_realized_cartesian_order(tmp_path):
+    b = Bender('jimenez_bender_config_A')
+    _common(b)
+    b.dclamp = 40.0
+    b.xsec_width = 10.0
+    b.all_freqs = [1.0, 3.0, 5.0]
+    b.all_amps = [2.0, 4.0, 6.0]
+    b.all_amps_mode = 'curvature'
+    b.all_stimduties = [0.3]
+    b.all_stimphases = [0.25]
+    b.cycles_per_step = 2
+    b.n_end_cycles = 0
+    b.randomize = False
+    b.stim_cycles_in_step = []
+    b.outputfile = str(tmp_path / 'dynamic_grid.h5')
+    b.run_experiment(test_type='dynamic')
+    path = export_primary_h5(b, outputfile=b.outputfile)['outputfile']
+
+    with h5py.File(path, 'r') as f:
+        meta = f['metadata']
+        assert meta['protocol_step_frequency_hertz'][:].tolist() == [
+            1.0, 3.0, 5.0, 1.0, 3.0, 5.0, 1.0, 3.0, 5.0,
+        ]
+        assert meta['protocol_step_amplitude'][:].tolist() == [
+            2.0, 2.0, 2.0, 4.0, 4.0, 4.0, 6.0, 6.0, 6.0,
+        ]
+        assert meta['protocol_step_stim_duty_fraction'].shape == (9,)
+        assert meta['protocol_step_stim_phase_fraction'].shape == (9,)
+        cycle_index = meta['index_cycle_index'][:]
+        assert cycle_index.shape == (18,)  # Nine realized steps x two cycles per step.
+        sample_tags = f['timeseries']['cycle_index'][:]
+        sample_time = f['timeseries']['time_second'][:]
+        assert np.all(sample_tags[sample_time < 0.0] == -1)
+        assert sample_time[np.flatnonzero(sample_tags >= 0)[0]] == pytest.approx(0.0)
+
+
+def test_randomized_dynamic_step_metadata_stays_locked_together(tmp_path):
+    b = Bender('jimenez_bender_config_A')
+    _common(b)
+    b.dclamp = 40.0
+    b.xsec_width = 10.0
+    b.all_freqs = [1.0, 3.0]
+    b.all_amps = [2.0, 6.0]
+    b.all_amps_mode = 'curvature'
+    b.all_stimduties = [0.2, 0.4]
+    b.all_stimphases = [0.1, 0.6]
+    b.cycles_per_step = 1
+    b.n_end_cycles = 0
+    b.randomize = True
+    b.random_seed = 123
+    b.stim_cycles_in_step = []
+    b.outputfile = str(tmp_path / 'dynamic_randomized.h5')
+    b.run_experiment(test_type='dynamic')
+    path = export_primary_h5(b, outputfile=b.outputfile)['outputfile']
+
+    with h5py.File(path, 'r') as f:
+        meta = f['metadata']
+        assert np.array_equal(
+            meta['protocol_step_frequency_hertz'][:], np.asarray(b.organized_freqs)
+        )
+        assert np.array_equal(
+            meta['protocol_step_amplitude'][:], np.asarray(b.organized_curves)
+        )
+        assert np.array_equal(
+            meta['protocol_step_stim_duty_fraction'][:], np.asarray(b.organized_stimduties)
+        )
+        assert np.array_equal(
+            meta['protocol_step_stim_phase_fraction'][:], np.asarray(b.organized_stimphases)
+        )
+
+
 def test_block_sequence_is_json_and_step_order_dropped(tmp_path):
     path = _run(_isometric, tmp_path)
     with h5py.File(path, 'r') as f:
@@ -226,6 +297,8 @@ def test_index_step_arrays_replace_trial_index_subgroup(tmp_path):
             'index_step_rest_before_second',
             'index_step_wall_clock_start',
             'index_step_recruitment',
+            'index_step_motor_positive_bend_lateral_index',
+            'index_step_bilateral_mirror_motor',
             'index_step_stim_t0_second',
             'index_step_stim_t1_second',
         ):

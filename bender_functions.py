@@ -6178,6 +6178,12 @@ class Bender:
         }
 
     def make_cycle_tags(self):
+        """Tag samples from the generated motion timeline, with -1 outside motion.
+
+        Dynamic timelines are shifted so movement begins at ``t == 0``. Using
+        ``prestim_time`` as a sample offset is incorrect because it is stimulation
+        timing, not the motion timeline's wait-before duration.
+        """
         aidata = getattr(self, 'aidata', None)
         if aidata is None:
             raise ValueError('make_cycle_tags requires aidata')
@@ -6202,30 +6208,28 @@ class Bender:
         if freq_by_cycle is None:
             raise AttributeError('make_cycle_tags requires freq_by_cycle')
         cycle_tag = np.full(total_pts, -1, dtype=int)  # -1 = pre/post motion (not a numbered cycle)
-        
-        # 2. Convert Pre-Stim Time to Points
-        pre_time = abs(getattr(self, 'prestim_time', 0)) 
-        pre_pts = int(pre_time * self.daq_ai_sample_rate_hz)
-        
-        # 3. Tag Active Cycles (Starting at 0 to match 22-element metadata)
-        # We start 'current_pos' after the pre_pts (which remain -1)
-        current_pos = pre_pts
-        
-        for i, freq in enumerate(freq_by_cycle):
-            cycle_num = i  # 0, 1, 2... 21
-            pts = int(round(self.daq_ai_sample_rate_hz / freq))
-            end_pos = current_pos + pts
-            
-            # Safety check: don't overshoot
-            if end_pos > total_pts: 
-                end_pos = total_pts
-                
-            cycle_tag[current_pos:end_pos] = cycle_num
-            current_pos = end_pos
-            
-            if current_pos >= total_pts: 
-                break
-                
+
+        frequencies = np.asarray(freq_by_cycle, dtype=float).reshape(-1)
+        if frequencies.size and (not np.all(np.isfinite(frequencies)) or np.any(frequencies <= 0)):
+            raise ValueError('make_cycle_tags requires finite cycle frequencies > 0 Hz')
+        periods = 1.0 / frequencies if frequencies.size else np.array([], dtype=float)
+        cycle_starts = np.concatenate(([0.0], np.cumsum(periods)))
+
+        if t_arr.size == total_pts:
+            # Use the same t coordinate that generated angle/stim signals. This keeps
+            # variable-frequency cycles aligned despite wait-before/after samples.
+            for i, (start_s, end_s) in enumerate(zip(cycle_starts[:-1], cycle_starts[1:])):
+                cycle_tag[(t_arr >= start_s) & (t_arr < end_s)] = i
+        else:
+            # Defensive fallback for callers that provide acquired samples but no t.
+            current_pos = 0
+            for i, period_s in enumerate(periods):
+                end_pos = min(total_pts, current_pos + int(round(self.daq_ai_sample_rate_hz * period_s)))
+                cycle_tag[current_pos:end_pos] = i
+                current_pos = end_pos
+                if current_pos >= total_pts:
+                    break
+
         # Store it for the H5 saver
         self.cycle_index_history = cycle_tag
 

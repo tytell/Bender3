@@ -213,6 +213,54 @@ def _append_post_trial_notes_to_file_notes(previous: str, addition: str) -> str:
     return f'{prev}\n\n--- QC / post-experiment ({ts}) ---\n{add}'
 
 
+def _compute_stim_phase_and_activity(
+    cyc_arr: np.ndarray,
+    stim_on_mask: np.ndarray,
+    stim_enabled: bool,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Per-sample stim_state / stim_type from cycle tags and commanded pulse mask.
+
+    Numbered cycles (cycle_index >= 0): unchanged — if any pulse lands in the cycle,
+    the whole cycle is ``off`` / ``active`` with pulse samples ``on``; otherwise
+    ``passive``.
+
+    Pre/post wait windows (cycle_index == -1): on a stim trial, quiet samples
+    are ``off`` / ``active`` and pulse samples are ``on`` (same categories as
+    numbered cycles; time separates pre from post — both share -1).
+    """
+    n = int(stim_on_mask.size)
+    phase_state = np.full(n, 'passive', dtype='<U8')
+    activity_state = np.full(n, 'passive', dtype='<U8')
+    if not stim_enabled or n <= 0:
+        return phase_state, activity_state
+
+    cyc_arr = np.asarray(cyc_arr).reshape(-1)
+    stim_on_mask = np.asarray(stim_on_mask, dtype=bool).reshape(-1)
+    if cyc_arr.size == n:
+        valid_cyc = np.isfinite(cyc_arr)
+        if np.any(valid_cyc):
+            for cyc in np.unique(cyc_arr[valid_cyc]):
+                m = valid_cyc & (cyc_arr == cyc)
+                if int(cyc) == -1:
+                    # Stim trial wait windows: off between pulses, on during pulses.
+                    phase_state[m] = 'off'
+                    phase_state[m & stim_on_mask] = 'on'
+                    activity_state[m] = 'active'
+                elif np.any(stim_on_mask[m]):
+                    phase_state[m] = 'off'
+                    phase_state[m & stim_on_mask] = 'on'
+                    activity_state[m] = 'active'
+        elif np.any(stim_on_mask):
+            phase_state[:] = 'off'
+            phase_state[stim_on_mask] = 'on'
+            activity_state[:] = 'active'
+    elif np.any(stim_on_mask):
+        phase_state[:] = 'off'
+        phase_state[stim_on_mask] = 'on'
+        activity_state[:] = 'active'
+    return phase_state, activity_state
+
+
 def export_primary_h5(
     bender: Any,
     *,
@@ -463,28 +511,9 @@ def export_primary_h5(
                 s2[:min(n, s2_arr.size)] = s2_arr[:min(n, s2_arr.size)]
                 stim_on_mask = (np.abs(s1) > 1e-12) | (np.abs(s2) > 1e-12)
                 stim_enabled = bool(rec.get('is_stim', getattr(bender, 'is_stim', False)))
-                phase_state = np.full(n, 'passive', dtype='<U8')
-                activity_state = np.full(n, 'passive', dtype='<U8')
-                if stim_enabled:
-                    if cyc_arr.size == n:
-                        valid_cyc = np.isfinite(cyc_arr)
-                        if np.any(valid_cyc):
-                            for cyc in np.unique(cyc_arr[valid_cyc]):
-                                m = valid_cyc & (cyc_arr == cyc)
-                                if np.any(stim_on_mask[m]):
-                                    phase_state[m] = 'off'
-                                    phase_state[m & stim_on_mask] = 'on'
-                                    activity_state[m] = 'active'
-                        else:
-                            if np.any(stim_on_mask):
-                                phase_state[:] = 'off'
-                                phase_state[stim_on_mask] = 'on'
-                                activity_state[:] = 'active'
-                    else:
-                        if np.any(stim_on_mask):
-                            phase_state[:] = 'off'
-                            phase_state[stim_on_mask] = 'on'
-                            activity_state[:] = 'active'
+                phase_state, activity_state = _compute_stim_phase_and_activity(
+                    cyc_arr, stim_on_mask, stim_enabled,
+                )
                 side_state = np.full(n, 'none', dtype='<U8')
                 left_on = np.abs(s1) > 1e-12
                 right_on = np.abs(s2) > 1e-12
@@ -580,6 +609,9 @@ def export_primary_h5(
             ('recruitment',                      'index_step_recruitment',                         'str'),
             # None -> NaN when bilateral (unilateral returns an int, bilateral returns None)
             ('unilateral_posture_lateral_index', 'index_step_unilateral_posture_lateral_index',    'float'),
+            ('motor_positive_bend_toward_lateral_index',
+                                                   'index_step_motor_positive_bend_lateral_index',  'float'),
+            ('bilateral_mirror_motor',            'index_step_bilateral_mirror_motor',              'int'),
             ('stim_t0',                          'index_step_stim_t0_second',                      'float'),
             ('stim_t1',                          'index_step_stim_t1_second',                      'float'),
             ('t_pre_baseline_start',             'index_step_t_pre_baseline_start_second',         'float'),
@@ -783,6 +815,56 @@ def export_primary_h5(
         # NA-fill sweep do not re-write (or overwrite with NA) a key a direct block handled.
         # Defined HERE (above the direct-write blocks) so frustum/aor writes can CLAIM their keys.
         written_keys: set = set()
+
+        # Dynamic protocol_step_* arrays describe the REALIZED Cartesian grid in execution
+        # order, not the short independent input vectors. organize_cycles() keeps frequency,
+        # amplitude, duty, and phase locked together through randomization in organized_*.
+        # index_cycle_* above remains the per-cycle expansion (cycles_per_step repeats).
+        if _is_flat and test_type == 'dynamic':
+            _realized_sources = {
+                'protocol_step_frequency_hertz': getattr(bender, 'organized_freqs', None),
+                'protocol_step_curvature_per_meter': getattr(bender, 'organized_curves', None),
+                'protocol_step_stim_duty_fraction': getattr(bender, 'organized_stimduties', None),
+                'protocol_step_stim_phase_fraction': getattr(bender, 'organized_stimphases', None),
+            }
+            _realized = {
+                key: np.asarray(value, dtype=float).reshape(-1)
+                for key, value in _realized_sources.items()
+                if value is not None
+            }
+            _step_count = int(_realized.get('protocol_step_frequency_hertz', np.array([])).size)
+            if _step_count > 0:
+                if any(arr.size != _step_count for arr in _realized.values()):
+                    raise ValueError(
+                        'export_primary_h5: realized dynamic step metadata arrays have unequal lengths'
+                    )
+                _mode = str(getattr(bender, 'all_amps_mode', '') or '').strip().lower()
+                _curves = _realized.get('protocol_step_curvature_per_meter')
+                _strains = np.asarray(
+                    getattr(bender, 'organized_strains', np.array([])), dtype=float
+                ).reshape(-1)
+                if _mode == 'curvature':
+                    _amplitudes = _curves
+                elif _mode == 'strain':
+                    _amplitudes = _strains
+                elif _mode == 'strain_pct':
+                    _amplitudes = _strains * 100.0
+                elif _mode == 'angle' and _curves is not None:
+                    _dclamp_m = float(getattr(bender, 'dclamp', 0.0) or 0.0) / 1000.0
+                    _amplitudes = np.rad2deg(_curves * _dclamp_m)
+                else:
+                    _amplitudes = None
+                if _amplitudes is not None:
+                    if np.asarray(_amplitudes).size != _step_count:
+                        raise ValueError(
+                            'export_primary_h5: realized dynamic amplitude length does not match steps'
+                        )
+                    _realized['protocol_step_amplitude'] = np.asarray(
+                        _amplitudes, dtype=float
+                    ).reshape(-1)
+                for _key, _value in _realized.items():
+                    if _store_metadata_canonical(g_meta, _key, _value):
+                        written_keys.add(_key)
 
         # inertial_calibration_profile -> three flat calibration_inertia_* attrs (D12, Point 2).
         # I_est is a MOI in N*m/(deg/s^2); multiply by (180/pi)*1e9 to convert to g*mm^2 so it sits

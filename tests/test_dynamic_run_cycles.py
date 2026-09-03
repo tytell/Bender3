@@ -69,6 +69,34 @@ def test_organize_cycles_respects_muscle_depth_for_strain_metadata():
     assert float(np.asarray(b.organized_strains, dtype=float).reshape(-1)[0]) == pytest.approx(expected)
 
 
+def test_cycle_tags_follow_generated_motion_timeline():
+    b = _minimal_dynamic_bender()
+    b.waitbefore = 3.0
+    b.waitafter = 2.0
+    b.prestim_time = -2.0  # Deliberately differs from waitbefore.
+    b._organize_cycles_for_dynamic_run()
+    angle, anglevel, tnorm, t = b.make_cycles_dynamic(
+        b.period_by_cycle, b.freq_by_cycle, b.amp_by_cycle
+    )
+    b.t = t
+    b.angle = angle
+    b.anglevel = anglevel
+    b.tnorm = tnorm
+    b.aidata = np.zeros((1, t.size), dtype=float)
+
+    b.make_cycle_tags()
+    tags = np.asarray(b.cycle_index_history)
+
+    assert np.all(tags[t < 0.0] == -1)
+    assert float(t[np.flatnonzero(tags >= 0)[0]]) == pytest.approx(0.0)
+    cycle_edges = np.concatenate(([0.0], np.cumsum(np.asarray(b.period_by_cycle))))
+    for i, (start_s, end_s) in enumerate(zip(cycle_edges[:-1], cycle_edges[1:])):
+        midpoint = (start_s + end_s) / 2.0
+        sample = int(np.argmin(np.abs(t - midpoint)))
+        assert tags[sample] == i
+    assert np.all(tags[t >= cycle_edges[-1]] == -1)
+
+
 def test_organize_cycles_for_dynamic_run_requires_dclamp():
     b = _minimal_dynamic_bender()
     b.dclamp = None
