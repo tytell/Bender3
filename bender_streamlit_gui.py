@@ -7605,8 +7605,11 @@ def main():
                     err,
                 )
                 return
-            # Copy gui_cfg_bld_* widget values onto the live Bender so operator
-            # edits take effect without writing a new config file first.
+            # FIX (commit 4204b2d): Apply Setup previously re-instantiated Bender
+            # from the .py config file on disk, silently ignoring all operator edits
+            # in gui_cfg_bld_* widgets (shadow-state bug). Now we copy those widget
+            # values onto the live Bender so edits take effect without requiring
+            # "Write config file and load" first.
             b_live = st.session_state.get('bender')
             if b_live is not None:
                 cfg_err = _apply_cfg_bld_fields_to_bender(b_live)
@@ -7646,8 +7649,10 @@ def main():
                 st.success(f'Loaded `{_normalize_config_module_name(eff)}`')
             else:
                 st.success('Data file path set on the experiment object.')
-            # Re-seed config builder widgets from the live Bender so fields
-            # reflect exactly what was applied (not the .py file on disk).
+            # FIX (commit 4204b2d): Re-seed config builder widgets from the live
+            # Bender so fields reflect exactly what was applied (not the stale
+            # .py file on disk). Without this, the UI would show pre-edit values
+            # after Apply, misleading the operator.
             _b_applied = st.session_state.get('bender')
             if _b_applied is not None:
                 _seed_cfg_bld_from_bender(_b_applied)
