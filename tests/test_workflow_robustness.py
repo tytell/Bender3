@@ -302,6 +302,8 @@ def test_checklist_requires_confirmation_plus_valid_state():
     st.session_state['gui_data_folder'] = r'C:\tmp'
     st.session_state['gui_data_filename'] = 'x.h5'
     b.outputfile = gui._compose_output_h5_path()
+    # Setup readiness requires both Apply hardware config and Apply data path.
+    gui._mark_cfg_bld_applied()
     gui._mark_data_path_applied()
 
     ready = gui._workflow_ready_state(b, 'dynamic')
@@ -317,6 +319,23 @@ def test_checklist_requires_confirmation_plus_valid_state():
     gui._mark_morpho_applied()
     ready2 = gui._workflow_ready_state(b, 'dynamic')
     assert ready2['measurements_ok']
+
+
+def test_setup_ok_requires_hardware_config_apply():
+    """Data path alone is not enough after the Apply split — hardware Apply must confirm too."""
+    _clear_streamlit_session_state()
+    b = _DummyBender('dummy_cfg')
+    st.session_state['bender'] = b
+    st.session_state['gui_load_cfg_select'] = 'dummy_cfg'
+    st.session_state['gui_data_folder'] = r'C:\tmp'
+    st.session_state['gui_data_filename'] = 'x.h5'
+    b.outputfile = gui._compose_output_h5_path()
+    gui._mark_data_path_applied()
+    ready = gui._workflow_ready_state(b, 'dynamic')
+    assert not ready['setup_ok']
+    gui._mark_cfg_bld_applied()
+    ready2 = gui._workflow_ready_state(b, 'dynamic')
+    assert ready2['setup_ok']
 
 
 def test_run_button_state_when_no_bender():

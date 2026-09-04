@@ -3426,7 +3426,7 @@ def _cfg_bld_fingerprint() -> tuple:
     pairs = [
         (k, st.session_state.get(k))
         for k in sorted(st.session_state.keys())
-        if str(k).startswith('gui_cfg_bld_')
+        if str(k).startswith('gui_cfg_bld_') and k != 'gui_cfg_bld_applied_sig'
     ]
     return (
         _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or '')),
@@ -3682,8 +3682,7 @@ def _render_no_config_banner() -> None:
     """Inline notice when sections are visible but no hardware config is loaded yet."""
     st.info(
         'No hardware config applied yet. Sections below stay editable; **Run** / **Save** stay '
-        'blocked until you click **Apply hardware config** and **Apply data path**.',
-        icon='⚙️',
+        'blocked until you click **Apply hardware config** and **Apply data path**.'
     )
 
 
@@ -4471,6 +4470,14 @@ def _flush_pending_cfg_build_base() -> None:
     if base != str(st.session_state.get('gui_cfg_build_base') or ''):
         st.session_state['gui_cfg_build_base'] = base
         st.session_state.pop('gui_cfg_build_seeded_for', None)
+
+
+def _flush_pending_apparatus_inertia_cfg_path() -> None:
+    """Apply deferred inertia-fit path into the config-builder widget before it mounts."""
+    if 'gui_pending_cfg_bld_apparatus_inertia_calibration_file' not in st.session_state:
+        return
+    path = str(st.session_state.pop('gui_pending_cfg_bld_apparatus_inertia_calibration_file') or '').strip()
+    st.session_state['gui_cfg_bld_apparatus_inertia_calibration_file'] = path
 
 
 def _flush_pending_load_config_session():
@@ -7478,60 +7485,77 @@ def _store_selected_data_folder(picked_dir: str) -> None:
 
 
 def _render_apparatus_inertia_cal_loader() -> None:
-    """Simple load-file field for an apparatus-inertia fit artifact (JSON).
+    """Session load for an apparatus-inertia fit artifact (JSON) — not part of Apply/Write.
 
-    Mirrors the hardware-config load field: paste a path, click Load. Work happens ONLY on
-    click (Apply-button pattern). On success the artifact dict is stored on the Bender instance
-    so the QC plot can overlay the inertia-corrected torque. The out-of-domain check is NOT done
-    here -- it is surfaced later as an annotation on the QC plot, where the run's actual aor/width
-    are known.
+    Paste a path, click Load. On success the artifact dict and path are stored on the Bender
+    instance (H5 export embeds both). Path sync into ``gui_cfg_bld_apparatus_inertia_calibration_file``
+    is deferred via pending + rerun so Apply does not overwrite with a stale blank value.
+    Out-of-domain checks surface on the QC plot, not here.
     """
     st.session_state.setdefault('gui_apparatus_inertia_cal_path', '')
-    st.markdown('**Apparatus inertia calibration** (optional)')
-    cal_path = str(
-        st.text_input(
-            'Apparatus inertia fit file (.json)',
-            key='gui_apparatus_inertia_cal_path',
-            placeholder='Paste full path to an apparatus_inertia_fit.json artifact',
-            help='Built by fit_apparatus_inertia.py from the empty-apparatus calibration runs. '
-                 'Loaded onto the experiment so the QC plot can overlay the inertia-corrected torque.',
+    with st.container(border=True):
+        st.markdown('**Load apparatus inertia fit** (session — not part of Apply)')
+        st.caption(
+            'Loads the JSON fit onto the experiment for QC overlay and H5 provenance. '
+            'Requires **Apply hardware config** first. Does not write a `.py` config.'
         )
-        or ''
-    ).strip()
-    load_clicked = st.button(
-        'Load apparatus inertia fit',
-        key='gui_btn_load_apparatus_inertia_cal',
-        use_container_width=True,
-        help='Load the apparatus-inertia fit artifact onto the experiment.',
-    )
-    if not load_clicked:
-        return
-    b = st.session_state.get('bender')
-    if b is None:
-        st.error('Load a hardware configuration first, then load the inertia fit.')
-        return
-    if not cal_path:
-        st.warning('Paste a path to an apparatus-inertia fit .json first.')
-        return
-    if not os.path.isfile(cal_path):
-        st.error(f'File not found: {cal_path}')
-        return
-    try:
-        from bender_functions import load_apparatus_inertia_fit
-        artifact = load_apparatus_inertia_fit(cal_path)
-    except Exception as exc:  # noqa: BLE001 -- surface as a friendly error, do not crash the app
-        b.apparatus_inertia_calibration = None
-        b.apparatus_inertia_calibration_file = ''
-        _show_friendly_error(exc, action='load apparatus inertia calibration')
-        return
-    b.apparatus_inertia_calibration = artifact
-    b.apparatus_inertia_calibration_file = cal_path
-    _loo = artifact.get('loo_cv_rmse_newton_meter', float('nan'))
-    st.success(
-        f'Loaded apparatus-inertia fit: form={artifact.get("fit_form_id", "?")}, '
-        f'LOO-RMSE={_loo:.3e} N*m (built from {len(artifact.get("source_files", []))} files, '
-        f'aor provenance: {artifact.get("aor_provenance", "unknown")}).'
-    )
+        cal_path = str(
+            st.text_input(
+                'Apparatus inertia fit file (.json)',
+                key='gui_apparatus_inertia_cal_path',
+                placeholder='Paste full path to an apparatus_inertia_fit.json artifact',
+                help='Built by fit_apparatus_inertia.py from the empty-apparatus calibration runs. '
+                     'Loaded onto the experiment so the QC plot can overlay the inertia-corrected torque.',
+            )
+            or ''
+        ).strip()
+        _b_status = st.session_state.get('bender')
+        _loaded = (
+            _b_status is not None
+            and isinstance(getattr(_b_status, 'apparatus_inertia_calibration', None), dict)
+            and bool(str(getattr(_b_status, 'apparatus_inertia_calibration_file', '') or '').strip())
+        )
+        if _loaded:
+            st.success(
+                f'Loaded: `{getattr(_b_status, "apparatus_inertia_calibration_file", "")}`'
+            )
+        load_clicked = st.button(
+            'Load apparatus inertia fit',
+            key='gui_btn_load_apparatus_inertia_cal',
+            use_container_width=True,
+            type='secondary',
+            help='Load the apparatus-inertia fit artifact onto the experiment (session). Not Apply.',
+        )
+        if not load_clicked:
+            return
+        b = st.session_state.get('bender')
+        if b is None:
+            st.error('Apply hardware config first, then load the inertia fit.')
+            return
+        if not cal_path:
+            st.warning('Paste a path to an apparatus-inertia fit .json first.')
+            return
+        if not os.path.isfile(cal_path):
+            st.error(f'File not found: {cal_path}')
+            return
+        try:
+            from bender_functions import load_apparatus_inertia_fit
+            artifact = load_apparatus_inertia_fit(cal_path)
+        except Exception as exc:  # noqa: BLE001 -- surface as a friendly error, do not crash the app
+            b.apparatus_inertia_calibration = None
+            b.apparatus_inertia_calibration_file = ''
+            _show_friendly_error(exc, action='load apparatus inertia calibration')
+            return
+        b.apparatus_inertia_calibration = artifact
+        b.apparatus_inertia_calibration_file = cal_path
+        _loo = artifact.get('loo_cv_rmse_newton_meter', float('nan'))
+        st.toast(
+            f'Inertia fit loaded (form={artifact.get("fit_form_id", "?")}, '
+            f'LOO-RMSE={_loo:.3e} N*m).'
+        )
+        # Widget already rendered above this loader — defer path sync to next run.
+        st.session_state['gui_pending_cfg_bld_apparatus_inertia_calibration_file'] = cal_path
+        st.rerun()
 
 
 def _render_config_module_navigator(*, key_prefix: str, label: str = 'Hardware configuration module') -> None:
@@ -7876,7 +7900,7 @@ def main():
                 _default_pick = _cfg_mods[0]
             st.session_state.setdefault('gui_load_cfg_select', _default_pick)
             # Editable fields seed from the loaded config (its import base) so a loaded config can be
-            # edited and saved as a new file; "Build new config" below re-seeds from a template.
+            # edited and saved as a new file; "Optional: build new config" below re-seeds from a template.
             st.session_state.setdefault('gui_cfg_build_base', _default_pick or _cfg_mods[0])
             st.session_state.setdefault('gui_cfg_build_out', '')
             st.session_state.setdefault('gui_cfg_build_overwrite', False)
@@ -7884,25 +7908,14 @@ def main():
             # Unified config section: load an existing config into the editable fields, edit any
             # field, then save it as a NEW file. There is no separate Load/Build mode.
             _render_config_module_navigator(key_prefix='main', label='Hardware configuration module')
-            st.divider()
-            _render_apparatus_inertia_cal_loader()
-            st.divider()
             st.caption(
-                'Edit hardware fields below, then click **Apply hardware config** to use them for this '
-                'session. Saving a reusable `.py` is optional (expander at the bottom of this section).'
+                'Edit hardware fields below, then click **Apply hardware config** for this session. '
+                'Optional **save as new config** sits above Apply; **Load apparatus inertia fit** is '
+                'below Apply (session only — does not write a `.py`).'
             )
-            st.divider()
-            if st.button(
-                'Build new config (clear fields)',
-                key='gui_btn_cfg_build_new_clear',
-                help='Reset the fields below to template defaults to start a fresh config.',
-            ):
-                st.session_state['gui_pending_cfg_build_base'] = _cfg_mods[0]
-                st.session_state.pop('gui_cfg_build_seeded_for', None)
-                st.session_state['gui_cfg_build_out'] = ''
-                st.rerun()
             if True:
                 _flush_pending_cfg_build_base()
+                _flush_pending_apparatus_inertia_cfg_path()
                 _maybe_seed_cfg_build_fields()
                 c_cfg_l = c_cfg_r = st.container()
                 with c_cfg_l:
@@ -7918,9 +7931,10 @@ def main():
                             'Apparatus inertia calibration file',
                             key='gui_cfg_bld_apparatus_inertia_calibration_file',
                             placeholder='e.g. 2026-07-06_apparatus_inertia_calibration.json (or an absolute path)',
-                            help='JSON from fit_apparatus_inertia.py. Machine-specific: put the file on '
-                                 'this machine, then give an absolute path or a name resolved against the '
-                                 'launch dir / repo root. Leave blank for none.',
+                            help='Path/name stored in the hardware `.py` config for auto-load on Apply. '
+                                 'To load the fit for this session (and H5 embed), use **Load apparatus '
+                                 'inertia fit** below Apply. Machine-specific absolute path or name '
+                                 'resolved against launch dir / repo root. Leave blank for none.',
                         )
                         st.text_input('Positive motor direction (`left` / `right`)', key='gui_cfg_bld_positive_motor_direction')
                         st.number_input(
@@ -8018,21 +8032,19 @@ def main():
                             key='gui_cfg_bld_ramp_mode_default',
                         )
                         st.caption('`units` / `unit_rules` dicts stay from the template unless you edit the generated `.py` file.')
-                _render_section_apply_status(
-                    has_applied_sig=('gui_cfg_bld_applied_sig' in st.session_state),
-                    dirty=_cfg_bld_apply_dirty(),
-                    apply_label='Apply hardware config',
-                )
-                if _load_save_button(
-                    'Apply hardware config',
-                    key='gui_hw_config_apply',
-                    help='Loads the selected module if needed and commits edited hardware fields to the experiment object. Does not write a .py file and does not start DAQ.',
+                if st.button(
+                    'Optional: build new config',
+                    key='gui_btn_cfg_build_new_clear',
+                    help='Reset the fields above to template defaults to start a fresh config (does not Apply or write a file).',
                 ):
-                    _apply_hardware_config_action()
+                    st.session_state['gui_pending_cfg_build_base'] = _cfg_mods[0]
+                    st.session_state.pop('gui_cfg_build_seeded_for', None)
+                    st.session_state['gui_cfg_build_out'] = ''
+                    st.rerun()
                 with st.expander('Optional: save as new config file', expanded=False):
                     st.caption(
                         'Writes a reusable `.py` on disk and loads it. This is not required to run — '
-                        'use **Apply hardware config** above for the current session.'
+                        'use **Apply hardware config** below for the current session.'
                     )
                     st.text_input(
                         'Save new config as (module name, no `.py`)',
@@ -8195,6 +8207,19 @@ def main():
                                             _mark_cfg_bld_applied()
                                             st.success(f'Wrote and loaded `{out_stem}`')
                                             st.rerun()
+                _render_section_apply_status(
+                    has_applied_sig=('gui_cfg_bld_applied_sig' in st.session_state),
+                    dirty=_cfg_bld_apply_dirty(),
+                    apply_label='Apply hardware config',
+                )
+                if _load_save_button(
+                    'Apply hardware config',
+                    key='gui_hw_config_apply',
+                    help='Loads the selected module if needed and commits edited hardware fields to the experiment object. Does not write a .py file and does not start DAQ.',
+                ):
+                    _apply_hardware_config_action()
+                st.divider()
+                _render_apparatus_inertia_cal_loader()
 
     if _show_data:
         _data_host = _setup_right if _setup_right is not None else st
@@ -8373,332 +8398,330 @@ def main():
                     ['Check name and folder', 'Read Details'],
                     txt_s,
                 )
-        with st.expander('Load / save morphometrics templates', expanded=False):
-            st.caption('Optional: reuse morphometrics snapshots (`.json`) in your selected **Templates folder**.')
-            _tf_check = str(st.session_state.get('gui_templates_folder') or '').strip()
-            _morpho_tpl_dir = _shared_experiment_dir()
-            if not (_tf_check and os.path.isdir(os.path.normpath(_tf_check))):
-                st.caption(
-                    f'**Templates folder** is not set or not found on disk—listing saved template files from `{_morpho_tpl_dir}` until '
-                    '**section 2** points to a valid folder.'
-                )
-            _morpho_tpl_list = list_morphometrics_template_files(_morpho_tpl_dir)
-            _morpho_opts: list = [None] + _morpho_tpl_list
-            if 'gui_morphometrics_template_select' not in st.session_state:
-                st.session_state['gui_morphometrics_template_select'] = None
-            _morpho_pick = st.selectbox(
-                'Morphometrics file to load',
-                _morpho_opts,
-                format_func=_morphometrics_template_option_label,
-                key='gui_morphometrics_template_select',
-            )
-            if _load_save_button(
-                'Load morphometrics into form',
-                key='gui_morphometrics_btn_load',
-                help='Fills morphometrics widgets from the file. Then click **Apply specimen** and **Apply clamp geometry & inertial correction** (or **Apply all morphometrics**).',
-            ):
-                if not _morpho_pick:
-                    st.session_state['gui_morphometrics_load_feedback'] = (False, 'Choose a morphometrics file first.')
-                else:
-                    st.session_state['gui_pending_morphometrics_path'] = _morpho_pick
-                st.rerun()
-
-            if 'gui_morphometrics_new_name' not in st.session_state:
-                st.session_state['gui_morphometrics_new_name'] = ''
-            st.text_input('Save morphometrics as (name)', key='gui_morphometrics_new_name', placeholder='e.g. Zebrafish adult default')
-            st.text_area(
-                'Description (optional)',
-                key='gui_morphometrics_new_desc',
-                height=68,
-                placeholder='Optional note saved inside the file.',
-                help='Stored in the file metadata when you save.',
-            )
-            if 'gui_morphometrics_overwrite' not in st.session_state:
-                st.session_state['gui_morphometrics_overwrite'] = False
-            st.checkbox('Overwrite if same file name exists', key='gui_morphometrics_overwrite')
-            if _load_save_button('Save morphometrics', key='gui_morphometrics_btn_save'):
-                _bn = str(st.session_state.get('gui_morphometrics_new_name') or '').strip()
-                _bd = str(st.session_state.get('gui_morphometrics_new_desc') or '').strip()
-                _bst = sanitize_morphometrics_filename_stem(_bn or 'morphometrics')
-                _bout = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_bst}.json'))
-                try:
-                    if os.path.isfile(_bout) and not bool(st.session_state.get('gui_morphometrics_overwrite')):
-                        st.session_state['gui_morphometrics_save_feedback'] = (
-                            False,
-                            f'File already exists: `{_bout}`. Enable **Overwrite** or change the name.',
-                        )
-                    else:
-                        os.makedirs(os.path.dirname(_bout) or '.', exist_ok=True)
-                        save_morphometrics_template(
-                            _bout,
-                            name=_bn or _bst,
-                            description=_bd,
-                            session_state=st.session_state,
-                        )
-                        st.session_state['gui_morphometrics_save_feedback'] = (True, f'Saved `{_bout}`')
-                except Exception as e:
-                    st.session_state['gui_morphometrics_save_feedback'] = (False, f'{type(e).__name__}: {e}')
-                st.rerun()
-
-        st.divider()
         sub_specimen = sub_clamp_inertial = False
-        with st.container():
+        with st.container(border=True):
             # Section 3 (Specimen): identity + morphometrics + session temperature + prep condition.
             # One Apply commits only these fields (per 4-section model, ux_spec §2.1/§3).
-            with st.form('morpho_form_specimen', clear_on_submit=False):
-                id1 = id2 = st.container()
-                with id1:
-                    st.text_input(
-                        'Genus-species',
-                        key='gui_genus_species',
-                        placeholder='e.g. Danio rerio',
-                        help='Stored in the exported `.h5` under `metadata` as `specimen_genusspecies` when you run or export.',
-                    )
-                with id2:
-                    st.text_input(
-                        'Specimen ID',
-                        key='gui_specimen_id',
-                        placeholder='e.g. fish-042 or prep code',
-                        help='Primary specimen label; also written to `specimen_id` on the experiment object for notebook compatibility.',
-                    )
-                if 'morpho_segment' not in st.session_state:
-                    st.session_state['morpho_segment'] = ''
-                st.text_input('Segment / preparation label (`segment`)', key='morpho_segment', placeholder='e.g. whole body, hemi')
+            id1 = id2 = st.container()
+            with id1:
                 st.text_input(
-                    'Prep note',
-                    key='morpho_prep_condition',
-                    placeholder='e.g. anesthetized, recovered 24 h, fasted',
-                    help='Free text (e.g. handling, anesthesia, recovery). Saved as `specimen_prep_condition` in `metadata` on export.',
+                    'Genus-species',
+                    key='gui_genus_species',
+                    placeholder='e.g. Danio rerio',
+                    help='Stored in the exported `.h5` under `metadata` as `specimen_genusspecies` when you run or export.',
                 )
-                if 'gui_specimen_sex' not in st.session_state:
-                    st.session_state['gui_specimen_sex'] = ''
+            with id2:
                 st.text_input(
-                    'Sex',
-                    key='gui_specimen_sex',
-                    placeholder='e.g. M / F / unknown',
-                    help='Biological sex of the specimen. Saved as `specimen_sex` in the experiment object.',
+                    'Specimen ID',
+                    key='gui_specimen_id',
+                    placeholder='e.g. fish-042 or prep code',
+                    help='Primary specimen label; also written to `specimen_id` on the experiment object for notebook compatibility.',
                 )
-                if 'gui_specimen_muscle_type' not in st.session_state:
-                    st.session_state['gui_specimen_muscle_type'] = ''
-                st.text_input(
-                    'Muscle type / region',
-                    key='gui_specimen_muscle_type',
-                    placeholder='e.g. epaxial, hypaxial, red, white',
-                    help='Muscle identity or preparation region. Saved as `specimen_muscle_type`.',
-                )
-                if 'gui_session_analyst' not in st.session_state:
-                    st.session_state['gui_session_analyst'] = ''
-                st.text_input(
-                    'Analyst / operator',
-                    key='gui_session_analyst',
-                    placeholder='e.g. YJ',
-                    help='Initials or name of person running the session. Saved as `session_analyst`.',
-                )
-
-                st.divider()
-                st.markdown('**Morphometrics**')
-                if 'morpho_fishlen_TL' not in st.session_state:
-                    st.session_state['morpho_fishlen_TL'] = 0.0
-                st.number_input(
-                    'Total Length (`fishlen_TL`, mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_fishlen_TL',
-                )
-                if 'morpho_fishlen_SL' not in st.session_state:
-                    st.session_state['morpho_fishlen_SL'] = 0.0
-                st.number_input(
-                    'Standard Length (`fishlen_SL`, mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_fishlen_SL',
-                )
-                if 'morpho_fishmass' not in st.session_state:
-                    st.session_state['morpho_fishmass'] = 0.0
-                st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='morpho_fishmass')
-
-                st.divider()
-                st.markdown('**Session conditions**')
-                if 'morpho_temp_room' not in st.session_state:
-                    st.session_state['morpho_temp_room'] = 0.0
-                st.number_input(
-                    'Room temperature (`temp_C_room`, °C)',
-                    min_value=-5.0,
-                    max_value=60.0,
-                    format='%.3f',
-                    key='morpho_temp_room',
-                )
-                if 'morpho_temp_tank' not in st.session_state:
-                    st.session_state['morpho_temp_tank'] = 0.0
-                st.number_input(
-                    'Tank / bath temperature (`temp_C_tank`, °C)',
-                    min_value=-5.0,
-                    max_value=60.0,
-                    format='%.3f',
-                    key='morpho_temp_tank',
-                )
-                sub_specimen = st.form_submit_button(
-                    'Apply specimen',
-                    type='primary',
-                    use_container_width=True,
-                    help='Commits identity, morphometrics, session temperatures, and prep condition onto the experiment object.',
-                )
+            if 'morpho_segment' not in st.session_state:
+                st.session_state['morpho_segment'] = ''
+            st.text_input('Segment / preparation label (`segment`)', key='morpho_segment', placeholder='e.g. whole body, hemi')
+            st.text_input(
+                'Prep note',
+                key='morpho_prep_condition',
+                placeholder='e.g. anesthetized, recovered 24 h, fasted',
+                help='Free text (e.g. handling, anesthesia, recovery). Saved as `specimen_prep_condition` in `metadata` on export.',
+            )
+            if 'gui_specimen_sex' not in st.session_state:
+                st.session_state['gui_specimen_sex'] = ''
+            st.text_input(
+                'Sex',
+                key='gui_specimen_sex',
+                placeholder='e.g. M / F / unknown',
+                help='Biological sex of the specimen. Saved as `specimen_sex` in the experiment object.',
+            )
+            if 'gui_specimen_muscle_type' not in st.session_state:
+                st.session_state['gui_specimen_muscle_type'] = ''
+            st.text_input(
+                'Muscle type / region',
+                key='gui_specimen_muscle_type',
+                placeholder='e.g. epaxial, hypaxial, red, white',
+                help='Muscle identity or preparation region. Saved as `specimen_muscle_type`.',
+            )
+            if 'gui_session_analyst' not in st.session_state:
+                st.session_state['gui_session_analyst'] = ''
+            st.text_input(
+                'Analyst / operator',
+                key='gui_session_analyst',
+                placeholder='e.g. YJ',
+                help='Initials or name of person running the session. Saved as `session_analyst`.',
+            )
 
             st.divider()
-            st.subheader('4 · Clamp geometry & inertial correction')
-            _render_section_apply_status(
-                has_applied_sig=('gui_morpho_applied_sig' in st.session_state),
-                dirty=_morpho_apply_dirty(),
-                apply_label='Apply clamp geometry & inertial correction',
+            st.markdown('**Morphometrics**')
+            if 'morpho_fishlen_TL' not in st.session_state:
+                st.session_state['morpho_fishlen_TL'] = 0.0
+            st.number_input(
+                'Total Length (`fishlen_TL`, mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_fishlen_TL',
             )
-            # Section 4: clamp geometry + mounted profile + inertial flag. One merged Apply
-            # commits only these fields (replaces the former separate clamp / profile Applies).
-            with st.form('morpho_form_clamp_inertial', clear_on_submit=False):
-                st.markdown('**Clamp geometry**')
-                if 'morpho_dclamp' not in st.session_state:
-                    st.session_state['morpho_dclamp'] = 0.0
-                st.number_input(
-                    'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
-                    min_value=0.001,
-                    format='%.6g',
-                    key='morpho_dclamp',
-                )
-                if 'morpho_dbend' not in st.session_state:
-                    st.session_state['morpho_dbend'] = 0.0
-                st.number_input(
-                    'Test section position (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_dbend',
-                    help='Distance from snout (or your chosen landmark) to the center of the clamped test segment.',
-                )
-                if 'morpho_xsec' not in st.session_state:
-                    st.session_state['morpho_xsec'] = 0.0
-                st.number_input('Local body width (mm)', min_value=0.001, format='%.6g', key='morpho_xsec')
-                if 'morpho_xsec_height' not in st.session_state:
-                    st.session_state['morpho_xsec_height'] = 0.0
-                st.number_input('Local body height (mm)', min_value=0.001, format='%.6g', key='morpho_xsec_height')
-                if 'morpho_dvert' not in st.session_state:
-                    st.session_state['morpho_dvert'] = 0.0
-                st.number_input(
-                    'Vertical specimen offset (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_dvert',
-                    help='Vertical distance from sensor centerline to mounted specimen center.',
-                )
-                if 'morpho_dhoriz' not in st.session_state:
-                    st.session_state['morpho_dhoriz'] = 0.0
-                st.number_input(
-                    'Horizontal specimen offset (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_dhoriz',
-                    help='Horizontal distance from sensor centerline to mounted specimen center.',
-                )
-                if 'morpho_muscle_depth' not in st.session_state:
-                    st.session_state['morpho_muscle_depth'] = 0.0
-                st.number_input(
-                    'Muscle depth `target_muscle_depth_mm` (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_muscle_depth',
-                    help=(
-                        'Distance from the outer surface to the muscle/fiber layer used for strain↔curvature '
-                        '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
-                    ),
-                )
-                st.divider()
-                st.markdown('**Mounted body profile (inertial model)**')
-                st.selectbox(
-                    'Typical density (sets g/mm³ on Apply)',
-                    MORPHO_DENSITY_PRESET_LABELS,
-                    key='morpho_prof_rho_preset',
-                    help=(
-                        'Quick picks from literature-scale values: ~1.00 g/cm³ water-like, ~1.06 g/cm³ muscle/soft tissue, '
-                        '~1.9 g/cm³ cortical bone. Values are copied into **Specimen density** when you click **Apply clamp '
-                        'geometry & inertial correction** (or choose **Custom** and edit the number).'
-                    ),
-                )
-                _flush_pending_morpho_prof_rho_sync()
-                st.number_input(
-                    'Specimen density (g / mm³)',
-                    min_value=1e-9,
-                    format='%.6g',
-                    key='morpho_prof_rho',
-                    help=(
-                        'Mass density for the inertial model (`specimen_profile_density_g_per_mm3`). '
-                        '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
-                    ),
-                )
-                for _gk in ('morpho_geom_x', 'morpho_geom_y', 'morpho_geom_pos'):
-                    if _gk not in st.session_state:
-                        st.session_state[_gk] = ''
-                st.caption(
-                    'Define the specimen as cross-section stations along its length. Enter three '
-                    '**equal-length**, comma-separated lists (one value per station). Cross-sections '
-                    'are ellipses with semi-axes height/2 and width/2 (mirrors the existing '
-                    'convention). I_spec is computed about the **center transverse axis** (AoR = 0). '
-                    '⚠️ I_spec is **NOT rod-scale validated** — leave inertial correction OFF unless '
-                    'validated on the rig.'
-                )
-                g1, g2, g3 = st.columns(3)
-                with g1:
-                    st.text_input(
-                        'Heights x (mm, comma-separated)',
-                        key='morpho_geom_x',
-                        placeholder='e.g. 1, 5, 7',
-                        help='Cross-section height per station (full dimension, each > 0).',
-                    )
-                with g2:
-                    st.text_input(
-                        'Widths y (mm, comma-separated)',
-                        key='morpho_geom_y',
-                        placeholder='e.g. 3, 2, 1',
-                        help='Cross-section width per station (full dimension, each > 0).',
-                    )
-                with g3:
-                    st.text_input(
-                        'Position vs AoR (mm, comma-separated; 0 = AoR, positive = toward sensor)',
-                        key='morpho_geom_pos',
-                        placeholder='e.g. -10, 0, 10',
-                        help=(
-                            'Station position relative to the axis of rotation (AoR). '
-                            '0 = AoR (center between clamps); positive distances are toward the sensor. '
-                            'Enter positive values.'
-                        ),
-                    )
-                st.divider()
-                st.markdown('**Apparatus calibration**')
-                st.caption(
-                    'Both values are needed together for empty-apparatus inertial calibration. '
-                    'Measure and record for every trial.'
-                )
-                if 'morpho_clamp_plate_extension' not in st.session_state:
-                    st.session_state['morpho_clamp_plate_extension'] = 0.0
-                st.number_input(
-                    'Inter-clamp span (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_clamp_plate_extension',
-                    help=MORPHO_CLAMP_PLATE_EXTENSION_FIELD_HELP,
-                )
-                if 'morpho_prof_clamp' not in st.session_state:
-                    st.session_state['morpho_prof_clamp'] = 0.0
-                st.number_input(
-                    'Distance from rotation axis to clamps (mm)',
-                    min_value=0.0,
-                    format='%.6g',
-                    key='morpho_prof_clamp',
-                    help=MORPHO_PROF_CLAMP_FIELD_HELP,
-                )
+            if 'morpho_fishlen_SL' not in st.session_state:
+                st.session_state['morpho_fishlen_SL'] = 0.0
+            st.number_input(
+                'Standard Length (`fishlen_SL`, mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_fishlen_SL',
+            )
+            if 'morpho_fishmass' not in st.session_state:
+                st.session_state['morpho_fishmass'] = 0.0
+            st.number_input('Mass `fishmass` (g)', min_value=0.0, format='%.6g', key='morpho_fishmass')
 
-                sub_clamp_inertial = st.form_submit_button(
-                    'Apply clamp geometry & inertial correction',
-                    type='primary',
-                    use_container_width=True,
-                    help='Commits clamp spacing/offsets, cross-section, mounted profile, and density. Inertial correction is applied automatically when a calibration profile is loaded or specimen geometry is provided.',
+            st.divider()
+            st.markdown('**Session conditions**')
+            if 'morpho_temp_room' not in st.session_state:
+                st.session_state['morpho_temp_room'] = 0.0
+            st.number_input(
+                'Room temperature (`temp_C_room`, °C)',
+                min_value=-5.0,
+                max_value=60.0,
+                format='%.3f',
+                key='morpho_temp_room',
+            )
+            if 'morpho_temp_tank' not in st.session_state:
+                st.session_state['morpho_temp_tank'] = 0.0
+            st.number_input(
+                'Tank / bath temperature (`temp_C_tank`, °C)',
+                min_value=-5.0,
+                max_value=60.0,
+                format='%.3f',
+                key='morpho_temp_tank',
+            )
+            with st.expander('Optional: load / save morphometrics templates', expanded=False):
+                st.caption(
+                    'Reuse morphometrics snapshots (`.json`) in your selected **Templates folder**, '
+                    'then click **Apply specimen**.'
                 )
+                _tf_check = str(st.session_state.get('gui_templates_folder') or '').strip()
+                _morpho_tpl_dir = _shared_experiment_dir()
+                if not (_tf_check and os.path.isdir(os.path.normpath(_tf_check))):
+                    st.caption(
+                        f'**Templates folder** is not set or not found on disk—listing saved template files from `{_morpho_tpl_dir}` until '
+                        '**section 2** points to a valid folder.'
+                    )
+                _morpho_tpl_list = list_morphometrics_template_files(_morpho_tpl_dir)
+                _morpho_opts: list = [None] + _morpho_tpl_list
+                if 'gui_morphometrics_template_select' not in st.session_state:
+                    st.session_state['gui_morphometrics_template_select'] = None
+                _morpho_pick = st.selectbox(
+                    'Morphometrics file to load',
+                    _morpho_opts,
+                    format_func=_morphometrics_template_option_label,
+                    key='gui_morphometrics_template_select',
+                )
+                if _load_save_button(
+                    'Load morphometrics into form',
+                    key='gui_morphometrics_btn_load',
+                    help='Fills morphometrics widgets from the file. Then click **Apply specimen** and **Apply clamp geometry & inertial correction** (or **Apply all morphometrics**).',
+                ):
+                    if not _morpho_pick:
+                        st.session_state['gui_morphometrics_load_feedback'] = (False, 'Choose a morphometrics file first.')
+                    else:
+                        st.session_state['gui_pending_morphometrics_path'] = _morpho_pick
+                    st.rerun()
+
+                if 'gui_morphometrics_new_name' not in st.session_state:
+                    st.session_state['gui_morphometrics_new_name'] = ''
+                st.text_input('Save morphometrics as (name)', key='gui_morphometrics_new_name', placeholder='e.g. Zebrafish adult default')
+                st.text_area(
+                    'Description (optional)',
+                    key='gui_morphometrics_new_desc',
+                    height=68,
+                    placeholder='Optional note saved inside the file.',
+                    help='Stored in the file metadata when you save.',
+                )
+                if 'gui_morphometrics_overwrite' not in st.session_state:
+                    st.session_state['gui_morphometrics_overwrite'] = False
+                st.checkbox('Overwrite if same file name exists', key='gui_morphometrics_overwrite')
+                if _load_save_button('Save morphometrics', key='gui_morphometrics_btn_save'):
+                    _bn = str(st.session_state.get('gui_morphometrics_new_name') or '').strip()
+                    _bd = str(st.session_state.get('gui_morphometrics_new_desc') or '').strip()
+                    _bst = sanitize_morphometrics_filename_stem(_bn or 'morphometrics')
+                    _bout = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_bst}.json'))
+                    try:
+                        if os.path.isfile(_bout) and not bool(st.session_state.get('gui_morphometrics_overwrite')):
+                            st.session_state['gui_morphometrics_save_feedback'] = (
+                                False,
+                                f'File already exists: `{_bout}`. Enable **Overwrite** or change the name.',
+                            )
+                        else:
+                            os.makedirs(os.path.dirname(_bout) or '.', exist_ok=True)
+                            save_morphometrics_template(
+                                _bout,
+                                name=_bn or _bst,
+                                description=_bd,
+                                session_state=st.session_state,
+                            )
+                            st.session_state['gui_morphometrics_save_feedback'] = (True, f'Saved `{_bout}`')
+                    except Exception as e:
+                        st.session_state['gui_morphometrics_save_feedback'] = (False, f'{type(e).__name__}: {e}')
+                    st.rerun()
+            sub_specimen = _load_save_button(
+                'Apply specimen',
+                key='gui_apply_specimen',
+                help='Commits identity, morphometrics, session temperatures, and prep condition onto the experiment object.',
+            )
+
+        st.divider()
+        st.subheader('4 · Clamp geometry & inertial correction')
+        _render_section_apply_status(
+            has_applied_sig=('gui_morpho_applied_sig' in st.session_state),
+            dirty=_morpho_apply_dirty(),
+            apply_label='Apply clamp geometry & inertial correction',
+        )
+        # Section 4: own bordered box (same pattern as §1–§3). Fields are keyed widgets + Apply
+        # button so we do not nest a Streamlit form border inside container(border=True).
+        with st.container(border=True):
+            st.markdown('**Clamp geometry**')
+            if 'morpho_dclamp' not in st.session_state:
+                st.session_state['morpho_dclamp'] = 0.0
+            st.number_input(
+                'Test segment length = clamp spacing (`dclamp` / `test_segment_length_mm`, mm)',
+                min_value=0.001,
+                format='%.6g',
+                key='morpho_dclamp',
+            )
+            if 'morpho_dbend' not in st.session_state:
+                st.session_state['morpho_dbend'] = 0.0
+            st.number_input(
+                'Test section position (mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_dbend',
+                help='Distance from snout (or your chosen landmark) to the center of the clamped test segment.',
+            )
+            if 'morpho_xsec' not in st.session_state:
+                st.session_state['morpho_xsec'] = 0.0
+            st.number_input('Local body width (mm)', min_value=0.001, format='%.6g', key='morpho_xsec')
+            if 'morpho_xsec_height' not in st.session_state:
+                st.session_state['morpho_xsec_height'] = 0.0
+            st.number_input('Local body height (mm)', min_value=0.001, format='%.6g', key='morpho_xsec_height')
+            if 'morpho_dvert' not in st.session_state:
+                st.session_state['morpho_dvert'] = 0.0
+            st.number_input(
+                'Vertical specimen offset (mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_dvert',
+                help='Vertical distance from sensor centerline to mounted specimen center.',
+            )
+            if 'morpho_dhoriz' not in st.session_state:
+                st.session_state['morpho_dhoriz'] = 0.0
+            st.number_input(
+                'Horizontal specimen offset (mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_dhoriz',
+                help='Horizontal distance from sensor centerline to mounted specimen center.',
+            )
+            if 'morpho_muscle_depth' not in st.session_state:
+                st.session_state['morpho_muscle_depth'] = 0.0
+            st.number_input(
+                'Muscle depth `target_muscle_depth_mm` (mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_muscle_depth',
+                help=(
+                    'Distance from the outer surface to the muscle/fiber layer used for strain↔curvature '
+                    '(effective lever = xsec_width/2 − muscle_depth). 0 = surface strain (legacy).'
+                ),
+            )
+            st.divider()
+            st.markdown('**Mounted body profile (inertial model)**')
+            st.selectbox(
+                'Typical density (sets g/mm³ on Apply)',
+                MORPHO_DENSITY_PRESET_LABELS,
+                key='morpho_prof_rho_preset',
+                help=(
+                    'Quick picks from literature-scale values: ~1.00 g/cm³ water-like, ~1.06 g/cm³ muscle/soft tissue, '
+                    '~1.9 g/cm³ cortical bone. Values are copied into **Specimen density** when you click **Apply clamp '
+                    'geometry & inertial correction** (or choose **Custom** and edit the number).'
+                ),
+            )
+            _flush_pending_morpho_prof_rho_sync()
+            st.number_input(
+                'Specimen density (g / mm³)',
+                min_value=1e-9,
+                format='%.6g',
+                key='morpho_prof_rho',
+                help=(
+                    'Mass density for the inertial model (`specimen_profile_density_g_per_mm3`). '
+                    '1 g/cm³ = 1×10⁻³ g/mm³. Adjust after a preset or type your own.'
+                ),
+            )
+            for _gk in ('morpho_geom_x', 'morpho_geom_y', 'morpho_geom_pos'):
+                if _gk not in st.session_state:
+                    st.session_state[_gk] = ''
+            st.caption(
+                'Define the specimen as cross-section stations along its length. Enter three '
+                '**equal-length**, comma-separated lists (one value per station). Cross-sections '
+                'are ellipses with semi-axes height/2 and width/2 (mirrors the existing '
+                'convention). I_spec is computed about the **center transverse axis** (AoR = 0). '
+                '⚠️ I_spec is **NOT rod-scale validated** — leave inertial correction OFF unless '
+                'validated on the rig.'
+            )
+            g1, g2, g3 = st.columns(3)
+            with g1:
+                st.text_input(
+                    'Heights x (mm, comma-separated)',
+                    key='morpho_geom_x',
+                    placeholder='e.g. 1, 5, 7',
+                    help='Cross-section height per station (full dimension, each > 0).',
+                )
+            with g2:
+                st.text_input(
+                    'Widths y (mm, comma-separated)',
+                    key='morpho_geom_y',
+                    placeholder='e.g. 3, 2, 1',
+                    help='Cross-section width per station (full dimension, each > 0).',
+                )
+            with g3:
+                st.text_input(
+                    'Position vs AoR (mm, comma-separated; 0 = AoR, positive = toward sensor)',
+                    key='morpho_geom_pos',
+                    placeholder='e.g. -10, 0, 10',
+                    help=(
+                        'Station position relative to the axis of rotation (AoR). '
+                        '0 = AoR (center between clamps); positive distances are toward the sensor. '
+                        'Enter positive values.'
+                    ),
+                )
+            st.divider()
+            st.markdown('**Apparatus calibration**')
+            st.caption(
+                'Both values are needed together for empty-apparatus inertial calibration. '
+                'Measure and record for every trial.'
+            )
+            if 'morpho_clamp_plate_extension' not in st.session_state:
+                st.session_state['morpho_clamp_plate_extension'] = 0.0
+            st.number_input(
+                'Inter-clamp span (mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_clamp_plate_extension',
+                help=MORPHO_CLAMP_PLATE_EXTENSION_FIELD_HELP,
+            )
+            if 'morpho_prof_clamp' not in st.session_state:
+                st.session_state['morpho_prof_clamp'] = 0.0
+            st.number_input(
+                'Distance from rotation axis to clamps (mm)',
+                min_value=0.0,
+                format='%.6g',
+                key='morpho_prof_clamp',
+                help=MORPHO_PROF_CLAMP_FIELD_HELP,
+            )
+
+            sub_clamp_inertial = _load_save_button(
+                'Apply clamp geometry & inertial correction',
+                key='gui_apply_clamp_inertial',
+                help='Commits clamp spacing/offsets, cross-section, mounted profile, and density. Inertial correction is applied automatically when a calibration profile is loaded or specimen geometry is provided.',
+            )
         if sub_specimen:
             if b is None:
                 _mark_morpho_applied()
