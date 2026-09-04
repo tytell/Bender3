@@ -1121,6 +1121,7 @@ _AUTOSAVE_EXCLUDE_KEYS = {
     'gui_recovery_summary',
     'gui_session_source',
     'gui_setup_confirmed',
+    'gui_hw_config_confirmed',
     'gui_measurements_confirmed',
     'gui_protocol_confirmed',
     # Manual filename override is intentionally session-only: it must default to unchecked
@@ -1170,7 +1171,13 @@ def _is_restore_safe_key(key: str) -> bool:
         return False
     if key in {'gui_ui_large_text', 'gui_ui_theme'}:
         return False
-    if key in {'gui_setup_confirmed', 'gui_measurements_confirmed', 'gui_protocol_confirmed', 'gui_session_source'}:
+    if key in {
+        'gui_setup_confirmed',
+        'gui_hw_config_confirmed',
+        'gui_measurements_confirmed',
+        'gui_protocol_confirmed',
+        'gui_session_source',
+    }:
         return False
     # Buttons / transient actions should never be restored into session state.
     if key.startswith('gui_'):
@@ -3148,7 +3155,7 @@ def _output_path_anchor_for_review(b: Optional[Bender] = None) -> str:
     """Path used to locate the data directory for review (section 8/9 file browser).
 
     Prefers the **applied** experiment output path (``b.outputfile``), which is written only when
-    the user clicks **Apply setup** (``_sec1_apply_composed_path_to_bender``) or after a run/export
+    the user clicks **Apply data path** (``_sec1_apply_composed_path_to_bender``) or after a run/export
     sets the real saved path. That is the "currently applied output directory", so the browser
     reflects where data is actually written and stays stable across auto-name ``NN`` increments.
 
@@ -3414,6 +3421,81 @@ def _procedure_fingerprint() -> tuple:
     return (tt, tuple(pairs))
 
 
+def _cfg_bld_fingerprint() -> tuple:
+    """Fingerprint for hardware-config builder widgets + selected module stem."""
+    pairs = [
+        (k, st.session_state.get(k))
+        for k in sorted(st.session_state.keys())
+        if str(k).startswith('gui_cfg_bld_')
+    ]
+    return (
+        _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or '')),
+        tuple(pairs),
+    )
+
+
+def _mark_cfg_bld_applied() -> None:
+    st.session_state['gui_cfg_bld_applied_sig'] = _cfg_bld_fingerprint()
+    st.session_state['gui_hw_config_confirmed'] = True
+
+
+def _cfg_bld_apply_dirty() -> bool:
+    if 'gui_cfg_bld_applied_sig' not in st.session_state:
+        return False
+    return _cfg_bld_fingerprint() != st.session_state['gui_cfg_bld_applied_sig']
+
+
+def _render_section_apply_status(*, has_applied_sig: bool, dirty: bool, apply_label: str) -> None:
+    """Show not-applied / stale / fresh for a section Apply."""
+    if not has_applied_sig:
+        st.caption(f'Not applied yet — click **{apply_label}** to commit this section.')
+    elif dirty:
+        st.warning(f'Fields changed since last Apply — click **{apply_label}**.')
+    else:
+        st.success(f'Applied — matches **{apply_label}**.')
+
+
+_FALLBACK_TEST_TYPES = ('dynamic', 'frequency_sweep', 'isometric', 'isovelocity')
+
+
+def _static_morpho_widget_defaults() -> dict[str, Any]:
+    """Session defaults for morphometrics widgets when no ``Bender`` is loaded yet."""
+    return {
+        'gui_genus_species': '',
+        'gui_specimen_id': '',
+        'morpho_segment': '',
+        'morpho_fishmass': 0.0,
+        'morpho_fishlen_TL': 0.0,
+        'morpho_fishlen_SL': 0.0,
+        'morpho_xsec_height': 8.0,
+        'morpho_dvert': 0.0,
+        'morpho_dhoriz': 0.0,
+        'morpho_dclamp': 10.0,
+        'morpho_xsec': 8.0,
+        'morpho_dbend': 0.0,
+        'morpho_temp_room': 22.0,
+        'morpho_temp_tank': 22.0,
+        'morpho_prep_condition': '',
+        'morpho_prof_rho': 1.03e-3,
+        'morpho_geom_x': '',
+        'morpho_geom_y': '',
+        'morpho_geom_pos': '',
+        'morpho_prof_clamp': 20.0,
+        'morpho_clamp_plate_extension': 0.0,
+        'morpho_prof_rho_preset': MORPHO_DENSITY_PRESET_LABELS[0],
+    }
+
+
+def _ensure_morphometrics_session_defaults(b: Optional[Bender], *, force: bool = False) -> None:
+    """Seed morphometrics widget keys from ``b`` when present, else static defaults."""
+    if b is not None:
+        _init_morphometrics_session_state(b, force=force)
+        return
+    for key, val in _static_morpho_widget_defaults().items():
+        if force or key not in st.session_state:
+            st.session_state[key] = val
+
+
 def _ensure_apply_tracking_bender(b: Bender) -> None:
     """Reset apply/dirty baselines when the in-memory ``Bender`` instance is replaced."""
     bid = id(b)
@@ -3423,6 +3505,7 @@ def _ensure_apply_tracking_bender(b: Bender) -> None:
             'gui_morpho_applied_sig',
             'gui_data_path_applied_sig',
             'gui_proc_applied_sig',
+            'gui_cfg_bld_applied_sig',
             'gui_morpho_apply_invalidated',
             'gui_proc_apply_invalidated',
         ):
@@ -3490,8 +3573,6 @@ def _mark_procedure_applied() -> None:
 
 
 def _morpho_apply_dirty() -> bool:
-    if st.session_state.get('bender') is None:
-        return False
     if st.session_state.get('gui_morpho_apply_invalidated'):
         return True
     if 'gui_morpho_applied_sig' not in st.session_state:
@@ -3500,8 +3581,6 @@ def _morpho_apply_dirty() -> bool:
 
 
 def _morpho_apply_dirty_reason() -> str:
-    if st.session_state.get('bender') is None:
-        return 'no_bender'
     if st.session_state.get('gui_morpho_apply_invalidated'):
         return 'invalidated'
     if 'gui_morpho_applied_sig' not in st.session_state:
@@ -3568,43 +3647,49 @@ def _segmented_rest_floor_error(test_type: str, rest_between_steps_s) -> Optiona
 
 
 def _run_export_blocked_reason(b: Optional[Bender]) -> Optional[str]:
-    """Hard backstop for the Run/Export actions: the safety the rendering gate used to enforce.
+    """Hard backstop for the Run/Export actions: point-of-consequence safety.
 
     Returns a friendly reason when acquisition + export must be refused, or ``None`` when it is
-    safe to proceed. This is the point-of-consequence guard: it holds regardless of whether any
-    section is shown, so a run can never start (and waste an acquisition) without a loaded config
-    and a resolvable output destination. Uses existing read-only predicates only.
+    safe to proceed. Holds regardless of section visibility so a run can never start without a
+    loaded config and a resolvable output destination.
     """
     if b is None:
-        return 'No hardware config loaded — select a config in section 1 and click **Apply setup** first.'
+        return (
+            'No hardware config loaded — select a config in section 1 and click '
+            '**Apply hardware config** first.'
+        )
     if not _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or '')):
-        return 'No hardware config selected — choose a config in section 1 and click **Apply setup**.'
+        return (
+            'No hardware config selected — choose a config in section 1 and click '
+            '**Apply hardware config**.'
+        )
+    if _cfg_bld_apply_dirty() or not bool(st.session_state.get('gui_hw_config_confirmed')):
+        return 'Hardware config not applied — click **Apply hardware config** before running.'
     if _section2_destination_incomplete():
-        return 'No output path — set a **Data folder** (or file name) in section 2 and click **Apply setup**.'
+        return (
+            'No output path — set a **Data folder** (or file name) in section 2 and click '
+            '**Apply data path**.'
+        )
     if not _setup_ready(b):
-        return 'Setup not applied — click **Apply setup** to commit the config and data path before running.'
+        return (
+            'Setup not ready — click **Apply hardware config** and **Apply data path** '
+            'before running.'
+        )
     return None
 
 
-def _render_no_config_placeholder() -> None:
-    """Null-safe stand-in for the experiment pane when no hardware config is loaded.
-
-    Replaces the old silent ``st.stop()`` gate: instead of a blank halt, the operator sees a
-    clear pointer back to section 1. The downstream sections are intrinsically derived from the
-    loaded ``Bender`` (protocol schema, morphometrics), so there is nothing to render until a
-    config exists — but the page no longer dead-ends without explanation.
-    """
+def _render_no_config_banner() -> None:
+    """Inline notice when sections are visible but no hardware config is loaded yet."""
     st.info(
-        'Load a hardware config first. Choose a config in **section 1 · Hardware configuration** '
-        'and click **Apply setup** — the specimen, clamp, procedure, and run sections appear once '
-        'a config is loaded.',
+        'No hardware config applied yet. Sections below stay editable; **Run** / **Save** stay '
+        'blocked until you click **Apply hardware config** and **Apply data path**.',
         icon='⚙️',
     )
 
 
-def _soft_apply_reminder() -> None:
-    # Intentionally silent: setup readiness is shown in the sidebar checklist.
-    return
+def _soft_apply_reminder(apply_label: str = 'Apply') -> None:
+    """Visible stale-edit reminder (call only when the section is dirty)."""
+    st.warning(f'Fields changed since last Apply — click **{apply_label}**.')
 
 
 def _session_float(key: str) -> Optional[float]:
@@ -3655,6 +3740,10 @@ def _measurements_fields_ok() -> bool:
 def _setup_ready(b: Optional[Bender]) -> bool:
     if b is None:
         return False
+    if not bool(st.session_state.get('gui_hw_config_confirmed')):
+        return False
+    if _cfg_bld_apply_dirty():
+        return False
     if _section2_destination_incomplete():
         return False
     outp = str(getattr(b, 'outputfile', '') or '').strip()
@@ -3662,6 +3751,8 @@ def _setup_ready(b: Optional[Bender]) -> bool:
     if not outp and not composed:
         return False
     if composed and outp and not _paths_equal_norm(outp, composed) and _data_path_apply_dirty():
+        return False
+    if not bool(st.session_state.get('gui_data_path_committed')):
         return False
     _cfg_sel = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
     if not _cfg_sel:
@@ -3949,10 +4040,18 @@ def _protocol_confirmed_for_checklist(b: Optional[Bender], checks_by_sec: dict[s
 def _refresh_confirmation_flags() -> None:
     if st.session_state.get('bender') is None:
         st.session_state['gui_setup_confirmed'] = False
+        st.session_state['gui_hw_config_confirmed'] = False
         st.session_state['gui_measurements_confirmed'] = False
         st.session_state['gui_protocol_confirmed'] = False
         return
-    if _data_path_apply_dirty() or _section2_destination_incomplete():
+    if _cfg_bld_apply_dirty():
+        st.session_state['gui_hw_config_confirmed'] = False
+    if (
+        _data_path_apply_dirty()
+        or _section2_destination_incomplete()
+        or not bool(st.session_state.get('gui_hw_config_confirmed'))
+        or not bool(st.session_state.get('gui_data_path_committed'))
+    ):
         st.session_state['gui_setup_confirmed'] = False
     if _morpho_apply_dirty():
         st.session_state['gui_measurements_confirmed'] = False
@@ -4025,7 +4124,7 @@ def _build_checklist_fix_lines(
 ) -> list[str]:
     lines: list[str] = []
     if not setup_ok:
-        lines.append('Setup: complete Step 1 and click Apply setup.')
+        lines.append('Setup: Apply hardware config (section 1) and Apply data path (section 2).')
     if not measurements_ok:
         lines.append('Measurements: enter required values and click Apply specimen and Apply clamp geometry & inertial correction.')
     if not protocol_ok:
@@ -4157,7 +4256,7 @@ def _seed_cfg_build_from_source_config(source_config: str) -> None:
 def _apply_cfg_bld_fields_to_bender(b: Bender) -> Optional[str]:
     """Copy ``gui_cfg_bld_*`` widget values onto the live ``Bender`` instance.
 
-    Called by **Apply setup** so operator edits to Step-1 fields take effect
+    Called by **Apply hardware config** so operator edits to Step-1 fields take effect
     without requiring a "Write config file and load" round-trip. Returns an
     error message string on validation failure, or ``None`` on success.
     """
@@ -7559,6 +7658,7 @@ def main():
     st.session_state.setdefault('gui_app_route', 'landing')
     st.session_state.setdefault('gui_session_source', 'fresh')
     st.session_state.setdefault('gui_setup_confirmed', False)
+    st.session_state.setdefault('gui_hw_config_confirmed', False)
     st.session_state.setdefault('gui_measurements_confirmed', False)
     st.session_state.setdefault('gui_protocol_confirmed', False)
     _announce_disk_recovery_snapshot()
@@ -7667,121 +7767,105 @@ def main():
         # below it (one shared full-width container) for clean top-to-bottom tab order.
         _setup_left = _setup_right = st.container()
 
-    def _apply_setup_action(*, sw_dp: bool) -> None:
-        # Unified config section: a config is always loaded/saved via the loader or Save action, so
-        # Apply re-loads the selected module if it differs from the in-memory experiment, then
-        # commits the data path. (No separate Load/Build modes.)
-        if True:
-            _ensure_hw_config_session_defaults()
-            eff = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
-            if not eff:
-                _mods_here = discover_config_modules(_ROOT)
-                if not _mods_here:
-                    _st_error_actions(
-                        'No hardware config modules found.',
-                        ['Add a `.py` config module in the project folder'],
-                    )
-                else:
-                    _st_error_actions(
-                        'No config module resolved.',
-                        ['Use Browse in Step 1 to select module'],
-                    )
-                return
-            b0 = st.session_state.get('bender')
-            need_hw_reload = b0 is None or not _selected_config_matches_bender(b0, eff)
-            # Preserve visible downstream form state across a config replacement. The
-            # Bender carry-over below restores only last-applied values; keeping these
-            # widget values separately also preserves newer edits as visibly dirty.
-            _downstream_widget_state: dict[str, Any] = {}
-            if need_hw_reload and b0 is not None:
-                _has_morpho_apply = 'gui_morpho_applied_sig' in st.session_state
-                _has_proc_apply = 'gui_proc_applied_sig' in st.session_state
-                for _key in list(st.session_state.keys()):
-                    _keep_morpho = _has_morpho_apply and (
-                        _key.startswith('morpho_')
-                        or _key in {
-                            'gui_genus_species', 'gui_specimen_id', 'gui_specimen_sex',
-                            'gui_specimen_muscle_type', 'gui_session_analyst',
-                        }
-                    )
-                    _keep_proc = _has_proc_apply and (
-                        _key.startswith('fld_')
-                        or _key in {'test_type_select', 'gui_starting_angle_deg', 'gui_post_notes'}
-                    )
-                    if _keep_morpho or _keep_proc:
-                        _downstream_widget_state[_key] = copy.deepcopy(st.session_state[_key])
-            err = (
-                _apply_loaded_config_module(_raw_mod_for_hardware_config_load(module_stem=eff))
-                if need_hw_reload
-                else None
+    def _apply_hardware_config_action() -> None:
+        """Commit selected module + ``gui_cfg_bld_*`` fields onto the live Bender (no data path)."""
+        _ensure_hw_config_session_defaults()
+        eff = _normalize_config_module_name(str(st.session_state.get('gui_load_cfg_select') or ''))
+        if not eff:
+            _mods_here = discover_config_modules(_ROOT)
+            if not _mods_here:
+                _st_error_actions(
+                    'No hardware config modules found.',
+                    ['Add a `.py` config module in the project folder'],
+                )
+            else:
+                _st_error_actions(
+                    'No config module resolved.',
+                    ['Use Browse in Step 1 to select module'],
+                )
+            return
+        b0 = st.session_state.get('bender')
+        need_hw_reload = b0 is None or not _selected_config_matches_bender(b0, eff)
+        # Preserve visible downstream form state across a config replacement. The
+        # Bender carry-over below restores only last-applied values; keeping these
+        # widget values separately also preserves newer edits as visibly dirty.
+        _downstream_widget_state: dict[str, Any] = {}
+        if need_hw_reload and b0 is not None:
+            _has_morpho_apply = 'gui_morpho_applied_sig' in st.session_state
+            _has_proc_apply = 'gui_proc_applied_sig' in st.session_state
+            for _key in list(st.session_state.keys()):
+                _keep_morpho = _has_morpho_apply and (
+                    _key.startswith('morpho_')
+                    or _key in {
+                        'gui_genus_species', 'gui_specimen_id', 'gui_specimen_sex',
+                        'gui_specimen_muscle_type', 'gui_session_analyst',
+                    }
+                )
+                _keep_proc = _has_proc_apply and (
+                    _key.startswith('fld_')
+                    or _key in {'test_type_select', 'gui_starting_angle_deg', 'gui_post_notes'}
+                )
+                if _keep_morpho or _keep_proc:
+                    _downstream_widget_state[_key] = copy.deepcopy(st.session_state[_key])
+        err = (
+            _apply_loaded_config_module(_raw_mod_for_hardware_config_load(module_stem=eff))
+            if need_hw_reload
+            else None
+        )
+        if err:
+            _st_error_detail(
+                'Hardware config load failed.',
+                ['Check module name', 'Fix errors in Details'],
+                err,
             )
-            if err:
+            return
+        if need_hw_reload and b0 is not None:
+            for _key, _value in _downstream_widget_state.items():
+                st.session_state[_key] = _value
+            # A different config replaces Bender. Carry only values already committed
+            # through sections 3-5; leave newer, un-applied widget edits untouched/dirty.
+            _carry_applied_downstream_state(b0, st.session_state['bender'])
+        # FIX (commit 4204b2d): copy gui_cfg_bld_* onto the live Bender so edits take
+        # effect without requiring "Save as new config file" first.
+        b_live = st.session_state.get('bender')
+        if b_live is not None:
+            cfg_err = _apply_cfg_bld_fields_to_bender(b_live)
+            if cfg_err:
                 _st_error_detail(
-                    'Hardware config load failed.',
-                    ['Check module name', 'Fix errors in Details'],
-                    err,
+                    'Config field validation failed.',
+                    ['Fix the value shown in Details', 'Click Apply hardware config again'],
+                    cfg_err,
                 )
                 return
-            if need_hw_reload and b0 is not None:
-                for _key, _value in _downstream_widget_state.items():
-                    st.session_state[_key] = _value
-                # A different config replaces Bender. Carry only values already committed
-                # through sections 3-5; leave newer, un-applied widget edits untouched/dirty.
-                _carry_applied_downstream_state(b0, st.session_state['bender'])
-            # FIX (commit 4204b2d): Apply Setup previously re-instantiated Bender
-            # from the .py config file on disk, silently ignoring all operator edits
-            # in gui_cfg_bld_* widgets (shadow-state bug). Now we copy those widget
-            # values onto the live Bender so edits take effect without requiring
-            # "Write config file and load" first.
-            b_live = st.session_state.get('bender')
-            if b_live is not None:
-                cfg_err = _apply_cfg_bld_fields_to_bender(b_live)
-                if cfg_err:
-                    _st_error_detail(
-                        'Config field validation failed.',
-                        ['Fix the value shown in Details', 'Click Apply setup again'],
-                        cfg_err,
-                    )
-                    return
-            perr = _sec1_apply_composed_path_to_bender()
-            if perr:
-                # A folder alone is enough (the file name is auto-composed at save time), so the
-                # only remaining path failure is having neither a folder nor a file name. Point at
-                # the folder as the minimum requirement.
-                _path_actions = ['Set a Data folder', 'Or enter a file name']
-                if need_hw_reload:
-                    _st_error_detail(
-                        'Hardware loaded; data path not set.',
-                        _path_actions,
-                        perr,
-                    )
-                else:
-                    _st_error_detail(
-                        'Data path not applied.',
-                        _path_actions,
-                        perr,
-                    )
-                return
-            if sw_dp and not need_hw_reload:
-                st.toast('Data file path set.')
-            elif sw_dp and need_hw_reload:
-                st.toast('Hardware configuration loaded and data file path set.')
-            else:
-                st.toast('Hardware configuration and data file path applied.')
-            if need_hw_reload:
-                st.success(f'Loaded `{_normalize_config_module_name(eff)}`')
-            else:
-                st.success('Data file path set on the experiment object.')
-            # FIX (commit 4204b2d): Re-seed config builder widgets from the live
-            # Bender so fields reflect exactly what was applied (not the stale
-            # .py file on disk). Without this, the UI would show pre-edit values
-            # after Apply, misleading the operator.
-            _b_applied = st.session_state.get('bender')
-            if _b_applied is not None:
-                _seed_cfg_bld_from_bender(_b_applied)
-            st.session_state['gui_setup_confirmed'] = True
-            st.rerun()
+            _seed_cfg_bld_from_bender(b_live)
+        _mark_cfg_bld_applied()
+        if need_hw_reload:
+            st.toast(f'Hardware configuration loaded: `{_normalize_config_module_name(eff)}`')
+        else:
+            st.toast('Hardware configuration applied.')
+        st.rerun()
+
+    def _apply_data_path_action() -> None:
+        """Commit data folder / file name onto ``bender.outputfile`` (requires loaded config)."""
+        if st.session_state.get('bender') is None:
+            _st_error_actions(
+                'No hardware config loaded.',
+                ['Click Apply hardware config in section 1 first'],
+            )
             return
+        perr = _sec1_apply_composed_path_to_bender()
+        if perr:
+            _st_error_detail(
+                'Data path not applied.',
+                ['Set a Data folder', 'Or enter a file name'],
+                perr,
+            )
+            return
+        st.session_state['gui_setup_confirmed'] = bool(
+            st.session_state.get('gui_hw_config_confirmed')
+        ) and bool(st.session_state.get('gui_data_path_committed'))
+        st.toast('Data file path applied.')
+        st.rerun()
 
     if _show_hw:
         _hw_host = _setup_left if _setup_left is not None else st
@@ -7803,7 +7887,10 @@ def main():
             st.divider()
             _render_apparatus_inertia_cal_loader()
             st.divider()
-            st.caption('Edit any fields below, then enter a new name and click Write to save a new config.')
+            st.caption(
+                'Edit hardware fields below, then click **Apply hardware config** to use them for this '
+                'session. Saving a reusable `.py` is optional (expander at the bottom of this section).'
+            )
             st.divider()
             if st.button(
                 'Build new config (clear fields)',
@@ -7817,12 +7904,6 @@ def main():
             if True:
                 _flush_pending_cfg_build_base()
                 _maybe_seed_cfg_build_fields()
-                st.text_input(
-                    'Save new config as (module name, no `.py`)',
-                    key='gui_cfg_build_out',
-                    placeholder='e.g. lab_setup_2026',
-                    help='Writes a new `.py` file in this folder and loads it.',
-                )
                 c_cfg_l = c_cfg_r = st.container()
                 with c_cfg_l:
                     with st.expander('Calibration, direction & axis labels', expanded=False):
@@ -7937,152 +8018,183 @@ def main():
                             key='gui_cfg_bld_ramp_mode_default',
                         )
                         st.caption('`units` / `unit_rules` dicts stay from the template unless you edit the generated `.py` file.')
-                st.checkbox(
-                    'Overwrite if a `.py` file with that name already exists',
-                    key='gui_cfg_build_overwrite',
+                _render_section_apply_status(
+                    has_applied_sig=('gui_cfg_bld_applied_sig' in st.session_state),
+                    dirty=_cfg_bld_apply_dirty(),
+                    apply_label='Apply hardware config',
                 )
-                if _load_save_button('Write config file and load', key='gui_btn_write_load_config'):
-                    base = str(st.session_state.get('gui_cfg_build_base') or '').strip()
-                    out_raw = str(st.session_state.get('gui_cfg_build_out') or '').strip()
-                    out_stem = sanitize_config_module_stem(out_raw)
-                    if not base:
-                        _st_error_actions('Build new blocked.', ['Pick template module above'])
-                    elif not out_raw:
-                        _st_error_actions('Build new blocked.', ['Enter new module file name'])
-                    else:
-                        stim_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_channels') or ''))
-                        sg_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_chan') or ''))
-                        sg_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_name') or ''))
-                        sm_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_chan') or ''))
-                        sm_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_name') or ''))
-                        sono_cal_ok = True
-                        sono_lf: list[float] = []
-                        sono_rf: list[float] = []
-                        try:
-                            sono_lf = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_left') or ''))
-                            sono_rf = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_right') or ''))
-                        except ValueError as e:
-                            sono_cal_ok = False
-                            _st_error_detail(
-                                'Sono calibration invalid.',
-                                ['Enter an even count of >= 4 numbers', 'All volts first, then all mm'],
-                                str(e),
-                            )
-                        if not stim_ch:
-                            _st_error_actions('Stim channels missing.', ['Add comma-separated port lines'])
-                        elif not sg_ch or not sg_nm or len(sg_ch) != len(sg_nm):
-                            _st_error_actions('SG lists mismatch.', ['Match SG channel name counts'])
-                        elif (bool(sm_ch) ^ bool(sm_nm)) or (sm_ch and sm_nm and len(sm_ch) != len(sm_nm)):
-                            _st_error_actions('Stim monitor mismatch.', ['Fill both lists or clear both'])
-                        elif not sono_cal_ok:
-                            pass
+                if _load_save_button(
+                    'Apply hardware config',
+                    key='gui_hw_config_apply',
+                    help='Loads the selected module if needed and commits edited hardware fields to the experiment object. Does not write a .py file and does not start DAQ.',
+                ):
+                    _apply_hardware_config_action()
+                with st.expander('Optional: save as new config file', expanded=False):
+                    st.caption(
+                        'Writes a reusable `.py` on disk and loads it. This is not required to run — '
+                        'use **Apply hardware config** above for the current session.'
+                    )
+                    st.text_input(
+                        'Save new config as (module name, no `.py`)',
+                        key='gui_cfg_build_out',
+                        placeholder='e.g. lab_setup_2026',
+                        help='Writes a new `.py` file in this folder and loads it.',
+                    )
+                    st.checkbox(
+                        'Overwrite if a `.py` file with that name already exists',
+                        key='gui_cfg_build_overwrite',
+                    )
+                    if _load_save_button(
+                        'Save as new config file…',
+                        key='gui_btn_write_load_config',
+                        button_type='secondary',
+                        help='Optional: write a new .py module and load it. Session Apply is separate.',
+                    ):
+                        base = str(st.session_state.get('gui_cfg_build_base') or '').strip()
+                        out_raw = str(st.session_state.get('gui_cfg_build_out') or '').strip()
+                        out_stem = sanitize_config_module_stem(out_raw)
+                        if not base:
+                            _st_error_actions('Save blocked.', ['Pick template module above'])
+                        elif not out_raw:
+                            _st_error_actions('Save blocked.', ['Enter new module file name'])
                         else:
-                            sono_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_channel') or ''))
-                            sono_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_name') or ''))
-                            use_sono = bool(st.session_state.get('gui_cfg_bld_use_sono'))
-                            if use_sono and (not sono_ch or not sono_nm or len(sono_ch) != len(sono_nm)):
-                                _st_error_actions('Sono lists mismatch.', ['Match sono name count', 'Or disable sonomicrometry'])
+                            stim_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_channels') or ''))
+                            sg_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_chan') or ''))
+                            sg_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_SG_name') or ''))
+                            sm_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_chan') or ''))
+                            sm_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_stim_monitor_name') or ''))
+                            sono_cal_ok = True
+                            sono_lf: list[float] = []
+                            sono_rf: list[float] = []
+                            try:
+                                sono_lf = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_left') or ''))
+                                sono_rf = parse_sono_calibration(str(st.session_state.get('gui_cfg_bld_sono_cal_right') or ''))
+                            except ValueError as e:
+                                sono_cal_ok = False
+                                _st_error_detail(
+                                    'Sono calibration invalid.',
+                                    ['Enter an even count of >= 4 numbers', 'All volts first, then all mm'],
+                                    str(e),
+                                )
+                            if not stim_ch:
+                                _st_error_actions('Stim channels missing.', ['Add comma-separated port lines'])
+                            elif not sg_ch or not sg_nm or len(sg_ch) != len(sg_nm):
+                                _st_error_actions('SG lists mismatch.', ['Match SG channel name counts'])
+                            elif (bool(sm_ch) ^ bool(sm_nm)) or (sm_ch and sm_nm and len(sm_ch) != len(sm_nm)):
+                                _st_error_actions('Stim monitor mismatch.', ['Fill both lists or clear both'])
+                            elif not sono_cal_ok:
+                                pass
                             else:
-                                _configs_dir = default_configs_dir(_ROOT)
-                                os.makedirs(_configs_dir, exist_ok=True)
-                                if _configs_dir not in sys.path:
-                                    sys.path.insert(0, _configs_dir)
-                                path = os.path.join(_configs_dir, out_stem + '.py')
-                                if os.path.isfile(path) and not st.session_state.get('gui_cfg_build_overwrite'):
-                                    _st_error_actions('Config file exists.', ['Enable overwrite checkbox', 'Or pick new name'])
+                                sono_ch = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_channel') or ''))
+                                sono_nm = parse_comma_list(str(st.session_state.get('gui_cfg_bld_sono_name') or ''))
+                                use_sono = bool(st.session_state.get('gui_cfg_bld_use_sono'))
+                                if use_sono and (not sono_ch or not sono_nm or len(sono_ch) != len(sono_nm)):
+                                    _st_error_actions('Sono lists mismatch.', ['Match sono name count', 'Or disable sonomicrometry'])
                                 else:
-                                    rm = str(st.session_state.get('gui_cfg_bld_ramp_mode_default') or 'linear')
-                                    if rm not in ('linear', 'exponential'):
-                                        rm = 'linear'
-                                    assignments = {
-                                        'apparatus_id': str(
-                                            st.session_state.get('gui_cfg_bld_apparatus_id') or ''
-                                        ),
-                                        'forcetorque_calibration_file': str(
-                                            st.session_state.get('gui_cfg_bld_forcetorque_calibration_file') or 'FT56491.cal'
-                                        ),
-                                        'apparatus_inertia_calibration_file': str(
-                                            st.session_state.get('gui_cfg_bld_apparatus_inertia_calibration_file') or ''
-                                        ),
-                                        'positive_motor_direction': str(
-                                            st.session_state.get('gui_cfg_bld_positive_motor_direction') or 'left'
-                                        ),
-                                        'specimen_lateral_index_on_positive_motor_side': int(
-                                            st.session_state.get('gui_cfg_bld_specimen_lateral_index') or -1
-                                        ),
-                                        'motor_axis': str(st.session_state.get('gui_cfg_bld_motor_axis') or 'z'),
-                                        'bending_axis_sensor': str(
-                                            st.session_state.get('gui_cfg_bld_bending_axis_sensor') or 'z'
-                                        ),
-                                        'primary_bending_axis': str(
-                                            st.session_state.get('gui_cfg_bld_primary_bending_axis') or 'zTorque'
-                                        ),
-                                        'bending_axis_specimen': str(
-                                            st.session_state.get('gui_cfg_bld_bending_axis_specimen') or 'dorsoventral'
-                                        ),
-                                        'device_name': str(st.session_state.get('gui_cfg_bld_device_name') or 'Dev1'),
-                                        'daq_ai_sample_rate_hz': float(st.session_state.get('gui_cfg_bld_daq_ai_sr') or 1000.0),
-                                        'daq_ao_do_sample_rate_hz': float(
-                                            st.session_state.get('gui_cfg_bld_daq_ao_sr') or 60000.0
-                                        ),
-                                        'motor_full_steps_per_rev': int(st.session_state.get('gui_cfg_bld_motor_steps') or 1600),
-                                        'motor_gear_ratio': int(st.session_state.get('gui_cfg_bld_motor_gear') or 5),
-                                        'encoder_pulses_per_rev': int(st.session_state.get('gui_cfg_bld_encoder_ppr') or 10000),
-                                        'stim_channels': stim_ch,
-                                        'motor_port': str(st.session_state.get('gui_cfg_bld_motor_port') or 'port0'),
-                                        'encoder_chan': str(st.session_state.get('gui_cfg_bld_encoder_chan') or 'ctr0'),
-                                        'SG_chan': sg_ch,
-                                        'SG_name': sg_nm,
-                                        'stim_monitor_chan': sm_ch,
-                                        'stim_monitor_name': sm_nm,
-                                        'S1side': str(st.session_state.get('gui_cfg_bld_S1side') or 'left'),
-                                        'S2side': str(st.session_state.get('gui_cfg_bld_S2side') or 'right'),
-                                        'use_sono': use_sono,
-                                        'sono_channel': sono_ch if use_sono else [],
-                                        'sono_name': sono_nm if use_sono else [],
-                                        'sono_internal_samplefreq': int(
-                                            st.session_state.get('gui_cfg_bld_sono_internal_samplefreq') or 241
-                                        ),
-                                        'sono_cal_left': sono_lf,
-                                        'sono_cal_right': sono_rf,
-                                        'sono_transmit_pulse': float(
-                                            st.session_state.get('gui_cfg_bld_sono_transmit_pulse') or 0.0
-                                        ),
-                                        'sono_inhibit_delay': float(
-                                            st.session_state.get('gui_cfg_bld_sono_inhibit_delay') or 0.0
-                                        ),
-                                        'sono_distance': str(
-                                            st.session_state.get('gui_cfg_bld_sono_distance') or ''
-                                        ),
-                                        'amp_step_vel': int(st.session_state.get('gui_cfg_bld_amp_step_vel') or 10),
-                                        'ramp_mode_default': rm,
-                                        'waitbefore': float(st.session_state.get('gui_cfg_bld_waitbefore') or 3.0),
-                                        'waitafter': float(st.session_state.get('gui_cfg_bld_waitafter') or 4.0),
-                                        'rampdur': float(st.session_state.get('gui_cfg_bld_rampdur') or 0.25),
-                                        'prepoststim_dur': float(st.session_state.get('gui_cfg_bld_prepoststim_dur') or 0.06),
-                                        'prepoststim_sep': float(st.session_state.get('gui_cfg_bld_prepoststim_sep') or 1.0),
-                                        'prestim_time': float(st.session_state.get('gui_cfg_bld_prestim_time') or -2.0),
-                                        'poststim_time': float(st.session_state.get('gui_cfg_bld_poststim_time') or 2.0),
-                                    }
-                                    src = render_generated_config(base, assignments)
-                                    with open(path, 'w', encoding='utf-8') as f:
-                                        f.write(src)
-                                    importlib.invalidate_caches()
-                                    err = _apply_loaded_config_module(out_stem)
-                                    if err:
-                                        _st_error_detail(
-                                            'Generated config did not load.',
-                                            ['Fix assignments above', 'Read Details message'],
-                                            err,
-                                        )
+                                    _configs_dir = default_configs_dir(_ROOT)
+                                    os.makedirs(_configs_dir, exist_ok=True)
+                                    if _configs_dir not in sys.path:
+                                        sys.path.insert(0, _configs_dir)
+                                    path = os.path.join(_configs_dir, out_stem + '.py')
+                                    if os.path.isfile(path) and not st.session_state.get('gui_cfg_build_overwrite'):
+                                        _st_error_actions('Config file exists.', ['Enable overwrite checkbox', 'Or pick new name'])
                                     else:
-                                        st.session_state['gui_load_cfg_select'] = out_stem
-                                        # The saved file is now the loaded config; point the import
-                                        # base at it so subsequent edits inherit from it (fields
-                                        # re-seed from the just-written file, i.e. the same values).
-                                        st.session_state['gui_pending_cfg_build_base'] = out_stem
-                                        st.success(f'Wrote and loaded `{out_stem}`')
-                                        st.rerun()
+                                        rm = str(st.session_state.get('gui_cfg_bld_ramp_mode_default') or 'linear')
+                                        if rm not in ('linear', 'exponential'):
+                                            rm = 'linear'
+                                        assignments = {
+                                            'apparatus_id': str(
+                                                st.session_state.get('gui_cfg_bld_apparatus_id') or ''
+                                            ),
+                                            'forcetorque_calibration_file': str(
+                                                st.session_state.get('gui_cfg_bld_forcetorque_calibration_file') or 'FT56491.cal'
+                                            ),
+                                            'apparatus_inertia_calibration_file': str(
+                                                st.session_state.get('gui_cfg_bld_apparatus_inertia_calibration_file') or ''
+                                            ),
+                                            'positive_motor_direction': str(
+                                                st.session_state.get('gui_cfg_bld_positive_motor_direction') or 'left'
+                                            ),
+                                            'specimen_lateral_index_on_positive_motor_side': int(
+                                                st.session_state.get('gui_cfg_bld_specimen_lateral_index') or -1
+                                            ),
+                                            'motor_axis': str(st.session_state.get('gui_cfg_bld_motor_axis') or 'z'),
+                                            'bending_axis_sensor': str(
+                                                st.session_state.get('gui_cfg_bld_bending_axis_sensor') or 'z'
+                                            ),
+                                            'primary_bending_axis': str(
+                                                st.session_state.get('gui_cfg_bld_primary_bending_axis') or 'zTorque'
+                                            ),
+                                            'bending_axis_specimen': str(
+                                                st.session_state.get('gui_cfg_bld_bending_axis_specimen') or 'dorsoventral'
+                                            ),
+                                            'device_name': str(st.session_state.get('gui_cfg_bld_device_name') or 'Dev1'),
+                                            'daq_ai_sample_rate_hz': float(st.session_state.get('gui_cfg_bld_daq_ai_sr') or 1000.0),
+                                            'daq_ao_do_sample_rate_hz': float(
+                                                st.session_state.get('gui_cfg_bld_daq_ao_sr') or 60000.0
+                                            ),
+                                            'motor_full_steps_per_rev': int(st.session_state.get('gui_cfg_bld_motor_steps') or 1600),
+                                            'motor_gear_ratio': int(st.session_state.get('gui_cfg_bld_motor_gear') or 5),
+                                            'encoder_pulses_per_rev': int(st.session_state.get('gui_cfg_bld_encoder_ppr') or 10000),
+                                            'stim_channels': stim_ch,
+                                            'motor_port': str(st.session_state.get('gui_cfg_bld_motor_port') or 'port0'),
+                                            'encoder_chan': str(st.session_state.get('gui_cfg_bld_encoder_chan') or 'ctr0'),
+                                            'SG_chan': sg_ch,
+                                            'SG_name': sg_nm,
+                                            'stim_monitor_chan': sm_ch,
+                                            'stim_monitor_name': sm_nm,
+                                            'S1side': str(st.session_state.get('gui_cfg_bld_S1side') or 'left'),
+                                            'S2side': str(st.session_state.get('gui_cfg_bld_S2side') or 'right'),
+                                            'use_sono': use_sono,
+                                            'sono_channel': sono_ch if use_sono else [],
+                                            'sono_name': sono_nm if use_sono else [],
+                                            'sono_internal_samplefreq': int(
+                                                st.session_state.get('gui_cfg_bld_sono_internal_samplefreq') or 241
+                                            ),
+                                            'sono_cal_left': sono_lf,
+                                            'sono_cal_right': sono_rf,
+                                            'sono_transmit_pulse': float(
+                                                st.session_state.get('gui_cfg_bld_sono_transmit_pulse') or 0.0
+                                            ),
+                                            'sono_inhibit_delay': float(
+                                                st.session_state.get('gui_cfg_bld_sono_inhibit_delay') or 0.0
+                                            ),
+                                            'sono_distance': str(
+                                                st.session_state.get('gui_cfg_bld_sono_distance') or ''
+                                            ),
+                                            'amp_step_vel': int(st.session_state.get('gui_cfg_bld_amp_step_vel') or 10),
+                                            'ramp_mode_default': rm,
+                                            'waitbefore': float(st.session_state.get('gui_cfg_bld_waitbefore') or 3.0),
+                                            'waitafter': float(st.session_state.get('gui_cfg_bld_waitafter') or 4.0),
+                                            'rampdur': float(st.session_state.get('gui_cfg_bld_rampdur') or 0.25),
+                                            'prepoststim_dur': float(st.session_state.get('gui_cfg_bld_prepoststim_dur') or 0.06),
+                                            'prepoststim_sep': float(st.session_state.get('gui_cfg_bld_prepoststim_sep') or 1.0),
+                                            'prestim_time': float(st.session_state.get('gui_cfg_bld_prestim_time') or -2.0),
+                                            'poststim_time': float(st.session_state.get('gui_cfg_bld_poststim_time') or 2.0),
+                                        }
+                                        src = render_generated_config(base, assignments)
+                                        with open(path, 'w', encoding='utf-8') as f:
+                                            f.write(src)
+                                        importlib.invalidate_caches()
+                                        err = _apply_loaded_config_module(out_stem)
+                                        if err:
+                                            _st_error_detail(
+                                                'Generated config did not load.',
+                                                ['Fix assignments above', 'Read Details message'],
+                                                err,
+                                            )
+                                        else:
+                                            st.session_state['gui_load_cfg_select'] = out_stem
+                                            # The saved file is now the loaded config; point the import
+                                            # base at it so subsequent edits inherit from it (fields
+                                            # re-seed from the just-written file, i.e. the same values).
+                                            st.session_state['gui_pending_cfg_build_base'] = out_stem
+                                            _b_written = st.session_state.get('bender')
+                                            if _b_written is not None:
+                                                _seed_cfg_bld_from_bender(_b_written)
+                                            _mark_cfg_bld_applied()
+                                            st.success(f'Wrote and loaded `{out_stem}`')
+                                            st.rerun()
 
     if _show_data:
         _data_host = _setup_right if _setup_right is not None else st
@@ -8173,36 +8285,37 @@ def main():
                 # The old b.outputfile == _compose_output_h5_path() string comparison was unreliable because
                 # _compose_output_h5_path() is non-deterministic (NN disk scan, sim prefix, protocol token),
                 # so the banner never cleared even after a successful Apply.
-                if bool(st.session_state.get('gui_data_path_committed')):
+                if bool(st.session_state.get('gui_data_path_committed')) and not _data_path_apply_dirty():
                     st.success(f'**Save path:** `{full_out}`')
                 else:
-                    st.success(f'**Save path:** `{full_out}` (selected, not applied yet — click **Apply setup**)')
-            if _data_path_apply_dirty():
-                _soft_apply_reminder()
-            _touch_data_path_baseline_if_clean()
+                    st.caption(
+                        f'Save path: `{full_out}` — click **Apply data path** to commit.'
+                    )
+            _render_section_apply_status(
+                has_applied_sig=('gui_data_path_applied_sig' in st.session_state),
+                dirty=_data_path_apply_dirty(),
+                apply_label='Apply data path',
+            )
+            if _load_save_button(
+                'Apply data path',
+                key='gui_data_path_apply',
+                help='Commits Data folder / file name onto the experiment object. Requires Apply hardware config first. Does not start DAQ.',
+            ):
+                _apply_data_path_action()
 
-        _apply_hlp = (
-            'Applies selected hardware config and current data path to the experiment object. Does not start DAQ.'
-            if _sw_dp
-            else 'Applies hardware config and data path from setup sections. Does not start DAQ.'
-        )
-        if _load_save_button('Apply setup', key='gui_setup_apply_bottom', help=_apply_hlp):
-            _apply_setup_action(sw_dp=bool(_sw_dp))
-
-    # No rendering gate: the experiment pane always renders once a config is loaded. With no
-    # config there is no Bender to derive sections from, so show a null-safe placeholder and
-    # return (run/export safety is enforced at the point of consequence by
-    # _run_export_blocked_reason, not by hiding UI).
+    # Sections 3+ always render. When no Bender is loaded, specimen/clamp stay editable with
+    # session defaults; protocol/run UI shows a banner until hardware config is applied.
+    # Run/export safety stays at the point of consequence via _run_export_blocked_reason.
     b: Optional[Bender] = st.session_state.get('bender')
     if b is None:
-        _render_no_config_placeholder()
-        _autosave_tick()
-        return
+        _render_no_config_banner()
+    else:
+        _ensure_apply_tracking_bender(b)
+        _init_morphometrics_session_state(b, force=False)
+        _rehydrate_missing_morphometrics_from_bender(b)
+        _sync_morphometric_flags_from_session(b)
 
-    _ensure_apply_tracking_bender(b)
-    _init_morphometrics_session_state(b, force=False)
-    _rehydrate_missing_morphometrics_from_bender(b)
-    _sync_morphometric_flags_from_session(b)
+    _ensure_morphometrics_session_defaults(b, force=False)
     # #region agent log
     _agent_debug_log(
         hypothesis_id='D',
@@ -8213,23 +8326,30 @@ def main():
             'step': _stepwise_step() if _nav_route() == 'stepwise' else None,
             'show_sec2': _show_full_sec2(),
             'sess_dclamp': st.session_state.get('morpho_dclamp'),
-            'bender_dclamp': getattr(b, 'dclamp', None),
+            'bender_dclamp': getattr(b, 'dclamp', None) if b is not None else None,
             'sess_fishmass': st.session_state.get('morpho_fishmass'),
-            'bender_fishmass': getattr(b, 'fishmass', None),
+            'bender_fishmass': getattr(b, 'fishmass', None) if b is not None else None,
         },
     )
     # #endregion
     _ensure_review_file_selection(
         _candidate_review_files(_output_path_anchor_for_review(b)) if _output_path_anchor_for_review(b) else []
     )
-    schema = b.get_dispatch_schema()
-    test_types = list(schema['test_types'])
+    if b is not None:
+        schema = b.get_dispatch_schema()
+        test_types = list(schema['test_types'])
+    else:
+        schema = None
+        test_types = list(_FALLBACK_TEST_TYPES)
     _consume_pending_protocol_template(test_types)
 
     if _show_full_sec2():
         st.subheader('3 · Specimen')
-        if _morpho_apply_dirty():
-            _soft_apply_reminder()
+        _render_section_apply_status(
+            has_applied_sig=('gui_morpho_applied_sig' in st.session_state),
+            dirty=_morpho_apply_dirty(),
+            apply_label='Apply specimen',
+        )
 
         if bf := st.session_state.pop('gui_morphometrics_load_feedback', None):
             ok_bf, txt_bf = bf
@@ -8426,6 +8546,11 @@ def main():
 
             st.divider()
             st.subheader('4 · Clamp geometry & inertial correction')
+            _render_section_apply_status(
+                has_applied_sig=('gui_morpho_applied_sig' in st.session_state),
+                dirty=_morpho_apply_dirty(),
+                apply_label='Apply clamp geometry & inertial correction',
+            )
             # Section 4: clamp geometry + mounted profile + inertial flag. One merged Apply
             # commits only these fields (replaces the former separate clamp / profile Applies).
             with st.form('morpho_form_clamp_inertial', clear_on_submit=False):
@@ -8575,825 +8700,869 @@ def main():
                     help='Commits clamp spacing/offsets, cross-section, mounted profile, and density. Inertial correction is applied automatically when a calibration profile is loaded or specimen geometry is provided.',
                 )
         if sub_specimen:
-            _apply_specimen_identity_to_bender(b)
-            _apply_intrinsic_morphometrics_to_bender(b)
-            _apply_experimental_conditions_to_bender(b)
-            st.toast('Specimen applied.')
+            if b is None:
+                _mark_morpho_applied()
+                st.toast('Specimen form saved. Apply hardware config to attach values to the experiment object.')
+            else:
+                _apply_specimen_identity_to_bender(b)
+                _apply_intrinsic_morphometrics_to_bender(b)
+                _apply_experimental_conditions_to_bender(b)
+                st.toast('Specimen applied.')
         if sub_clamp_inertial:
-            _sync_morphometric_flags_from_session(b)
-            if _apply_clamp_geometry_to_bender(b):
-                _apply_mounted_profile_inertial_to_bender(b)
+            if b is None:
+                _mark_morpho_applied()
                 st.session_state['gui_measurements_confirmed'] = True
-                st.toast('Clamp geometry & inertial correction applied.')
+                st.toast('Clamp form saved. Apply hardware config to attach values to the experiment object.')
+            else:
+                _sync_morphometric_flags_from_session(b)
+                if _apply_clamp_geometry_to_bender(b):
+                    _apply_mounted_profile_inertial_to_bender(b)
+                    st.session_state['gui_measurements_confirmed'] = True
+                    st.toast('Clamp geometry & inertial correction applied.')
         if _geom_fb := st.session_state.get('gui_morpho_geom_feedback'):
             st.warning(_geom_fb)
-
-        _touch_morpho_apply_baseline_if_clean()
 
     if _show_sec3_through_6():
 
         st.divider()
         st.subheader('5 · Protocol / Run')
-
-        with st.expander('Load protocol template (optional)', expanded=True):
-            st.caption(
-                'Templates set experiment type + procedure fields only (not morphometrics). '
-                'Use **Apply procedure** after loading.'
+        if b is None or schema is None:
+            st.info(
+                'Apply hardware config in section 1 to enable procedure fields, preview, and run. '
+                'Run stays blocked until hardware config and data path are applied.'
             )
-            _tpl_folder_top = _shared_experiment_dir()
-            _tpl_files_top = list_template_files(_tpl_folder_top)
-            _tpl_options_top: list = [None] + _tpl_files_top
-            if 'gui_protocol_template_select' not in st.session_state:
-                st.session_state['gui_protocol_template_select'] = None
-            _tpl_pick_top = st.selectbox(
-                'Template to load',
-                _tpl_options_top,
-                format_func=_protocol_template_option_label,
-                key='gui_protocol_template_select',
-                help='Procedure files saved from this app (`.json` in the **Templates folder**).',
-            )
-            if _load_save_button(
-                'Load template into form',
-                key='gui_protocol_btn_load',
-                help='Sets **Experiment type** and procedure widgets from the file. Then click **Apply** to copy onto the Bender object.',
-            ):
-                if not _tpl_pick_top:
-                    st.session_state['gui_protocol_load_feedback'] = (False, 'Choose a template file first.')
-                else:
-                    st.session_state['gui_pending_protocol_template_path'] = _tpl_pick_top
-                st.rerun()
-        if fb := st.session_state.pop('gui_protocol_load_feedback', None):
-            ok_fb, txt_fb = fb
-            if ok_fb:
-                st.success(txt_fb)
-            else:
-                _st_error_detail(
-                    'Protocol load failed.',
-                    ['Check template file', 'Read Details'],
-                    txt_fb,
+            st.subheader('6 · Experiment preview')
+            st.caption('Available after **Apply hardware config**.')
+            st.subheader('7 · Save data here')
+            st.caption('Available after **Apply hardware config** and **Apply data path**.')
+        else:
+            with st.expander('Load protocol template (optional)', expanded=True):
+                st.caption(
+                    'Templates set experiment type + procedure fields only (not morphometrics). '
+                    'Use **Apply procedure** after loading.'
                 )
-        if 'test_type_select' not in st.session_state:
-            st.session_state['test_type_select'] = None
-        tt = st.selectbox('Experiment type (test_type)', test_types, key='test_type_select')
-        b.test_type = tt
-
-        st.session_state.setdefault('gui_exp_hide', False)
-        st.caption(
-            'Set procedure fields below, then **Apply procedure** or **Refresh experiment preview** (both buttons are at the '
-            'bottom of **Procedure fields**).'
-        )
-
-        updates = {}
-        sub_proc_apply = False
-        sub_proc_save = False
-        sub_proc_preview = False
-        pv_pts = 6000
-
-        with st.expander('Procedure fields', expanded=not bool(st.session_state.get('gui_exp_hide'))):
-            if sf := st.session_state.pop('gui_protocol_save_feedback', None):
-                ok_sf, txt_sf = sf
-                if ok_sf:
-                    st.success(txt_sf)
+                _tpl_folder_top = _shared_experiment_dir()
+                _tpl_files_top = list_template_files(_tpl_folder_top)
+                _tpl_options_top: list = [None] + _tpl_files_top
+                if 'gui_protocol_template_select' not in st.session_state:
+                    st.session_state['gui_protocol_template_select'] = None
+                _tpl_pick_top = st.selectbox(
+                    'Template to load',
+                    _tpl_options_top,
+                    format_func=_protocol_template_option_label,
+                    key='gui_protocol_template_select',
+                    help='Procedure files saved from this app (`.json` in the **Templates folder**).',
+                )
+                if _load_save_button(
+                    'Load template into form',
+                    key='gui_protocol_btn_load',
+                    help='Sets **Experiment type** and procedure widgets from the file. Then click **Apply** to copy onto the Bender object.',
+                ):
+                    if not _tpl_pick_top:
+                        st.session_state['gui_protocol_load_feedback'] = (False, 'Choose a template file first.')
+                    else:
+                        st.session_state['gui_pending_protocol_template_path'] = _tpl_pick_top
+                    st.rerun()
+            if fb := st.session_state.pop('gui_protocol_load_feedback', None):
+                ok_fb, txt_fb = fb
+                if ok_fb:
+                    st.success(txt_fb)
                 else:
                     _st_error_detail(
-                        'Protocol save failed.',
-                        ['Check name and folder', 'Read Details'],
-                        txt_sf,
+                        'Protocol load failed.',
+                        ['Check template file', 'Read Details'],
+                        txt_fb,
                     )
-            with st.form('gui_procedure_form', clear_on_submit=False):
-                if _procedure_apply_dirty():
-                    _soft_apply_reminder()
-                if tt == 'isometric':
-                    st.caption(
-                        '**Isometric** turns strain or curvature targets into motor angles using **test segment length** '
-                        'and **cross-section width** from **section 4** (same as clamp spacing `dclamp`). '
-                        'Those values are copied when you use **Apply** in **section 4** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
-                    )
-                    mcol, scol = st.columns([1.35, 1.0], gap='large')
-                    with mcol:
-                        st.markdown('**Required**')
-                        for key in schema['isometric_required']:
-                            if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
-                                continue
-                            if key == 'reset_max_speed_deg_per_s':
-                                _rms = _render_reset_max_speed_field(b)
-                                if _rms is not None:
-                                    updates[key] = _rms
-                                continue
-                            label = key.replace('_', ' ')
-                            updates[key] = _render_field(
-                                b,
-                                key,
-                                'float' if 'steps' not in key else 'int',
-                                label,
-                                help_text=ISOMETRIC_FIELD_HELP.get(key),
-                            )
-                        if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
-                            updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
-                        # Motion timing (ramp + hold duration) lives in the left column with the
-                        # other motion fields; the Stimulation column reads their values back.
-                        _render_isometric_motion_timing_fields(b)
-                        updates['randomize_step_order'] = _render_randomize_step_order_field(b)
-                        for key in schema['isometric_optional']:
-                            if key == 'randomize_step_order':
-                                pass  # already rendered immediately after step size fields above
-                            elif key == 'isometric_stim_params':
-                                continue  # rendered in the Stimulation column (scol)
-                            elif key == 'isometric_mode':
-                                modes = list(ALL_AMPS_MODE_OPTIONS)
-                                skm = _widget_key('isometric_mode')
-                                cur_m = str(_get_session_value(b, key, 'angle'))
-                                if skm not in st.session_state:
-                                    st.session_state[skm] = cur_m if cur_m in modes else 'angle'
-                                updates[key] = st.selectbox(
-                                    'Isometric mode (units for initial/final)',
-                                    modes,
-                                    key=skm,
-                                    format_func=_format_strain_or_amp_mode,
-                                    help=ISOMETRIC_FIELD_HELP.get(key),
-                                )
-                            elif key == 'rest_between_steps_s':
-                                updates[key] = _render_rest_between_steps_field(b)
-                            elif 'random_seed' in key:
-                                sks = _widget_key(key)
-                                if sks not in st.session_state:
-                                    v0 = _get_session_value(b, key)
-                                    st.session_state[sks] = '' if v0 is None else str(v0)
-                                s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
-                                if not str(s).strip():
-                                    updates[key] = None
-                                else:
-                                    try:
-                                        updates[key] = int(s)
-                                    except ValueError:
-                                        _st_error_actions(
-                                            'Random seed invalid.',
-                                            ['Use whole number only', 'Or leave field blank'],
-                                        )
-                                        updates[key] = None
-                            else:
-                                kind = 'bool' if 'randomize' in key else 'str'
-                                lbl = key.replace('_', ' ')
-                                updates[key] = _render_field(
-                                    b, key, kind, lbl, help_text=ISOMETRIC_FIELD_HELP.get(key)
-                                )
-                    with scol:
-                        st.markdown('**Stimulation**')
-                        updates['isometric_stim_params'] = _render_isometric_stim_fields(b)
-                    with st.container(border=True):
-                        st.markdown('**Block sequence**')
-                        _block_up = _render_block_sequence_fields(b)
-                        if _block_up is not None:
-                            updates.update(_block_up)
+            if 'test_type_select' not in st.session_state:
+                st.session_state['test_type_select'] = None
+            tt = st.selectbox('Experiment type (test_type)', test_types, key='test_type_select')
+            b.test_type = tt
 
-                elif tt == 'isovelocity':
-                    mcol, scol = st.columns([1.35, 1.0], gap='large')
-                    with mcol:
-                        st.markdown('**Required**')
-                        for key in schema['isovelocity_required']:
-                            if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
-                                continue
-                            if key == 'reset_max_speed_deg_per_s':
-                                _rms = _render_reset_max_speed_field(b)
-                                if _rms is not None:
-                                    updates[key] = _rms
-                                continue
-                            if key == 'isovelocity_starting_strain_mode':
-                                modes = list(ALL_AMPS_MODE_OPTIONS)
-                                skm = _widget_key('isovelocity_starting_strain_mode')
-                                cur_m = str(_get_session_value(b, key, 'angle'))
-                                if skm not in st.session_state:
-                                    st.session_state[skm] = cur_m if cur_m in modes else 'angle'
-                                updates[key] = st.selectbox(
-                                    ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for ramp starting position'),
-                                    modes,
-                                    key=skm,
-                                    format_func=_format_strain_or_amp_mode,
-                                    help=ISOVELOCITY_FIELD_HELP.get(key),
-                                )
-                            elif key == 'isovelocity_velocity_mode':
-                                vmodes = list(VELOCITY_MODE_OPTIONS)
-                                skv = _widget_key('isovelocity_velocity_mode')
-                                cur_v = str(_get_session_value(b, key, 'angle_vel'))
-                                if skv not in st.session_state:
-                                    st.session_state[skv] = cur_v if cur_v in vmodes else 'angle_vel'
-                                updates[key] = st.selectbox(
-                                    ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for min/max velocity'),
-                                    vmodes,
-                                    key=skv,
-                                    format_func=_format_velocity_mode,
-                                    help=ISOVELOCITY_FIELD_HELP.get(key),
-                                )
-                            elif key == 'isovelocity_starting_strain':
-                                lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                                updates[key] = _render_field(
-                                    b, key, 'float', lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                                )
-                                # Item 3: render the pre-experiment apparatus pose directly under
-                                # "Ramp Starting Position" for isovelocity. The shared render below the
-                                # panel is guarded out for isovelocity, so seed the key here BEFORE the
-                                # widget renders (the shared seed above is skipped for this view).
-                                if 'gui_starting_angle_deg' not in st.session_state:
-                                    st.session_state['gui_starting_angle_deg'] = 0.0
-                                st.number_input(
-                                    PRE_EXPERIMENT_START_POS_LABEL,
-                                    format='%.4g',
-                                    key='gui_starting_angle_deg',
-                                    help=PRE_EXPERIMENT_START_POS_HELP,
-                                )
-                            else:
-                                kind = 'int' if 'num_steps' in key else 'float'
-                                lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                                updates[key] = _render_field(
-                                    b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                                )
-                        if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
-                            updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
-                        # Item 6: "Return-to-home duration" (post-ramp neutral reset) is a motion
-                        # parameter, so it renders here in the Required column. Seed its key BEFORE the
-                        # widget renders (the stim-column seed in _seed_isovelocity_stim_widget_state runs
-                        # later, in scol). The value is read back into isovelocity_stim_params
-                        # ['post_baseline_s'] inside _render_isovelocity_stim_fields.
-                        _pb_sk = _widget_key('isovelocity_post_baseline_s')
-                        if _pb_sk not in st.session_state:
-                            _sp_pb = _stim_params_dict_from_bender(b, 'isovelocity_stim_params')
-                            st.session_state[_pb_sk] = float(_sp_pb.get('post_baseline_s', 1.0) or 0.0)
-                        st.number_input(
-                            'Return-to-home duration (s)',
-                            key=_pb_sk,
-                            format='%.6g',
-                            min_value=0.0,
-                            help=(
-                                'After the constant-velocity ramp, return the motor to neutral (0 deg) over '
-                                'this many seconds with stim off, recording continuously. Captures a '
-                                'post-stimulus baseline / relaxation. Set 0 to disable.'
-                            ),
-                        )
-                        st.markdown('**Optional**')
-                        for key in schema['isovelocity_optional']:
-                            if key == 'isovelocity_stim_params':
-                                continue  # rendered in the Stimulation column (scol)
-                            elif key == 'isovelocity_velocity_mode':
-                                pass  # required-only; rendered in Required section
-                            elif key == 'rest_between_steps_s':
-                                updates[key] = _render_rest_between_steps_field(b)
-                            elif key == 'randomize_step_order':
-                                updates[key] = _render_randomize_step_order_field(b)
-                            elif 'random_seed' in key:
-                                sks = _widget_key(key)
-                                if sks not in st.session_state:
-                                    v0 = _get_session_value(b, key)
-                                    st.session_state[sks] = '' if v0 is None else str(v0)
-                                s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
-                                if not str(s).strip():
-                                    updates[key] = None
-                                else:
-                                    try:
-                                        updates[key] = int(s)
-                                    except ValueError:
-                                        _st_error_actions(
-                                            'Random seed invalid.',
-                                            ['Use whole number only', 'Or leave field blank'],
-                                        )
-                                        updates[key] = None
-                            else:
-                                kind = 'bool' if 'randomize' in key else 'float'
-                                lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
-                                updates[key] = _render_field(
-                                    b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
-                                )
-                    with scol:
-                        st.markdown('**Stimulation**')
-                        updates['isovelocity_stim_params'] = _render_isovelocity_stim_fields(b)
-                    with st.container(border=True):
-                        st.markdown('**Block sequence**')
-                        # FV-only: expose 'off_quick' (no stim, fixed 2 s inter-step rest).
-                        _block_up = _render_block_sequence_fields(
-                            b, stim_sides_options=BLOCK_STIM_SIDES_OPTIONS_FV
-                        )
-                        if _block_up is not None:
-                            updates.update(_block_up)
+            st.session_state.setdefault('gui_exp_hide', False)
+            st.caption(
+                'Set procedure fields below, then **Apply procedure** or **Refresh experiment preview** (both buttons are at the '
+                'bottom of **Procedure fields**).'
+            )
 
-                elif tt in MOTION_TYPES:
-                    st.markdown('**Motion-series parameters** (procedure-specific)')
-                    if tt == 'dynamic':
-                        st.info('Dynamic timing uses cycles (not Duration).')
-                    fields = _motion_parameter_rows(tt)
-                    _stim_field_names = {
-                        'stim_cycles_in_step',
-                        'is_stim',
-                        'stim_pulse_rate',
-                        'pulse_width_ms',
-                        'S1volts',
-                        'S2volts',
-                        'all_stimduties',
-                        'all_stimphases',
-                    }
-                    _motion_fields = [row for row in fields if row[0] not in _stim_field_names]
-                    _stim_fields = [row for row in fields if row[0] in _stim_field_names]
-                    mcol, scol = st.columns([1.35, 1.0], gap='large')
-                    with mcol:
-                        st.markdown('**Motion controls**')
-                        for name, kind, label in _motion_fields:
-                            updates[name] = _render_field(
-                                b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
+            updates = {}
+            sub_proc_apply = False
+            sub_proc_save = False
+            sub_proc_preview = False
+            pv_pts = 6000
+
+            with st.expander('Procedure fields', expanded=not bool(st.session_state.get('gui_exp_hide'))):
+                if sf := st.session_state.pop('gui_protocol_save_feedback', None):
+                    ok_sf, txt_sf = sf
+                    if ok_sf:
+                        st.success(txt_sf)
+                    else:
+                        _st_error_detail(
+                            'Protocol save failed.',
+                            ['Check name and folder', 'Read Details'],
+                            txt_sf,
+                        )
+                with st.form('gui_procedure_form', clear_on_submit=False):
+                    if _procedure_apply_dirty():
+                        _soft_apply_reminder()
+                    if tt == 'isometric':
+                        st.caption(
+                            '**Isometric** turns strain or curvature targets into motor angles using **test segment length** '
+                            'and **cross-section width** from **section 4** (same as clamp spacing `dclamp`). '
+                            'Those values are copied when you use **Apply** in **section 4** (clamp / intrinsic / experimental / **Apply all**) or when you **Run**.'
+                        )
+                        mcol, scol = st.columns([1.35, 1.0], gap='large')
+                        with mcol:
+                            st.markdown('**Required**')
+                            for key in schema['isometric_required']:
+                                if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
+                                    continue
+                                if key == 'reset_max_speed_deg_per_s':
+                                    _rms = _render_reset_max_speed_field(b)
+                                    if _rms is not None:
+                                        updates[key] = _rms
+                                    continue
+                                label = key.replace('_', ' ')
+                                updates[key] = _render_field(
+                                    b,
+                                    key,
+                                    'float' if 'steps' not in key else 'int',
+                                    label,
+                                    help_text=ISOMETRIC_FIELD_HELP.get(key),
+                                )
+                            if 'isometric_num_steps' in updates and updates['isometric_num_steps'] is not None:
+                                updates['isometric_num_steps'] = int(updates['isometric_num_steps'])
+                            # Motion timing (ramp + hold duration) lives in the left column with the
+                            # other motion fields; the Stimulation column reads their values back.
+                            _render_isometric_motion_timing_fields(b)
+                            updates['randomize_step_order'] = _render_randomize_step_order_field(b)
+                            for key in schema['isometric_optional']:
+                                if key == 'randomize_step_order':
+                                    pass  # already rendered immediately after step size fields above
+                                elif key == 'isometric_stim_params':
+                                    continue  # rendered in the Stimulation column (scol)
+                                elif key == 'isometric_mode':
+                                    modes = list(ALL_AMPS_MODE_OPTIONS)
+                                    skm = _widget_key('isometric_mode')
+                                    cur_m = str(_get_session_value(b, key, 'angle'))
+                                    if skm not in st.session_state:
+                                        st.session_state[skm] = cur_m if cur_m in modes else 'angle'
+                                    updates[key] = st.selectbox(
+                                        'Isometric mode (units for initial/final)',
+                                        modes,
+                                        key=skm,
+                                        format_func=_format_strain_or_amp_mode,
+                                        help=ISOMETRIC_FIELD_HELP.get(key),
+                                    )
+                                elif key == 'rest_between_steps_s':
+                                    updates[key] = _render_rest_between_steps_field(b)
+                                elif 'random_seed' in key:
+                                    sks = _widget_key(key)
+                                    if sks not in st.session_state:
+                                        v0 = _get_session_value(b, key)
+                                        st.session_state[sks] = '' if v0 is None else str(v0)
+                                    s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
+                                    if not str(s).strip():
+                                        updates[key] = None
+                                    else:
+                                        try:
+                                            updates[key] = int(s)
+                                        except ValueError:
+                                            _st_error_actions(
+                                                'Random seed invalid.',
+                                                ['Use whole number only', 'Or leave field blank'],
+                                            )
+                                            updates[key] = None
+                                else:
+                                    kind = 'bool' if 'randomize' in key else 'str'
+                                    lbl = key.replace('_', ' ')
+                                    updates[key] = _render_field(
+                                        b, key, kind, lbl, help_text=ISOMETRIC_FIELD_HELP.get(key)
+                                    )
+                        with scol:
+                            st.markdown('**Stimulation**')
+                            updates['isometric_stim_params'] = _render_isometric_stim_fields(b)
+                        with st.container(border=True):
+                            st.markdown('**Block sequence**')
+                            _block_up = _render_block_sequence_fields(b)
+                            if _block_up is not None:
+                                updates.update(_block_up)
+
+                    elif tt == 'isovelocity':
+                        mcol, scol = st.columns([1.35, 1.0], gap='large')
+                        with mcol:
+                            st.markdown('**Required**')
+                            for key in schema['isovelocity_required']:
+                                if key in _BLOCK_SEQUENCE_PROCEDURE_KEYS:
+                                    continue
+                                if key == 'reset_max_speed_deg_per_s':
+                                    _rms = _render_reset_max_speed_field(b)
+                                    if _rms is not None:
+                                        updates[key] = _rms
+                                    continue
+                                if key == 'isovelocity_starting_strain_mode':
+                                    modes = list(ALL_AMPS_MODE_OPTIONS)
+                                    skm = _widget_key('isovelocity_starting_strain_mode')
+                                    cur_m = str(_get_session_value(b, key, 'angle'))
+                                    if skm not in st.session_state:
+                                        st.session_state[skm] = cur_m if cur_m in modes else 'angle'
+                                    updates[key] = st.selectbox(
+                                        ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for ramp starting position'),
+                                        modes,
+                                        key=skm,
+                                        format_func=_format_strain_or_amp_mode,
+                                        help=ISOVELOCITY_FIELD_HELP.get(key),
+                                    )
+                                elif key == 'isovelocity_velocity_mode':
+                                    vmodes = list(VELOCITY_MODE_OPTIONS)
+                                    skv = _widget_key('isovelocity_velocity_mode')
+                                    cur_v = str(_get_session_value(b, key, 'angle_vel'))
+                                    if skv not in st.session_state:
+                                        st.session_state[skv] = cur_v if cur_v in vmodes else 'angle_vel'
+                                    updates[key] = st.selectbox(
+                                        ISOVELOCITY_WIDGET_LABEL.get(key, 'Unit for min/max velocity'),
+                                        vmodes,
+                                        key=skv,
+                                        format_func=_format_velocity_mode,
+                                        help=ISOVELOCITY_FIELD_HELP.get(key),
+                                    )
+                                elif key == 'isovelocity_starting_strain':
+                                    lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                                    updates[key] = _render_field(
+                                        b, key, 'float', lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                                    )
+                                    # Item 3: render the pre-experiment apparatus pose directly under
+                                    # "Ramp Starting Position" for isovelocity. The shared render below the
+                                    # panel is guarded out for isovelocity, so seed the key here BEFORE the
+                                    # widget renders (the shared seed above is skipped for this view).
+                                    if 'gui_starting_angle_deg' not in st.session_state:
+                                        st.session_state['gui_starting_angle_deg'] = 0.0
+                                    st.number_input(
+                                        PRE_EXPERIMENT_START_POS_LABEL,
+                                        format='%.4g',
+                                        key='gui_starting_angle_deg',
+                                        help=PRE_EXPERIMENT_START_POS_HELP,
+                                    )
+                                else:
+                                    kind = 'int' if 'num_steps' in key else 'float'
+                                    lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                                    updates[key] = _render_field(
+                                        b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                                    )
+                            if 'isovelocity_num_steps' in updates and updates['isovelocity_num_steps'] is not None:
+                                updates['isovelocity_num_steps'] = int(updates['isovelocity_num_steps'])
+                            # Item 6: "Return-to-home duration" (post-ramp neutral reset) is a motion
+                            # parameter, so it renders here in the Required column. Seed its key BEFORE the
+                            # widget renders (the stim-column seed in _seed_isovelocity_stim_widget_state runs
+                            # later, in scol). The value is read back into isovelocity_stim_params
+                            # ['post_baseline_s'] inside _render_isovelocity_stim_fields.
+                            _pb_sk = _widget_key('isovelocity_post_baseline_s')
+                            if _pb_sk not in st.session_state:
+                                _sp_pb = _stim_params_dict_from_bender(b, 'isovelocity_stim_params')
+                                st.session_state[_pb_sk] = float(_sp_pb.get('post_baseline_s', 1.0) or 0.0)
+                            st.number_input(
+                                'Return-to-home duration (s)',
+                                key=_pb_sk,
+                                format='%.6g',
+                                min_value=0.0,
+                                help=(
+                                    'After the constant-velocity ramp, return the motor to neutral (0 deg) over '
+                                    'this many seconds with stim off, recording continuously. Captures a '
+                                    'post-stimulus baseline / relaxation. Set 0 to disable.'
+                                ),
                             )
-                    with scol:
-                        st.markdown('**Stimulation**')
-                        # Render "Enable stimulation" first regardless of field-list order, then the rest.
-                        _is_stim_row = next((row for row in _stim_fields if row[0] == 'is_stim'), None)
-                        _other_stim = [row for row in _stim_fields if row[0] != 'is_stim']
-                        if _is_stim_row:
-                            updates[_is_stim_row[0]] = _render_field(
-                                b, _is_stim_row[0], _is_stim_row[1], _is_stim_row[2],
-                                help_text=MOTION_FIELD_HELP.get(_is_stim_row[0]),
+                            st.markdown('**Optional**')
+                            for key in schema['isovelocity_optional']:
+                                if key == 'isovelocity_stim_params':
+                                    continue  # rendered in the Stimulation column (scol)
+                                elif key == 'isovelocity_velocity_mode':
+                                    pass  # required-only; rendered in Required section
+                                elif key == 'rest_between_steps_s':
+                                    updates[key] = _render_rest_between_steps_field(b)
+                                elif key == 'randomize_step_order':
+                                    updates[key] = _render_randomize_step_order_field(b)
+                                elif 'random_seed' in key:
+                                    sks = _widget_key(key)
+                                    if sks not in st.session_state:
+                                        v0 = _get_session_value(b, key)
+                                        st.session_state[sks] = '' if v0 is None else str(v0)
+                                    s = st.text_input('Random seed (optional)', key=sks, help=RANDOM_SEED_HELP)
+                                    if not str(s).strip():
+                                        updates[key] = None
+                                    else:
+                                        try:
+                                            updates[key] = int(s)
+                                        except ValueError:
+                                            _st_error_actions(
+                                                'Random seed invalid.',
+                                                ['Use whole number only', 'Or leave field blank'],
+                                            )
+                                            updates[key] = None
+                                else:
+                                    kind = 'bool' if 'randomize' in key else 'float'
+                                    lbl = ISOVELOCITY_WIDGET_LABEL.get(key, key.replace('_', ' '))
+                                    updates[key] = _render_field(
+                                        b, key, kind, lbl, help_text=ISOVELOCITY_FIELD_HELP.get(key)
+                                    )
+                        with scol:
+                            st.markdown('**Stimulation**')
+                            updates['isovelocity_stim_params'] = _render_isovelocity_stim_fields(b)
+                        with st.container(border=True):
+                            st.markdown('**Block sequence**')
+                            # FV-only: expose 'off_quick' (no stim, fixed 2 s inter-step rest).
+                            _block_up = _render_block_sequence_fields(
+                                b, stim_sides_options=BLOCK_STIM_SIDES_OPTIONS_FV
                             )
-                        for name, kind, label in _other_stim:
-                            if name == 'pulse_width_ms':
-                                updates[name] = _render_pulse_width_field(b)
-                            else:
+                            if _block_up is not None:
+                                updates.update(_block_up)
+
+                    elif tt in MOTION_TYPES:
+                        st.markdown('**Motion-series parameters** (procedure-specific)')
+                        if tt == 'dynamic':
+                            st.info('Dynamic timing uses cycles (not Duration).')
+                        fields = _motion_parameter_rows(tt)
+                        _stim_field_names = {
+                            'stim_cycles_in_step',
+                            'is_stim',
+                            'stim_pulse_rate',
+                            'pulse_width_ms',
+                            'S1volts',
+                            'S2volts',
+                            'all_stimduties',
+                            'all_stimphases',
+                        }
+                        _motion_fields = [row for row in fields if row[0] not in _stim_field_names]
+                        _stim_fields = [row for row in fields if row[0] in _stim_field_names]
+                        mcol, scol = st.columns([1.35, 1.0], gap='large')
+                        with mcol:
+                            st.markdown('**Motion controls**')
+                            for name, kind, label in _motion_fields:
                                 updates[name] = _render_field(
                                     b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
                                 )
+                        with scol:
+                            st.markdown('**Stimulation**')
+                            # Render "Enable stimulation" first regardless of field-list order, then the rest.
+                            _is_stim_row = next((row for row in _stim_fields if row[0] == 'is_stim'), None)
+                            _other_stim = [row for row in _stim_fields if row[0] != 'is_stim']
+                            if _is_stim_row:
+                                updates[_is_stim_row[0]] = _render_field(
+                                    b, _is_stim_row[0], _is_stim_row[1], _is_stim_row[2],
+                                    help_text=MOTION_FIELD_HELP.get(_is_stim_row[0]),
+                                )
+                            for name, kind, label in _other_stim:
+                                if name == 'pulse_width_ms':
+                                    updates[name] = _render_pulse_width_field(b)
+                                else:
+                                    updates[name] = _render_field(
+                                        b, name, kind, label, help_text=MOTION_FIELD_HELP.get(name)
+                                    )
 
-                else:
-                    st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
+                    else:
+                        st.warning(f'No dedicated field panel for {tt!r} yet; use notebook or extend this script.')
 
-                # Persistent anti-bleed warning: re-evaluated every render so it stays visible
-                # while the stim-timing condition holds, instead of flashing for one rerun
-                # after Apply. Returns None when stim is disabled or timing is valid.
-                _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
-                if _stim_err:
-                    st.warning(_stim_err)
-                elif _stim_clamp:
-                    st.info(_stim_clamp)
+                    # Persistent anti-bleed warning: re-evaluated every render so it stays visible
+                    # while the stim-timing condition holds, instead of flashing for one rerun
+                    # after Apply. Returns None when stim is disabled or timing is valid.
+                    _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
+                    if _stim_err:
+                        st.warning(_stim_err)
+                    elif _stim_clamp:
+                        st.info(_stim_clamp)
 
-                st.divider()
-                # Isovelocity renders this directly under "Ramp Starting Position" (item 3); for all
-                # other protocols it stays here. Guarded so the key renders exactly once per run.
-                if tt != 'isovelocity':
-                    if 'gui_starting_angle_deg' not in st.session_state:
-                        st.session_state['gui_starting_angle_deg'] = 0.0
-                    st.number_input(
-                        PRE_EXPERIMENT_START_POS_LABEL,
-                        format='%.4g',
-                        key='gui_starting_angle_deg',
-                        help=PRE_EXPERIMENT_START_POS_HELP,
+                    st.divider()
+                    # Isovelocity renders this directly under "Ramp Starting Position" (item 3); for all
+                    # other protocols it stays here. Guarded so the key renders exactly once per run.
+                    if tt != 'isovelocity':
+                        if 'gui_starting_angle_deg' not in st.session_state:
+                            st.session_state['gui_starting_angle_deg'] = 0.0
+                        st.number_input(
+                            PRE_EXPERIMENT_START_POS_LABEL,
+                            format='%.4g',
+                            key='gui_starting_angle_deg',
+                            help=PRE_EXPERIMENT_START_POS_HELP,
+                        )
+                    if 'gui_protocol_show_save_template' not in st.session_state:
+                        st.session_state['gui_protocol_show_save_template'] = False
+                    _show_tpl_save = st.checkbox(
+                        'Show "Save procedure as template"',
+                        key='gui_protocol_show_save_template',
+                        value=False,
                     )
-                if 'gui_protocol_show_save_template' not in st.session_state:
-                    st.session_state['gui_protocol_show_save_template'] = False
-                _show_tpl_save = st.checkbox(
-                    'Show "Save procedure as template"',
-                    key='gui_protocol_show_save_template',
-                    value=False,
-                )
-                if _show_tpl_save:
-                    st.markdown('**Save procedure as template**')
-                    if 'gui_protocol_new_name' not in st.session_state:
-                        st.session_state['gui_protocol_new_name'] = ''
-                    st.text_input(
-                        'Template name',
-                        key='gui_protocol_new_name',
-                        placeholder='e.g. Protocol A (any test_type)',
-                    )
-                    st.text_area(
-                        'Description (optional)',
-                        key='gui_protocol_new_desc',
-                        height=70,
-                        placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz x strains',
-                    )
-                    if 'gui_protocol_overwrite' not in st.session_state:
-                        st.session_state['gui_protocol_overwrite'] = False
-                    st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
-                    _pc1 = _pc2 = st.container()
-                    with _pc1:
+                    if _show_tpl_save:
+                        st.markdown('**Save procedure as template**')
+                        if 'gui_protocol_new_name' not in st.session_state:
+                            st.session_state['gui_protocol_new_name'] = ''
+                        st.text_input(
+                            'Template name',
+                            key='gui_protocol_new_name',
+                            placeholder='e.g. Protocol A (any test_type)',
+                        )
+                        st.text_area(
+                            'Description (optional)',
+                            key='gui_protocol_new_desc',
+                            height=70,
+                            placeholder='e.g. Isometric 5 steps; or dynamic 1/3/5 Hz x strains',
+                        )
+                        if 'gui_protocol_overwrite' not in st.session_state:
+                            st.session_state['gui_protocol_overwrite'] = False
+                        st.checkbox('Overwrite if a file with the same name already exists', key='gui_protocol_overwrite')
+                        _pc1 = _pc2 = st.container()
+                        with _pc1:
+                            sub_proc_apply = st.form_submit_button(
+                                'Apply procedure',
+                                use_container_width=True,
+                                help='Copy procedure fields onto the experiment object (not **Run experiment**).',
+                            )
+                        with _pc2:
+                            sub_proc_save = st.form_submit_button('Save template', use_container_width=True)
+                    else:
                         sub_proc_apply = st.form_submit_button(
                             'Apply procedure',
                             use_container_width=True,
                             help='Copy procedure fields onto the experiment object (not **Run experiment**).',
                         )
-                    with _pc2:
-                        sub_proc_save = st.form_submit_button('Save template', use_container_width=True)
-                else:
-                    sub_proc_apply = st.form_submit_button(
-                        'Apply procedure',
+                    sub_proc_preview = st.form_submit_button(
+                        'Refresh experiment preview',
                         use_container_width=True,
-                        help='Copy procedure fields onto the experiment object (not **Run experiment**).',
+                        help=(
+                            'Submit this form: copy procedure fields onto the experiment object and rebuild the preview plot. '
+                            'Use after editing fields here so preview matches your inputs (same data path as **Apply procedure**).'
+                        ),
                     )
-                sub_proc_preview = st.form_submit_button(
-                    'Refresh experiment preview',
-                    use_container_width=True,
-                    help=(
-                        'Submit this form: copy procedure fields onto the experiment object and rebuild the preview plot. '
-                        'Use after editing fields here so preview matches your inputs (same data path as **Apply procedure**).'
-                    ),
-                )
 
-            if sub_proc_apply:
-                _form_invalid = (
-                    (tt == 'isometric' and updates.get('isometric_stim_params') is None)
-                    or (tt == 'isovelocity' and updates.get('isovelocity_stim_params') is None)
-                    or (tt in ('isometric', 'isovelocity') and 'block_sequence' not in updates)
-                )
-                if _form_invalid:
-                    pass  # widget validation already surfaced st.error
-                else:
-                    _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
-                    if _stim_err:
-                        st.error(_stim_err)
+                if sub_proc_apply:
+                    _form_invalid = (
+                        (tt == 'isometric' and updates.get('isometric_stim_params') is None)
+                        or (tt == 'isovelocity' and updates.get('isovelocity_stim_params') is None)
+                        or (tt in ('isometric', 'isovelocity') and 'block_sequence' not in updates)
+                    )
+                    if _form_invalid:
+                        pass  # widget validation already surfaced st.error
                     else:
-                        if _stim_clamp:
-                            st.info(_stim_clamp)
-                        _apply_procedure_form_to_bender(b, updates, tt)
-                        st.toast('Settings applied.')
-            if sub_proc_save:
-                _name = str(st.session_state.get('gui_protocol_new_name') or '').strip()
-                _desc = str(st.session_state.get('gui_protocol_new_desc') or '').strip()
-                _stem = sanitize_template_filename_stem(_name or 'protocol')
-                _out = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_stem}.json'))
-                try:
-                    if os.path.isfile(_out) and not bool(st.session_state.get('gui_protocol_overwrite')):
-                        st.session_state['gui_protocol_save_feedback'] = (
-                            False,
-                            f'File already exists: `{_out}`. Enable **Overwrite** or pick a different name.',
-                        )
-                    else:
-                        os.makedirs(os.path.dirname(_out) or '.', exist_ok=True)
-                        _proc = build_procedure_dict_from_updates(updates)
-                        save_protocol_template(
-                            _out,
-                            name=_name or _stem,
-                            description=_desc,
-                            test_type=tt,
-                            procedure=_proc,
-                        )
-                        st.session_state['gui_protocol_save_feedback'] = (True, f'Saved `{_out}`')
-                except Exception as e:
-                    st.session_state['gui_protocol_save_feedback'] = (False, f'{type(e).__name__}: {e}')
-                st.rerun()
-
-            if sub_proc_preview:
-                _form_invalid = (
-                    (tt == 'isometric' and updates.get('isometric_stim_params') is None)
-                    or (tt == 'isovelocity' and updates.get('isovelocity_stim_params') is None)
-                    or (tt in ('isometric', 'isovelocity') and 'block_sequence' not in updates)
-                )
-                if _form_invalid:
-                    pass
-                else:
-                    _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
-                    if _stim_err:
-                        st.error(_stim_err)
-                    else:
-                        if _stim_clamp:
-                            st.info(_stim_clamp)
-                        _sync_morphometric_flags_from_session(b)
-                        _sync_specimen_identity_to_bender(b)
-                        _apply_form_updates(b, updates, tt)
-                        _mark_procedure_applied()
-                        st.session_state['gui_last_preview'] = build_protocol_preview(
-                            b, requested_test_type=tt, max_plot_points=int(pv_pts)
-                        )
-                        st.session_state['gui_last_preview_tt'] = tt
-                        if st.session_state['gui_last_preview'].get('ok'):
-                            st.session_state['gui_protocol_confirmed'] = True
-                        st.toast('Preview updated.')
-                        st.rerun()
-
-            _touch_proc_apply_baseline_if_clean()
-
-        st.checkbox(
-            'Hide section (values stay; unhide to edit)',
-            key='gui_exp_hide',
-            help='Collapse **Procedure fields** after you finish editing, saving a template, or using **Apply procedure** / **Refresh experiment preview**.',
-        )
-
-        st.divider()
-        st.subheader('6 · Experiment preview')
-        if _procedure_apply_dirty() or _morpho_apply_dirty():
-            _soft_apply_reminder()
-
-        def _render_current_settings_table() -> None:
-            _sync_morphometric_flags_from_session(b)
-            _sync_specimen_identity_to_bender(b)
-            _apply_form_updates(b, updates, tt)
-            _mark_procedure_applied()
-            settings_rows = [
-                {'group': 'experiment', 'name': 'test_type', 'value': tt},
-                {
-                    'group': 'export',
-                    'name': 'data_file_target_h5',
-                    'value': _compose_output_h5_path() or getattr(b, 'outputfile', None),
-                },
-                {
-                    'group': 'specimen',
-                    'name': 'specimen_genusspecies',
-                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_genusspecies', ''),
-                },
-                {
-                    'group': 'specimen',
-                    'name': 'specimen_id',
-                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_id', ''),
-                },
-                {'group': 'morphometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
-                {'group': 'morphometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
-                {'group': 'morphometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
-                {'group': 'morphometric', 'name': 'target_muscle_depth_mm', 'value': getattr(b, 'target_muscle_depth_mm', None)},
-                {'group': 'morphometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
-                {'group': 'morphometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
-                {
-                    'group': 'conditions',
-                    'name': 'temp_C_room',
-                    'value': getattr(b, 'temp_C_room', None),
-                },
-                {
-                    'group': 'conditions',
-                    'name': 'temp_C_tank',
-                    'value': getattr(b, 'temp_C_tank', None),
-                },
-                {
-                    'group': 'conditions',
-                    'name': 'specimen_prep_condition',
-                    'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_prep_condition', ''),
-                },
-            ]
-            for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
-                settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
-            _settings_df = pd.DataFrame(settings_rows)
-            # Keep the value column a single dtype (string): mixing str/float/None triggers a
-            # pyarrow "mixed-type column" warning when Streamlit serializes the DataFrame.
-            if 'value' in _settings_df.columns:
-                _settings_df['value'] = _settings_df['value'].apply(
-                    lambda x: '' if x is None else str(x)
-                )
-            st.dataframe(_settings_df, use_container_width=True, hide_index=True)
-
-        if st.session_state.get('gui_last_preview') is not None:
-            prev = st.session_state['gui_last_preview']
-            if st.session_state.get('gui_last_preview_tt') != tt:
-                st.warning(
-                    'Test type changed since the last preview — open **Procedure fields** and click **Refresh experiment preview**.'
-                )
-            if prev.get('error'):
-                _ph, _pb = _preview_error_actions(str(prev.get('error') or ''))
-                _st_error_actions(
-                    _ph,
-                    _pb,
-                )
-                with st.expander('Preview error detail'):
-                    st.code(str(prev['error']))
-            elif prev.get('ok'):
-                    if prev.get('table'):
-                        st.markdown('**Summary table**')
-                        st.dataframe(pd.DataFrame(prev['table']), use_container_width=True, hide_index=True)
-                    tp = prev.get('t_plot')
-                    ap = prev.get('angle_plot')
-                    vp = prev.get('anglevel_plot')
-                    if tp is not None and ap is not None and len(tp) > 0:
-                        if tt == 'isometric' and prev.get('preview_isometric'):
-                            st.markdown('**Command preview** (isometric: ramp–hold per step, same timing as run)')
-                        elif tt == 'isovelocity' and prev.get('preview_isovelocity'):
-                            st.markdown(
-                                '**Command preview** (isovelocity: pre-hold at start angle + constant ω segment per step, '
-                                'same timing as run)'
+                        _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
+                        if _stim_err:
+                            st.error(_stim_err)
+                        else:
+                            if _stim_clamp:
+                                st.info(_stim_clamp)
+                            _apply_procedure_form_to_bender(b, updates, tt)
+                            st.toast('Settings applied.')
+                if sub_proc_save:
+                    _name = str(st.session_state.get('gui_protocol_new_name') or '').strip()
+                    _desc = str(st.session_state.get('gui_protocol_new_desc') or '').strip()
+                    _stem = sanitize_template_filename_stem(_name or 'protocol')
+                    _out = os.path.normpath(os.path.join(_shared_experiment_dir(), f'{_stem}.json'))
+                    try:
+                        if os.path.isfile(_out) and not bool(st.session_state.get('gui_protocol_overwrite')):
+                            st.session_state['gui_protocol_save_feedback'] = (
+                                False,
+                                f'File already exists: `{_out}`. Enable **Overwrite** or pick a different name.',
                             )
                         else:
-                            st.markdown('**Command preview** (motor angle and angular velocity)')
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=tp, y=ap, mode='lines', name='Commanded angle (deg)'))
-                        if vp is not None and len(vp) > 0:
-                            fig.add_trace(
-                                go.Scatter(
-                                    x=tp,
-                                    y=vp,
-                                    mode='lines',
-                                    name='Commanded anglevel (deg/s)',
-                                    yaxis='y2',
-                                )
+                            os.makedirs(os.path.dirname(_out) or '.', exist_ok=True)
+                            _proc = build_procedure_dict_from_updates(updates)
+                            save_protocol_template(
+                                _out,
+                                name=_name or _stem,
+                                description=_desc,
+                                test_type=tt,
+                                procedure=_proc,
                             )
-                        if vp is not None and len(vp) > 0:
-                            fig.update_layout(
-                                height=420,
-                                margin=dict(l=48, r=48, t=40, b=40),
-                                xaxis_title='Time (s)',
-                                yaxis=dict(title='Angle (deg)'),
-                                yaxis2=dict(title='Anglevel (deg/s)', overlaying='y', side='right'),
-                                legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
-                            )
+                            st.session_state['gui_protocol_save_feedback'] = (True, f'Saved `{_out}`')
+                    except Exception as e:
+                        st.session_state['gui_protocol_save_feedback'] = (False, f'{type(e).__name__}: {e}')
+                    st.rerun()
+
+                if sub_proc_preview:
+                    _form_invalid = (
+                        (tt == 'isometric' and updates.get('isometric_stim_params') is None)
+                        or (tt == 'isovelocity' and updates.get('isovelocity_stim_params') is None)
+                        or (tt in ('isometric', 'isovelocity') and 'block_sequence' not in updates)
+                    )
+                    if _form_invalid:
+                        pass
+                    else:
+                        _stim_err, _stim_clamp = _validate_procedure_stim_timing(b, updates, tt)
+                        if _stim_err:
+                            st.error(_stim_err)
                         else:
-                            fig.update_layout(
-                                height=420,
-                                margin=dict(l=48, r=48, t=40, b=40),
-                                xaxis_title='Time (s)',
-                                yaxis=dict(title='Angle (deg)'),
-                                legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                            if _stim_clamp:
+                                st.info(_stim_clamp)
+                            _sync_morphometric_flags_from_session(b)
+                            _sync_specimen_identity_to_bender(b)
+                            _apply_form_updates(b, updates, tt)
+                            _mark_procedure_applied()
+                            st.session_state['gui_last_preview'] = build_protocol_preview(
+                                b, requested_test_type=tt, max_plot_points=int(pv_pts)
                             )
-                        st.plotly_chart(fig, use_container_width=True)
-                        sp_plot = prev.get('strain_plot')
-                        kp_plot = prev.get('curvature_plot')
-                        if sp_plot is not None or kp_plot is not None:
-                            st.markdown('**Native units** (derived from motor angle)')
-                            fig_nu = go.Figure()
-                            if kp_plot is not None and len(kp_plot) > 0:
-                                fig_nu.add_trace(
-                                    go.Scatter(x=tp, y=kp_plot, mode='lines', name='Curvature κ (1/m)')
+                            st.session_state['gui_last_preview_tt'] = tt
+                            if st.session_state['gui_last_preview'].get('ok'):
+                                st.session_state['gui_protocol_confirmed'] = True
+                            st.toast('Preview updated.')
+                            st.rerun()
+
+            st.checkbox(
+                'Hide section (values stay; unhide to edit)',
+                key='gui_exp_hide',
+                help='Collapse **Procedure fields** after you finish editing, saving a template, or using **Apply procedure** / **Refresh experiment preview**.',
+            )
+
+            st.divider()
+            st.subheader('6 · Experiment preview')
+            if _procedure_apply_dirty() or _morpho_apply_dirty():
+                _soft_apply_reminder('Apply procedure')
+
+            def _render_current_settings_table() -> None:
+                _sync_morphometric_flags_from_session(b)
+                _sync_specimen_identity_to_bender(b)
+                _apply_form_updates(b, updates, tt)
+                _mark_procedure_applied()
+                settings_rows = [
+                    {'group': 'experiment', 'name': 'test_type', 'value': tt},
+                    {
+                        'group': 'export',
+                        'name': 'data_file_target_h5',
+                        'value': _compose_output_h5_path() or getattr(b, 'outputfile', None),
+                    },
+                    {
+                        'group': 'specimen',
+                        'name': 'specimen_genusspecies',
+                        'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_genusspecies', ''),
+                    },
+                    {
+                        'group': 'specimen',
+                        'name': 'specimen_id',
+                        'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_id', ''),
+                    },
+                    {'group': 'morphometric', 'name': 'test_segment_length_mm', 'value': getattr(b, 'dclamp', None)},
+                    {'group': 'morphometric', 'name': 'test_segment_position_mm', 'value': getattr(b, 'dbend', None)},
+                    {'group': 'morphometric', 'name': 'xsec_width', 'value': getattr(b, 'xsec_width', None)},
+                    {'group': 'morphometric', 'name': 'target_muscle_depth_mm', 'value': getattr(b, 'target_muscle_depth_mm', None)},
+                    {'group': 'morphometric', 'name': 'dvert', 'value': getattr(b, 'dvert', None)},
+                    {'group': 'morphometric', 'name': 'dhoriz', 'value': getattr(b, 'dhoriz', None)},
+                    {
+                        'group': 'conditions',
+                        'name': 'temp_C_room',
+                        'value': getattr(b, 'temp_C_room', None),
+                    },
+                    {
+                        'group': 'conditions',
+                        'name': 'temp_C_tank',
+                        'value': getattr(b, 'temp_C_tank', None),
+                    },
+                    {
+                        'group': 'conditions',
+                        'name': 'specimen_prep_condition',
+                        'value': (getattr(b, 'h5_protocol_metadata', {}) or {}).get('specimen_prep_condition', ''),
+                    },
+                ]
+                for k, v in sorted(updates.items(), key=lambda kv: kv[0]):
+                    settings_rows.append({'group': 'parameter', 'name': k, 'value': str(v)})
+                _settings_df = pd.DataFrame(settings_rows)
+                # Keep the value column a single dtype (string): mixing str/float/None triggers a
+                # pyarrow "mixed-type column" warning when Streamlit serializes the DataFrame.
+                if 'value' in _settings_df.columns:
+                    _settings_df['value'] = _settings_df['value'].apply(
+                        lambda x: '' if x is None else str(x)
+                    )
+                st.dataframe(_settings_df, use_container_width=True, hide_index=True)
+
+            if st.session_state.get('gui_last_preview') is not None:
+                prev = st.session_state['gui_last_preview']
+                if st.session_state.get('gui_last_preview_tt') != tt:
+                    st.warning(
+                        'Test type changed since the last preview — open **Procedure fields** and click **Refresh experiment preview**.'
+                    )
+                if prev.get('error'):
+                    _ph, _pb = _preview_error_actions(str(prev.get('error') or ''))
+                    _st_error_actions(
+                        _ph,
+                        _pb,
+                    )
+                    with st.expander('Preview error detail'):
+                        st.code(str(prev['error']))
+                elif prev.get('ok'):
+                        if prev.get('table'):
+                            st.markdown('**Summary table**')
+                            st.dataframe(pd.DataFrame(prev['table']), use_container_width=True, hide_index=True)
+                        tp = prev.get('t_plot')
+                        ap = prev.get('angle_plot')
+                        vp = prev.get('anglevel_plot')
+                        if tp is not None and ap is not None and len(tp) > 0:
+                            if tt == 'isometric' and prev.get('preview_isometric'):
+                                st.markdown('**Command preview** (isometric: ramp–hold per step, same timing as run)')
+                            elif tt == 'isovelocity' and prev.get('preview_isovelocity'):
+                                st.markdown(
+                                    '**Command preview** (isovelocity: pre-hold at start angle + constant ω segment per step, '
+                                    'same timing as run)'
                                 )
-                            if sp_plot is not None and len(sp_plot) > 0:
-                                fig_nu.add_trace(
+                            else:
+                                st.markdown('**Command preview** (motor angle and angular velocity)')
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(x=tp, y=ap, mode='lines', name='Commanded angle (deg)'))
+                            if vp is not None and len(vp) > 0:
+                                fig.add_trace(
                                     go.Scatter(
                                         x=tp,
-                                        y=sp_plot,
+                                        y=vp,
                                         mode='lines',
-                                        name='Surface strain ε',
-                                        yaxis='y2' if kp_plot is not None else 'y',
+                                        name='Commanded anglevel (deg/s)',
+                                        yaxis='y2',
                                     )
                                 )
-                            _nu_layout = dict(
-                                height=360,
-                                margin=dict(l=48, r=48, t=40, b=40),
-                                xaxis_title='Time (s)',
-                                legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
-                            )
-                            if sp_plot is not None and kp_plot is not None:
-                                _nu_layout['yaxis'] = dict(title='κ (1/m)')
-                                _nu_layout['yaxis2'] = dict(title='ε', overlaying='y', side='right')
-                            elif kp_plot is not None:
-                                _nu_layout['yaxis'] = dict(title='κ (1/m)')
-                            else:
-                                _nu_layout['yaxis'] = dict(title='ε')
-                            fig_nu.update_layout(**_nu_layout)
-                            st.plotly_chart(fig_nu, use_container_width=True)
-                        stim_s1_plot = prev.get('stim_s1_plot')
-                        stim_s2_plot = prev.get('stim_s2_plot')
-                        _has_stim_channels = (
-                            (stim_s1_plot is not None and len(stim_s1_plot) > 0)
-                            or (stim_s2_plot is not None and len(stim_s2_plot) > 0)
-                        )
-                        if _has_stim_channels:
-                            st.markdown('**Stimulation preview** (commanded AO trigger to S88)')
-                            st.caption(
-                                'S1 and S2 are independent AO trigger channels (not summed). Each '
-                                'trace is the fixed-height trigger pulse that gates the S88; its '
-                                'timing (rate/width/onset) is what matters. The delivered stim '
-                                'amplitude is set on the S88 dials and recorded on stim_monitor.'
-                            )
-                            fig_st = go.Figure()
-                            # Use the dense, preview-only stim time axis when a protocol supplies one
-                            # (so short pulses are not aliased); otherwise fall back to the motion
-                            # plot's time axis. The two arrays are always length-matched per source.
-                            _stim_x = prev.get('stim_t_plot')
-                            if _stim_x is None or len(_stim_x) == 0:
-                                _stim_x = tp
-                            # S1 and S2 are independent channels: draw them in distinct colors so the
-                            # two AO traces are always visually separable in the preview.
-                            if stim_s1_plot is not None and len(stim_s1_plot) > 0:
-                                fig_st.add_trace(
-                                    go.Scatter(
-                                        x=_stim_x, y=stim_s1_plot, mode='lines', name='S1 (left) stim (V)',
-                                        line=dict(color='#0d9488', width=1.6),
-                                    )
-                                )
-                            if stim_s2_plot is not None and len(stim_s2_plot) > 0:
-                                fig_st.add_trace(
-                                    go.Scatter(
-                                        x=_stim_x, y=stim_s2_plot, mode='lines', name='S2 (right) stim (V)',
-                                        line=dict(color='#dc2626', width=1.6),
-                                    )
-                                )
-                            fig_st.update_layout(
-                                height=320,
-                                margin=dict(l=48, r=48, t=40, b=40),
-                                xaxis_title='Time (s)',
-                                yaxis_title='Voltage (V)',
-                                legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
-                            )
-                            st.plotly_chart(fig_st, use_container_width=True)
-                        elif prev.get('table') and any(
-                            row.get('metric') == 'stimulation enabled' and row.get('value') is False
-                            for row in (prev.get('table') or [])
-                            if isinstance(row, dict)
-                        ):
-                            st.caption('Stimulation disabled for this protocol.')
-                        if bool(st.session_state.get('gui_simulation_mode', False)) and prev.get('t') is not None:
-                            t_prev = np.asarray(prev['t'], dtype=float).reshape(-1)
-                            ang_prev = np.asarray(prev['angle'], dtype=float).reshape(-1)
-                            av_prev = prev.get('anglevel')
-                            if av_prev is None:
-                                av_prev = np.zeros_like(ang_prev)
-                            else:
-                                av_prev = np.asarray(av_prev, dtype=float).reshape(-1)
-                            n_prev = min(t_prev.size, ang_prev.size, av_prev.size)
-                            if n_prev >= 2:
-                                Lpv = getattr(b, 'dclamp', None) or getattr(b, 'test_segment_length_mm', None)
-                                mat = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
-                                d_mm, F_N = force_displacement_series(
-                                    ang_prev[:n_prev],
-                                    av_prev[:n_prev],
-                                    length_mm=Lpv,
-                                    material_key=mat,
-                                    max_points=int(pv_pts),
-                                )
-                                fig_fd = go.Figure()
-                                fig_fd.add_trace(
-                                    go.Scatter(
-                                        x=d_mm,
-                                        y=F_N,
-                                        mode='lines',
-                                        name='Simulated F(δ) along protocol',
-                                    )
-                                )
-                                fig_fd.update_layout(
-                                    title='Simulation preview: bending force vs tip displacement (25.4 mm OD cantilever)',
-                                    xaxis_title='Tip displacement δ (mm)',
-                                    yaxis_title='Bending reaction F (N)',
+                            if vp is not None and len(vp) > 0:
+                                fig.update_layout(
                                     height=420,
-                                    margin=dict(l=48, r=48, t=48, b=40),
+                                    margin=dict(l=48, r=48, t=40, b=40),
+                                    xaxis_title='Time (s)',
+                                    yaxis=dict(title='Angle (deg)'),
+                                    yaxis2=dict(title='Anglevel (deg/s)', overlaying='y', side='right'),
                                     legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
                                 )
-                                st.markdown(
-                                    '**Simulation · force–displacement** (material from sidebar; span from **section 3 · clamp length**). '
-                                    'Cyclic protocols trace a path (hysteresis-like from η·dδ/dt).'
-                                )
-                                st.plotly_chart(fig_fd, use_container_width=True)
-                                dm, Fpu, Fsi = static_stiffness_comparison_delta_grid(Lpv)
-                                fig_cmp = go.Figure()
-                                fig_cmp.add_trace(
-                                    go.Scatter(x=dm, y=Fpu, mode='lines', name='Polyurethane (E ≈ 35 MPa)')
-                                )
-                                fig_cmp.add_trace(
-                                    go.Scatter(x=dm, y=Fsi, mode='lines', name='Silicone (E ≈ 3 MPa)')
-                                )
-                                fig_cmp.update_layout(
-                                    title='Quasi-static comparison (same δ; polyurethane is much steeper)',
-                                    xaxis_title='Tip displacement δ (mm)',
-                                    yaxis_title='Elastic force F = kδ (N)',
-                                    height=380,
-                                    margin=dict(l=48, r=48, t=48, b=40),
+                            else:
+                                fig.update_layout(
+                                    height=420,
+                                    margin=dict(l=48, r=48, t=40, b=40),
+                                    xaxis_title='Time (s)',
+                                    yaxis=dict(title='Angle (deg)'),
                                     legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
                                 )
-                                st.plotly_chart(fig_cmp, use_container_width=True)
-                    elif prev.get('table') and tt in ('isometric', 'isovelocity'):
-                        st.caption(
-                            'Step protocols: table lists setpoints; refresh preview after fixing errors to see the plot.'
-                        )
-            else:
-                st.warning(
-                    'Preview incomplete — open **Procedure fields** and click **Refresh experiment preview** (bottom of that form).'
-                )
+                            st.plotly_chart(fig, use_container_width=True)
+                            sp_plot = prev.get('strain_plot')
+                            kp_plot = prev.get('curvature_plot')
+                            if sp_plot is not None or kp_plot is not None:
+                                st.markdown('**Native units** (derived from motor angle)')
+                                fig_nu = go.Figure()
+                                if kp_plot is not None and len(kp_plot) > 0:
+                                    fig_nu.add_trace(
+                                        go.Scatter(x=tp, y=kp_plot, mode='lines', name='Curvature κ (1/m)')
+                                    )
+                                if sp_plot is not None and len(sp_plot) > 0:
+                                    fig_nu.add_trace(
+                                        go.Scatter(
+                                            x=tp,
+                                            y=sp_plot,
+                                            mode='lines',
+                                            name='Surface strain ε',
+                                            yaxis='y2' if kp_plot is not None else 'y',
+                                        )
+                                    )
+                                _nu_layout = dict(
+                                    height=360,
+                                    margin=dict(l=48, r=48, t=40, b=40),
+                                    xaxis_title='Time (s)',
+                                    legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                                )
+                                if sp_plot is not None and kp_plot is not None:
+                                    _nu_layout['yaxis'] = dict(title='κ (1/m)')
+                                    _nu_layout['yaxis2'] = dict(title='ε', overlaying='y', side='right')
+                                elif kp_plot is not None:
+                                    _nu_layout['yaxis'] = dict(title='κ (1/m)')
+                                else:
+                                    _nu_layout['yaxis'] = dict(title='ε')
+                                fig_nu.update_layout(**_nu_layout)
+                                st.plotly_chart(fig_nu, use_container_width=True)
+                            stim_s1_plot = prev.get('stim_s1_plot')
+                            stim_s2_plot = prev.get('stim_s2_plot')
+                            _has_stim_channels = (
+                                (stim_s1_plot is not None and len(stim_s1_plot) > 0)
+                                or (stim_s2_plot is not None and len(stim_s2_plot) > 0)
+                            )
+                            if _has_stim_channels:
+                                st.markdown('**Stimulation preview** (commanded AO trigger to S88)')
+                                st.caption(
+                                    'S1 and S2 are independent AO trigger channels (not summed). Each '
+                                    'trace is the fixed-height trigger pulse that gates the S88; its '
+                                    'timing (rate/width/onset) is what matters. The delivered stim '
+                                    'amplitude is set on the S88 dials and recorded on stim_monitor.'
+                                )
+                                fig_st = go.Figure()
+                                # Use the dense, preview-only stim time axis when a protocol supplies one
+                                # (so short pulses are not aliased); otherwise fall back to the motion
+                                # plot's time axis. The two arrays are always length-matched per source.
+                                _stim_x = prev.get('stim_t_plot')
+                                if _stim_x is None or len(_stim_x) == 0:
+                                    _stim_x = tp
+                                # S1 and S2 are independent channels: draw them in distinct colors so the
+                                # two AO traces are always visually separable in the preview.
+                                if stim_s1_plot is not None and len(stim_s1_plot) > 0:
+                                    fig_st.add_trace(
+                                        go.Scatter(
+                                            x=_stim_x, y=stim_s1_plot, mode='lines', name='S1 (left) stim (V)',
+                                            line=dict(color='#0d9488', width=1.6),
+                                        )
+                                    )
+                                if stim_s2_plot is not None and len(stim_s2_plot) > 0:
+                                    fig_st.add_trace(
+                                        go.Scatter(
+                                            x=_stim_x, y=stim_s2_plot, mode='lines', name='S2 (right) stim (V)',
+                                            line=dict(color='#dc2626', width=1.6),
+                                        )
+                                    )
+                                fig_st.update_layout(
+                                    height=320,
+                                    margin=dict(l=48, r=48, t=40, b=40),
+                                    xaxis_title='Time (s)',
+                                    yaxis_title='Voltage (V)',
+                                    legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                                )
+                                st.plotly_chart(fig_st, use_container_width=True)
+                            elif prev.get('table') and any(
+                                row.get('metric') == 'stimulation enabled' and row.get('value') is False
+                                for row in (prev.get('table') or [])
+                                if isinstance(row, dict)
+                            ):
+                                st.caption('Stimulation disabled for this protocol.')
+                            if bool(st.session_state.get('gui_simulation_mode', False)) and prev.get('t') is not None:
+                                t_prev = np.asarray(prev['t'], dtype=float).reshape(-1)
+                                ang_prev = np.asarray(prev['angle'], dtype=float).reshape(-1)
+                                av_prev = prev.get('anglevel')
+                                if av_prev is None:
+                                    av_prev = np.zeros_like(ang_prev)
+                                else:
+                                    av_prev = np.asarray(av_prev, dtype=float).reshape(-1)
+                                n_prev = min(t_prev.size, ang_prev.size, av_prev.size)
+                                if n_prev >= 2:
+                                    Lpv = getattr(b, 'dclamp', None) or getattr(b, 'test_segment_length_mm', None)
+                                    mat = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
+                                    d_mm, F_N = force_displacement_series(
+                                        ang_prev[:n_prev],
+                                        av_prev[:n_prev],
+                                        length_mm=Lpv,
+                                        material_key=mat,
+                                        max_points=int(pv_pts),
+                                    )
+                                    fig_fd = go.Figure()
+                                    fig_fd.add_trace(
+                                        go.Scatter(
+                                            x=d_mm,
+                                            y=F_N,
+                                            mode='lines',
+                                            name='Simulated F(δ) along protocol',
+                                        )
+                                    )
+                                    fig_fd.update_layout(
+                                        title='Simulation preview: bending force vs tip displacement (25.4 mm OD cantilever)',
+                                        xaxis_title='Tip displacement δ (mm)',
+                                        yaxis_title='Bending reaction F (N)',
+                                        height=420,
+                                        margin=dict(l=48, r=48, t=48, b=40),
+                                        legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                                    )
+                                    st.markdown(
+                                        '**Simulation · force–displacement** (material from sidebar; span from **section 3 · clamp length**). '
+                                        'Cyclic protocols trace a path (hysteresis-like from η·dδ/dt).'
+                                    )
+                                    st.plotly_chart(fig_fd, use_container_width=True)
+                                    dm, Fpu, Fsi = static_stiffness_comparison_delta_grid(Lpv)
+                                    fig_cmp = go.Figure()
+                                    fig_cmp.add_trace(
+                                        go.Scatter(x=dm, y=Fpu, mode='lines', name='Polyurethane (E ≈ 35 MPa)')
+                                    )
+                                    fig_cmp.add_trace(
+                                        go.Scatter(x=dm, y=Fsi, mode='lines', name='Silicone (E ≈ 3 MPa)')
+                                    )
+                                    fig_cmp.update_layout(
+                                        title='Quasi-static comparison (same δ; polyurethane is much steeper)',
+                                        xaxis_title='Tip displacement δ (mm)',
+                                        yaxis_title='Elastic force F = kδ (N)',
+                                        height=380,
+                                        margin=dict(l=48, r=48, t=48, b=40),
+                                        legend=dict(yanchor='top', y=0.99, xanchor='left', x=0.01),
+                                    )
+                                    st.plotly_chart(fig_cmp, use_container_width=True)
+                        elif prev.get('table') and tt in ('isometric', 'isovelocity'):
+                            st.caption(
+                                'Step protocols: table lists setpoints; refresh preview after fixing errors to see the plot.'
+                            )
+                else:
+                    st.warning(
+                        'Preview incomplete — open **Procedure fields** and click **Refresh experiment preview** (bottom of that form).'
+                    )
 
-        st.divider()
-        st.markdown('### Run controls')
-        st.markdown('**Acquisition source**')
-        _render_simulation_controls()
-        if _procedure_apply_dirty() or _morpho_apply_dirty():
-            _soft_apply_reminder()
+            st.divider()
+            st.markdown('### Run controls')
+            st.markdown('**Acquisition source**')
+            _render_simulation_controls()
+            if _procedure_apply_dirty() or _morpho_apply_dirty():
+                _soft_apply_reminder('Apply procedure')
 
-        def _execute_run() -> None:
-            if bool(st.session_state.get('gui_run_in_progress', False)):
-                st.warning('A run is already in progress.')
-                return
-            _blocked = _run_export_blocked_reason(b)
-            if _blocked:
-                st.error(_blocked)
-                return
-            _proc_ok, _proc_msg = _procedure_ready_for_run()
-            if not _proc_ok:
-                st.error(_proc_msg)
-                return
-            _rest_err = _segmented_rest_floor_error(tt, getattr(b, 'rest_between_steps_s', None))
-            if _rest_err:
-                st.error(_rest_err)
-                return
-            st.session_state['gui_run_in_progress'] = True
-            _rehydrate_missing_morphometrics_from_bender(b)
-            _sync_specimen_identity_to_bender(b)
-            # Re-read starting angle directly from the widget so any edit made after the
-            # last Apply procedure is captured (the widget value is always current in
-            # session_state; there is no need to force another Apply click for a scalar).
-            b.starting_angle_deg = float(st.session_state.get('gui_starting_angle_deg') or 0.0)
-            outp = _compose_output_h5_path().strip()
-            if outp:
-                b.outputfile = outp
-                _mark_data_path_applied()
-            notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
-            try:
-                b.session_simulated = bool(st.session_state.get('gui_simulation_mode', False))
-                b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
-                _acq_label = (
-                    'Simulating acquisition (no DAQ)…'
-                    if b.session_simulated
-                    else 'Acquiring (DAQ)…'
-                )
-                _status_factory = getattr(st, 'status', None)
-                if callable(_status_factory):
-                    with _status_factory('Run in progress…', expanded=True) as run_status:
-                        run_status.write('Acquisition…')
+            def _execute_run() -> None:
+                if bool(st.session_state.get('gui_run_in_progress', False)):
+                    st.warning('A run is already in progress.')
+                    return
+                _blocked = _run_export_blocked_reason(b)
+                if _blocked:
+                    st.error(_blocked)
+                    return
+                _proc_ok, _proc_msg = _procedure_ready_for_run()
+                if not _proc_ok:
+                    st.error(_proc_msg)
+                    return
+                _rest_err = _segmented_rest_floor_error(tt, getattr(b, 'rest_between_steps_s', None))
+                if _rest_err:
+                    st.error(_rest_err)
+                    return
+                st.session_state['gui_run_in_progress'] = True
+                _rehydrate_missing_morphometrics_from_bender(b)
+                _sync_specimen_identity_to_bender(b)
+                # Re-read starting angle directly from the widget so any edit made after the
+                # last Apply procedure is captured (the widget value is always current in
+                # session_state; there is no need to force another Apply click for a scalar).
+                b.starting_angle_deg = float(st.session_state.get('gui_starting_angle_deg') or 0.0)
+                outp = _compose_output_h5_path().strip()
+                if outp:
+                    b.outputfile = outp
+                    _mark_data_path_applied()
+                notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
+                try:
+                    b.session_simulated = bool(st.session_state.get('gui_simulation_mode', False))
+                    b.simulation_material = str(st.session_state.get('gui_simulation_material', 'polyurethane'))
+                    _acq_label = (
+                        'Simulating acquisition (no DAQ)…'
+                        if b.session_simulated
+                        else 'Acquiring (DAQ)…'
+                    )
+                    _status_factory = getattr(st, 'status', None)
+                    if callable(_status_factory):
+                        with _status_factory('Run in progress…', expanded=True) as run_status:
+                            run_status.write('Acquisition…')
+                            with st.spinner(_acq_label):
+                                b.run_experiment(test_type=tt)
+                            st.success('Acquisition finished.')
+                            for _msg in (getattr(b, 'stim_clamp_notices', None) or []):
+                                st.warning(_msg)
+                            run_status.write('HDF5…')
+                            with st.spinner('Writing data file (.h5)…'):
+                                rep = export_primary_h5(
+                                    b,
+                                    post_trial_notes=notes_in if notes_in else None,
+                                    outputfile=outp or None,
+                                    append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
+                                )
+                            _increment_session_trial_counter()
+                            qix = _read_qc_trial_index(b)
+                            # QC PNG takes the identical stem to the .h5 that was just written.
+                            qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
+                            run_status.write('QC plot…')
+                            with st.spinner('Saving QC plot…'):
+                                qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+                            _st_done = getattr(run_status, 'update', None)
+                            if callable(_st_done):
+                                _st_done(label='Run finished', state='complete')
+                            st.success('Data has been saved! Check data folder to confirm before proceeding.')
+                            st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
+                            _arm_acquired_trial_review(rep.get('outputfile'), qc_path)
+                            if bool(st.session_state.get('gui_qc_notes_append', True)):
+                                st.session_state['gui_post_notes'] = ''
+                            else:
+                                st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+                    else:
                         with st.spinner(_acq_label):
                             b.run_experiment(test_type=tt)
                         st.success('Acquisition finished.')
                         for _msg in (getattr(b, 'stim_clamp_notices', None) or []):
                             st.warning(_msg)
-                        run_status.write('HDF5…')
                         with st.spinner('Writing data file (.h5)…'):
                             rep = export_primary_h5(
                                 b,
@@ -9405,12 +9574,8 @@ def main():
                         qix = _read_qc_trial_index(b)
                         # QC PNG takes the identical stem to the .h5 that was just written.
                         qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
-                        run_status.write('QC plot…')
                         with st.spinner('Saving QC plot…'):
                             qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
-                        _st_done = getattr(run_status, 'update', None)
-                        if callable(_st_done):
-                            _st_done(label='Run finished', state='complete')
                         st.success('Data has been saved! Check data folder to confirm before proceeding.')
                         st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
                         _arm_acquired_trial_review(rep.get('outputfile'), qc_path)
@@ -9418,255 +9583,229 @@ def main():
                             st.session_state['gui_post_notes'] = ''
                         else:
                             st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-                else:
-                    with st.spinner(_acq_label):
-                        b.run_experiment(test_type=tt)
-                    st.success('Acquisition finished.')
-                    for _msg in (getattr(b, 'stim_clamp_notices', None) or []):
-                        st.warning(_msg)
-                    with st.spinner('Writing data file (.h5)…'):
-                        rep = export_primary_h5(
-                            b,
-                            post_trial_notes=notes_in if notes_in else None,
-                            outputfile=outp or None,
-                            append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
-                        )
-                    _increment_session_trial_counter()
-                    qix = _read_qc_trial_index(b)
-                    # QC PNG takes the identical stem to the .h5 that was just written.
-                    qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
-                    with st.spinner('Saving QC plot…'):
-                        qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
-                    st.success('Data has been saved! Check data folder to confirm before proceeding.')
-                    st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
-                    _arm_acquired_trial_review(rep.get('outputfile'), qc_path)
-                    if bool(st.session_state.get('gui_qc_notes_append', True)):
-                        st.session_state['gui_post_notes'] = ''
-                    else:
-                        st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-            except Exception as e:
-                _show_friendly_error(e, action='run_experiment')
-            finally:
-                st.session_state['gui_run_in_progress'] = False
+                except Exception as e:
+                    _show_friendly_error(e, action='run_experiment')
+                finally:
+                    st.session_state['gui_run_in_progress'] = False
 
-        if st.button('View experiment settings', use_container_width=True):
-            _render_current_settings_table()
+            if st.button('View experiment settings', use_container_width=True):
+                _render_current_settings_table()
 
-        st.session_state.setdefault('gui_run_soft_warnings', [])
-        st.session_state.setdefault('gui_run_in_progress', False)
-        _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
-        _run_disabled, _run_help = _run_button_state()
-        _ready_run = _workflow_ready_state(b, tt)
-        if bool(st.session_state.get('gui_run_in_progress', False)):
-            st.warning(_run_help)
-            if st.button('Reset run state', key='gui_run_reset_inprogress', use_container_width=True, type='secondary'):
-                st.session_state['gui_run_in_progress'] = False
-                st.session_state['gui_run_pending_confirm'] = False
-                st.session_state['gui_run_soft_warnings'] = []
-                st.rerun()
-        elif _run_disabled:
-            st.warning(_run_help)
-            if st.button('Reset run state', key='gui_run_reset_stuck', use_container_width=True, type='secondary'):
-                st.session_state['gui_run_in_progress'] = False
-                st.session_state['gui_run_pending_confirm'] = False
-                st.session_state['gui_run_soft_warnings'] = []
-                st.rerun()
-        elif _ready_run['protocol_ok'] and _ready_run['setup_ok'] and _ready_run['measurements_ok']:
-            st.caption('Checklist complete — review warnings below if any, then run or click Proceed.')
-
-        if _ready_run['protocol_ok'] and b is not None:
-            _max_rot = getattr(b, 'max_commanded_rotation_deg', None)
-            if _max_rot is None:
-                try:
-                    _vrep = b.validate_dispatch_setup(test_type=tt)
-                    _max_rot = _vrep.get('max_rotation_deg')
-                except Exception:
-                    _max_rot = None
-            if _max_rot is not None and math.isfinite(float(_max_rot)):
-                st.text(f'This run will move a maximum of {float(_max_rot):.1f}°')
-
-        if st.button(
-            'Run experiment',
-            type='primary',
-            use_container_width=True,
-            disabled=_run_disabled,
-            help=_run_help,
-        ):
-            _proc_ok, _proc_msg = _procedure_ready_for_run()
-            if not _proc_ok:
-                st.error(_proc_msg)
-            else:
-                _rehydrate_missing_morphometrics_from_bender(b)
-            run_warnings: list[str] = []
-            morpho_soft_missing: list[str] = []
-            if not str(st.session_state.get('gui_specimen_id') or '').strip():
-                morpho_soft_missing.append('specimen ID')
-            if not str(st.session_state.get('gui_genus_species') or '').strip():
-                morpho_soft_missing.append('genus-species')
-            if _session_float('morpho_dclamp') is None or _session_float('morpho_dclamp') <= 0:
-                morpho_soft_missing.append('clamp spacing')
-            if _session_float('morpho_xsec') is None or _session_float('morpho_xsec') <= 0:
-                morpho_soft_missing.append('cross-section width')
-            if _session_float('morpho_fishmass') is None or _session_float('morpho_fishmass') <= 0:
-                morpho_soft_missing.append('mass')
-            if morpho_soft_missing:
-                _missing_txt = ', '.join(morpho_soft_missing[:4])
-                if len(morpho_soft_missing) > 4:
-                    _missing_txt += ', ...'
-                run_warnings.append(f'Morphometrics look incomplete ({_missing_txt}).')
-            if _needs_missing_calibration_confirmation(b) and not bool(st.session_state.get('gui_simulation_mode', False)):
-                run_warnings.append('No calibration file detected.')
-            if _section2_destination_incomplete():
-                run_warnings.append('No designated file destination in section 2.')
-            if _proc_ok:
-                rep = b.validate_dispatch_setup(test_type=tt)
-                if not rep.get('ok', False):
-                    run_warnings.append('Required protocol fields are missing.')
-                if run_warnings:
-                    st.session_state['gui_run_soft_warnings'] = run_warnings
-                    st.session_state['gui_run_pending_confirm'] = True
-                else:
-                    st.session_state['gui_run_soft_warnings'] = []
-                    st.session_state['gui_run_pending_confirm'] = False
-                    _execute_run()
+            st.session_state.setdefault('gui_run_soft_warnings', [])
+            st.session_state.setdefault('gui_run_in_progress', False)
             _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
+            _run_disabled, _run_help = _run_button_state()
+            _ready_run = _workflow_ready_state(b, tt)
+            if bool(st.session_state.get('gui_run_in_progress', False)):
+                st.warning(_run_help)
+                if st.button('Reset run state', key='gui_run_reset_inprogress', use_container_width=True, type='secondary'):
+                    st.session_state['gui_run_in_progress'] = False
+                    st.session_state['gui_run_pending_confirm'] = False
+                    st.session_state['gui_run_soft_warnings'] = []
+                    st.rerun()
+            elif _run_disabled:
+                st.warning(_run_help)
+                if st.button('Reset run state', key='gui_run_reset_stuck', use_container_width=True, type='secondary'):
+                    st.session_state['gui_run_in_progress'] = False
+                    st.session_state['gui_run_pending_confirm'] = False
+                    st.session_state['gui_run_soft_warnings'] = []
+                    st.rerun()
+            elif _ready_run['protocol_ok'] and _ready_run['setup_ok'] and _ready_run['measurements_ok']:
+                st.caption('Checklist complete — review warnings below if any, then run or click Proceed.')
 
-        # KILL DAQ — placed directly below RUN (Phase 10b layout). Resets the NI device
-        # (stops AI/AO/DO). Persistent: always rendered regardless of run state.
-        # LOUD LIMITATION FLAG: a run executes synchronously inside st.spinner, which blocks
-        # Streamlit's single script thread. While a run is in progress this button cannot be
-        # clicked to interrupt it — Streamlit will not process the click until run_experiment
-        # returns. It is functional BEFORE/AFTER a run (or from a second browser session) to
-        # reset the device; it is NOT a mid-run interrupt. Do not rely on it as a live e-stop.
-        with st.container(border=True):
+            if _ready_run['protocol_ok'] and b is not None:
+                _max_rot = getattr(b, 'max_commanded_rotation_deg', None)
+                if _max_rot is None:
+                    try:
+                        _vrep = b.validate_dispatch_setup(test_type=tt)
+                        _max_rot = _vrep.get('max_rotation_deg')
+                    except Exception:
+                        _max_rot = None
+                if _max_rot is not None and math.isfinite(float(_max_rot)):
+                    st.text(f'This run will move a maximum of {float(_max_rot):.1f}°')
+
             if st.button(
-                'KILL DAQ — stop & reset NI device',
-                key='gui_kill_daq',
+                'Run experiment',
                 type='primary',
                 use_container_width=True,
-                help='Resets the NI-DAQ device (stops tasks, clears outputs).',
+                disabled=_run_disabled,
+                help=_run_help,
             ):
-                ok, msg = _trigger_emergency_stop()
-                if ok:
-                    st.success(msg)
+                _proc_ok, _proc_msg = _procedure_ready_for_run()
+                if not _proc_ok:
+                    st.error(_proc_msg)
                 else:
-                    st.warning(msg)
-            st.caption(
-                '⚠️ Cannot interrupt a run already in progress: acquisition runs synchronously and '
-                'blocks the app thread. Use this before/after a run, or trigger the rig hardware e-stop mid-run.'
-            )
+                    _rehydrate_missing_morphometrics_from_bender(b)
+                run_warnings: list[str] = []
+                morpho_soft_missing: list[str] = []
+                if not str(st.session_state.get('gui_specimen_id') or '').strip():
+                    morpho_soft_missing.append('specimen ID')
+                if not str(st.session_state.get('gui_genus_species') or '').strip():
+                    morpho_soft_missing.append('genus-species')
+                if _session_float('morpho_dclamp') is None or _session_float('morpho_dclamp') <= 0:
+                    morpho_soft_missing.append('clamp spacing')
+                if _session_float('morpho_xsec') is None or _session_float('morpho_xsec') <= 0:
+                    morpho_soft_missing.append('cross-section width')
+                if _session_float('morpho_fishmass') is None or _session_float('morpho_fishmass') <= 0:
+                    morpho_soft_missing.append('mass')
+                if morpho_soft_missing:
+                    _missing_txt = ', '.join(morpho_soft_missing[:4])
+                    if len(morpho_soft_missing) > 4:
+                        _missing_txt += ', ...'
+                    run_warnings.append(f'Morphometrics look incomplete ({_missing_txt}).')
+                if _needs_missing_calibration_confirmation(b) and not bool(st.session_state.get('gui_simulation_mode', False)):
+                    run_warnings.append('No calibration file detected.')
+                if _section2_destination_incomplete():
+                    run_warnings.append('No designated file destination in section 2.')
+                if _proc_ok:
+                    rep = b.validate_dispatch_setup(test_type=tt)
+                    if not rep.get('ok', False):
+                        run_warnings.append('Required protocol fields are missing.')
+                    if run_warnings:
+                        st.session_state['gui_run_soft_warnings'] = run_warnings
+                        st.session_state['gui_run_pending_confirm'] = True
+                    else:
+                        st.session_state['gui_run_soft_warnings'] = []
+                        st.session_state['gui_run_pending_confirm'] = False
+                        _execute_run()
+                _pending_run_confirm = bool(st.session_state.get('gui_run_pending_confirm', False))
 
-        if _pending_run_confirm:
-            _warns = list(st.session_state.get('gui_run_soft_warnings') or [])
-            if _warns:
-                st.warning('\n'.join([f'- {w}' for w in _warns]))
-            c_go = c_stop = st.container()
-            with c_go:
+            # KILL DAQ — placed directly below RUN (Phase 10b layout). Resets the NI device
+            # (stops AI/AO/DO). Persistent: always rendered regardless of run state.
+            # LOUD LIMITATION FLAG: a run executes synchronously inside st.spinner, which blocks
+            # Streamlit's single script thread. While a run is in progress this button cannot be
+            # clicked to interrupt it — Streamlit will not process the click until run_experiment
+            # returns. It is functional BEFORE/AFTER a run (or from a second browser session) to
+            # reset the device; it is NOT a mid-run interrupt. Do not rely on it as a live e-stop.
+            with st.container(border=True):
                 if st.button(
-                    'Proceed',
+                    'KILL DAQ — stop & reset NI device',
+                    key='gui_kill_daq',
                     type='primary',
                     use_container_width=True,
-                    key='gui_run_proceed',
-                    disabled=bool(st.session_state.get('gui_run_in_progress', False)),
+                    help='Resets the NI-DAQ device (stops tasks, clears outputs).',
                 ):
-                    st.session_state['gui_run_pending_confirm'] = False
-                    st.session_state['gui_run_soft_warnings'] = []
-                    _execute_run()
-            with c_stop:
-                if st.button('Abort', use_container_width=True, key='gui_run_abort'):
-                    st.session_state['gui_run_pending_confirm'] = False
-                    st.session_state['gui_run_soft_warnings'] = []
-                    st.info('Run aborted.')
-
-        # Persist-then-review: the raw .h5 is already written by the run above. Show the
-        # acquired trial now and let the operator keep or delete it (save is not gated on this).
-        _render_acquired_trial_review(b)
-
-        st.divider()
-        st.session_state.setdefault('gui_sec6_hide', False)
-        st.subheader('7 · Save data here')
-        st.caption('Writes from current in-memory **trial_records** (after **Run** or a prior save). No new DAQ.')
-        if st.session_state.get('gui_sec6_hide'):
-            st.caption('Save controls hidden. Uncheck **Hide section** below.')
-        else:
-
-            def _export_h5_from_session():
-                _sync_specimen_identity_to_bender(b)
-                outp = _compose_output_h5_path().strip()
-                if not outp and not getattr(b, 'outputfile', None):
-                    _st_error_actions(
-                        'No HDF5 path set.',
-                        ['Open section 2', 'Set data folder', 'Set file name'],
-                    )
-                    return None
-                notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
-                if outp:
-                    b.outputfile = outp
-                return export_primary_h5(
-                    b,
-                    post_trial_notes=notes_in if notes_in else None,
-                    outputfile=outp or None,
-                    append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
+                    ok, msg = _trigger_emergency_stop()
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.warning(msg)
+                st.caption(
+                    '⚠️ Cannot interrupt a run already in progress: acquisition runs synchronously and '
+                    'blocks the app thread. Use this before/after a run, or trigger the rig hardware e-stop mid-run.'
                 )
 
-            def _save_qc_plot_only():
-                qix = _read_qc_trial_index(b)
-                sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
-                qc_base = _qc_figure_base_path(b, sel_h5, qix)
-                return save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+            if _pending_run_confirm:
+                _warns = list(st.session_state.get('gui_run_soft_warnings') or [])
+                if _warns:
+                    st.warning('\n'.join([f'- {w}' for w in _warns]))
+                c_go = c_stop = st.container()
+                with c_go:
+                    if st.button(
+                        'Proceed',
+                        type='primary',
+                        use_container_width=True,
+                        key='gui_run_proceed',
+                        disabled=bool(st.session_state.get('gui_run_in_progress', False)),
+                    ):
+                        st.session_state['gui_run_pending_confirm'] = False
+                        st.session_state['gui_run_soft_warnings'] = []
+                        _execute_run()
+                with c_stop:
+                    if st.button('Abort', use_container_width=True, key='gui_run_abort'):
+                        st.session_state['gui_run_pending_confirm'] = False
+                        st.session_state['gui_run_soft_warnings'] = []
+                        st.info('Run aborted.')
 
-            e1 = e2 = st.container()
-            with e1:
-                if _load_save_button('Only save Data File (.h5)', key='gui_save_h5_only', button_type='secondary'):
+            # Persist-then-review: the raw .h5 is already written by the run above. Show the
+            # acquired trial now and let the operator keep or delete it (save is not gated on this).
+            _render_acquired_trial_review(b)
+
+            st.divider()
+            st.session_state.setdefault('gui_sec6_hide', False)
+            st.subheader('7 · Save data here')
+            st.caption('Writes from current in-memory **trial_records** (after **Run** or a prior save). No new DAQ.')
+            if st.session_state.get('gui_sec6_hide'):
+                st.caption('Save controls hidden. Uncheck **Hide section** below.')
+            else:
+
+                def _export_h5_from_session():
+                    _sync_specimen_identity_to_bender(b)
+                    outp = _compose_output_h5_path().strip()
+                    if not outp and not getattr(b, 'outputfile', None):
+                        _st_error_actions(
+                            'No HDF5 path set.',
+                            ['Open section 2', 'Set data folder', 'Set file name'],
+                        )
+                        return None
+                    notes_in = str(st.session_state.get('gui_post_notes') or '').strip()
+                    if outp:
+                        b.outputfile = outp
+                    return export_primary_h5(
+                        b,
+                        post_trial_notes=notes_in if notes_in else None,
+                        outputfile=outp or None,
+                        append_post_trial_notes=bool(st.session_state.get('gui_qc_notes_append', True)),
+                    )
+
+                def _save_qc_plot_only():
+                    qix = _read_qc_trial_index(b)
+                    sel_h5 = str(st.session_state.get('gui_review_selected') or '').strip()
+                    qc_base = _qc_figure_base_path(b, sel_h5, qix)
+                    return save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+
+                e1 = e2 = st.container()
+                with e1:
+                    if _load_save_button('Only save Data File (.h5)', key='gui_save_h5_only', button_type='secondary'):
+                        try:
+                            rep = _export_h5_from_session()
+                            if rep is not None:
+                                st.success(f"{rep['message']}  →  `{rep['outputfile']}`")
+                                if bool(st.session_state.get('gui_qc_notes_append', True)):
+                                    st.session_state['gui_post_notes'] = ''
+                                else:
+                                    st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
+                        except Exception as e:
+                            _show_friendly_error(e, action='save_h5')
+                with e2:
+                    if _load_save_button('Only Save QC Plot', key='gui_save_qc_only', button_type='secondary'):
+                        try:
+                            qc_path, _ = _save_qc_plot_only()
+                            st.success(f'QC plot saved: `{qc_path}`')
+                        except Exception as e:
+                            _show_friendly_error(e, action='save_qc')
+
+                if _load_save_button('Save Data File (.h5) and QC Plot', key='gui_save_h5_and_qc'):
                     try:
-                        rep = _export_h5_from_session()
-                        if rep is not None:
-                            st.success(f"{rep['message']}  →  `{rep['outputfile']}`")
+                        with st.spinner('Writing data file (.h5)…'):
+                            rep = _export_h5_from_session()
+                        if rep is None:
+                            pass
+                        else:
+                            qix = _read_qc_trial_index(b)
+                            # Pair the QC PNG with the .h5 just written (identical stem).
+                            qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
+                            try:
+                                with st.spinner('Saving QC plot…'):
+                                    qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
+                            except Exception as e:
+                                _show_friendly_error(e, action='save_qc')
+                                st.warning(f"The data file was saved: `{rep['outputfile']}`")
+                            else:
+                                st.success('Data file and QC plot saved.')
+                                st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
                             if bool(st.session_state.get('gui_qc_notes_append', True)):
                                 st.session_state['gui_post_notes'] = ''
                             else:
                                 st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
                     except Exception as e:
                         _show_friendly_error(e, action='save_h5')
-            with e2:
-                if _load_save_button('Only Save QC Plot', key='gui_save_qc_only', button_type='secondary'):
-                    try:
-                        qc_path, _ = _save_qc_plot_only()
-                        st.success(f'QC plot saved: `{qc_path}`')
-                    except Exception as e:
-                        _show_friendly_error(e, action='save_qc')
 
-            if _load_save_button('Save Data File (.h5) and QC Plot', key='gui_save_h5_and_qc'):
-                try:
-                    with st.spinner('Writing data file (.h5)…'):
-                        rep = _export_h5_from_session()
-                    if rep is None:
-                        pass
-                    else:
-                        qix = _read_qc_trial_index(b)
-                        # Pair the QC PNG with the .h5 just written (identical stem).
-                        qc_base = _qc_figure_base_path(b, rep.get('outputfile'), qix)
-                        try:
-                            with st.spinner('Saving QC plot…'):
-                                qc_path, _ = save_universal_qc_figure(b, qc_trial_index=qix, base_path=qc_base)
-                        except Exception as e:
-                            _show_friendly_error(e, action='save_qc')
-                            st.warning(f"The data file was saved: `{rep['outputfile']}`")
-                        else:
-                            st.success('Data file and QC plot saved.')
-                            st.info(f"Data file: `{rep['outputfile']}`  |  QC plot: `{qc_path}`")
-                        if bool(st.session_state.get('gui_qc_notes_append', True)):
-                            st.session_state['gui_post_notes'] = ''
-                        else:
-                            st.session_state['gui_post_notes'] = str(rep.get('post_trial_notes') or '')
-                except Exception as e:
-                    _show_friendly_error(e, action='save_h5')
-
-        st.checkbox(
-            'Hide section (values stay; unhide to edit)',
-            key='gui_sec6_hide',
-            help='Collapse save buttons when finished.',
-        )
+            st.checkbox(
+                'Hide section (values stay; unhide to edit)',
+                key='gui_sec6_hide',
+                help='Collapse save buttons when finished.',
+            )
 
     if _show_sec7_and_8():
 
@@ -9680,9 +9819,9 @@ def main():
             review_dir = os.path.dirname(data_path) if data_path else ''
             review_files = _candidate_review_files(data_path) if data_path else []
             if not data_path:
-                st.info('No output path set yet. Set **Data folder** and **Data file name** in Step 2 and click **Apply setup**, then run or export.')
+                st.info('No output path set yet. Set **Data folder** and **Data file name** in Step 2 and click **Apply data path**, then run or export.')
             elif review_dir and not os.path.isdir(review_dir):
-                st.error(f'❌ Output folder not found: `{review_dir}` — check the **Data folder** path in Step 2 and click **Apply setup**.')
+                st.error(f'❌ Output folder not found: `{review_dir}` — check the **Data folder** path in Step 2 and click **Apply data path**.')
             elif not review_files:
                 st.info('Output folder found, but it has no data files yet. Run or export to create one.')
             else:
@@ -9856,9 +9995,9 @@ def main():
             review_dir_qc = os.path.dirname(data_path_qc) if data_path_qc else ''
             review_files_qc = _candidate_review_files(data_path_qc) if data_path_qc else []
             if not data_path_qc:
-                st.info('No output path set yet. Set **Data folder** and **Data file name** in Step 2 and click **Apply setup** (or save once) so files appear here.')
+                st.info('No output path set yet. Set **Data folder** and **Data file name** in Step 2 and click **Apply data path** (or save once) so files appear here.')
             elif review_dir_qc and not os.path.isdir(review_dir_qc):
-                st.error(f'❌ Output folder not found: `{review_dir_qc}` — check the **Data folder** path in Step 2 and click **Apply setup**.')
+                st.error(f'❌ Output folder not found: `{review_dir_qc}` — check the **Data folder** path in Step 2 and click **Apply data path**.')
             elif not review_files_qc:
                 st.info('Output folder found, but it has no data files yet. Run or export to create one.')
             else:

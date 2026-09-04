@@ -40,26 +40,32 @@ An offline **Simulate Bending Mechanics** tool may remain accessible from
 home for hardware-free exploration.
 
 ### 2.1 Run Experiment (single scrolling page)
-The page is organized as **four vertical sections**, each with exactly **one
+The page is organized as **five vertical sections**, each with exactly **one
 Apply**. Sections stack vertically (never side-by-side); columns are allowed
 only for fields *within* a single section. Sections are ordered by how often
 their values change between runs (most stable first):
 
-1. **Config / Filepath** — hardware configuration + data file path. A single
-   Apply ("Apply setup") commits both. This section carries the **run gate**:
-   the experiment sections below stay hidden until Config + Path are applied.
-   The gate is a safety feature and must be preserved.
-2. **Specimen** — identity (genus/species, specimen ID, prep/segment label),
+1. **Hardware configuration** — config module selection + editable hardware
+   fields. One Apply ("Apply hardware config") commits this section onto the
+   live experiment object. Optional "Save as new config file" writes a `.py`
+   to disk; that is persistence, not Apply.
+2. **Data file path** — data folder, collection date, and file name. One Apply
+   ("Apply data path") commits the output path. Requires a loaded hardware
+   config (Apply hardware config first).
+3. **Specimen** — identity (genus/species, specimen ID, prep/segment label),
    universal morphometrics (lengths, mass), session temperature (editable),
    and prep condition. One Apply commits only this section's fields. There is
    a single "prep condition" field — no duplicate.
-3. **Clamp geometry + inertial correction** — clamp spacing/offsets,
+4. **Clamp geometry + inertial correction** — clamp spacing/offsets,
    cross-section, mounted body profile, density, and the inertial-correction
    flag. One Apply commits only this section's fields (the former separate
    clamp-geometry and profile/inertial Applies are merged into one).
-4. **Experimental protocol** — protocol/run fields, preview, run, save.
+5. **Experimental protocol** — protocol/run fields, preview, run, save.
 
 - Each Apply commits **only** its own section's fields.
+- **No visibility gate:** all sections remain visible even when no hardware
+  config is loaded. Forms may be edited; Run / Save stay blocked at the point
+  of consequence until hardware config and data path are applied.
 - No stepwise tabs. All sections always rendered, so all fields always live
   in session_state.
 - Review of recorded data does **not** live here. All post-hoc review,
@@ -88,18 +94,22 @@ document it for the grant.
 This is the central interaction contract.
 
 - The user fills fields freely. Typing has **no downstream consequence**.
-- Each of the four sections (2.1) has **exactly one** explicit **Apply**
+- Each of the five sections (2.1) has **exactly one** explicit **Apply**
   button, and that Apply commits only that section's fields.
 - Values are committed to `st.session_state` and validated **only** when Apply
   is clicked.
-- Status icons (green check / yellow caution) update **only** after Apply.
+- Fresh / stale status captions update on every rerun from fingerprint
+  comparison against the last Apply.
 - Downstream actions (hardware config load, protocol build, run) trigger
-  **only** after the relevant Apply.
+  **only** after the relevant Apply (Run also requires setup readiness).
 
-### Dirty state
-- After Apply, a section is "clean" until the user edits a field again.
-- Editing a field after Apply marks the section "dirty" (yellow icon returns).
-- Re-applying clears dirty state.
+### Dirty state (fresh vs stale)
+- **Not applied yet** — section has never been Applied (or baselines cleared):
+  caption prompts the section Apply.
+- **Applied (fresh)** — widget fingerprint matches last Apply: clear success
+  signal.
+- **Stale** — widgets changed since last Apply: warning prompts re-Apply.
+- Re-applying clears stale state back to fresh.
 
 ---
 

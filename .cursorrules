@@ -161,10 +161,12 @@ injection helpers.
   modes (ux_spec §2.2) but are no longer exposed as separate home entries.
 - Landing: a single **Run experiment** entry (routes to `scratch`), plus
   **Simulate Bending Mechanics** and **Visualize Data**. Settings live in the sidebar.
-- Run experiment is one scrolling page with four VERTICAL sections, each with a
-  single Apply, ordered by change frequency: (1) Config / Filepath,
-  (2) Specimen, (3) Clamp geometry & inertial correction, (4) Experimental protocol.
-  The Config+Path gate keeps the experiment pane hidden until both are applied.
+- Run experiment is one scrolling page with five VERTICAL sections, each with a
+  single Apply, ordered by change frequency: (1) Hardware configuration,
+  (2) Data file path, (3) Specimen, (4) Clamp geometry & inertial correction,
+  (5) Experimental protocol. All sections stay visible even without a loaded
+  config; Run/Save stay blocked at the point of consequence until hardware
+  config and data path are applied. Fresh vs stale Apply status is shown inline.
 - No status sidebar: readiness is shown inline by each section (dirty reminders +
   applied/selected status). KILL DAQ sits next to the Run button (it resets the NI
   device but cannot interrupt a synchronous in-progress run — see safety notes).
